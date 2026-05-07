@@ -59,8 +59,10 @@
   <main class="response">
     <nav class="resp-tabs">
       <button class="rtab active" data-tab="pretty">Pretty</button>
+      <button class="rtab" data-tab="methods">Methods <span id="methods-tab-badge" class="rtab-badge hidden">0</span></button>
       <button class="rtab" data-tab="raw">Raw</button>
       <button class="rtab" data-tab="headers">Headers</button>
+      <button class="rtab" data-tab="invocations">Invocations</button>
       <button
         class="rtab disabled"
         data-tab="cert"
@@ -78,8 +80,51 @@
         referrerpolicy="no-referrer"
       ></iframe>
     </div>
+
+    <div id="pane-methods" class="pane">
+      <div id="methods-empty" class="methods-empty">
+        Connect to an agent to discover available methods.
+      </div>
+      <div id="methods-error" class="methods-error hidden"></div>
+      <div id="methods-content" class="methods-content hidden">
+        <section id="actions-section" class="methods-section actions">
+          <div class="section-head">
+            <span class="section-title">Available Actions</span>
+            <span id="actions-summary" class="section-sub"></span>
+          </div>
+          <div id="actions-grid" class="actions-grid"></div>
+        </section>
+
+        <section id="embedded-section" class="methods-section">
+          <button class="section-head expandable" data-section="embedded" type="button">
+            <span class="caret">▼</span>
+            <span class="section-title">Standard Methods</span>
+            <span id="embedded-count" class="section-sub"></span>
+          </button>
+          <div id="embedded-list" class="method-list"></div>
+        </section>
+
+        <section id="custom-section" class="methods-section hidden">
+          <button class="section-head expandable" data-section="custom" type="button">
+            <span class="caret">▼</span>
+            <span class="section-title">This Server's Methods</span>
+            <span id="custom-count" class="section-sub"></span>
+          </button>
+          <div id="custom-list" class="method-list"></div>
+        </section>
+      </div>
+    </div>
+
     <div id="pane-raw" class="pane"><pre id="raw"></pre></div>
     <div id="pane-headers" class="pane"><pre id="headers"></pre></div>
+    <div id="pane-invocations" class="pane">
+      <div class="invocations-head">
+        <span>Recent invocations (this browser)</span>
+        <button id="inv-clear" type="button" class="inv-clear">Clear</button>
+      </div>
+      <ul id="invocations-list" class="invocations-list"></ul>
+      <div id="invocations-empty" class="invocations-empty">No invocations yet.</div>
+    </div>
     <div id="pane-cert" class="pane">
       <div class="cert-placeholder">
         <div class="cert-title">Certificate &amp; Signature</div>

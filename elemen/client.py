@@ -16,7 +16,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # AGTP v1 reference library lives outside this project. Allow override via
 # AGTP_LIB_PATH env var; otherwise try two common layouts:
@@ -91,15 +91,24 @@ def resolve_target(parsed: ParsedURI, registry_url: str) -> tuple[str, int]:
     return lookup_registry(parsed.agent_id, registry_url)
 
 
-def fetch_agent_document(
+def send_method(
     agent_id: str,
     host: str,
     port: int,
-    accept: str,
+    method_name: str,
     *,
+    accept: str = "application/json",
+    body: bytes = b"",
+    body_content_type: Optional[str] = None,
     use_tls: bool = True,
     insecure_skip_verify: bool = False,
 ) -> wire.AGTPResponse:
+    """
+    Generalized method send. DESCRIBE, DISCOVER, QUERY... all reuse this.
+
+    A non-empty body must come with a body_content_type. Headers always
+    carry Target-Agent, Accept, and Host.
+    """
     sock = socket.create_connection((host, port), timeout=10.0)
 
     if use_tls:
@@ -109,17 +118,22 @@ def fetch_agent_document(
             ctx.verify_mode = ssl.CERT_NONE
         sock = ctx.wrap_socket(sock, server_hostname=host)
 
+    headers = {
+        "Target-Agent": agent_id,
+        "Accept": accept,
+        "Host": host,
+    }
+    if body and body_content_type:
+        headers["Content-Type"] = body_content_type
+
     try:
         request = wire.AGTPRequest(
-            method="DESCRIBE",
-            headers={
-                "Target-Agent": agent_id,
-                "Accept": accept,
-                "Host": host,
-            },
+            method=method_name,
+            headers=headers,
+            body_bytes=body,
         )
         sock.sendall(request.serialize())
-        # Don't half-close on TLS sockets — close_notify ends the session.
+        # Don't half-close on TLS sockets; close_notify ends the session.
         reader = sock.makefile("rb")
         return wire.parse_response(reader)
     finally:
@@ -127,6 +141,28 @@ def fetch_agent_document(
             sock.close()
         except OSError:
             pass
+
+
+# Backwards-compatible alias. Older code in elemen called the helper
+# fetch_agent_document; that's preserved as a thin wrapper.
+def fetch_agent_document(
+    agent_id: str,
+    host: str,
+    port: int,
+    accept: str,
+    *,
+    use_tls: bool = True,
+    insecure_skip_verify: bool = False,
+) -> wire.AGTPResponse:
+    return send_method(
+        agent_id,
+        host,
+        port,
+        "DESCRIBE",
+        accept=accept,
+        use_tls=use_tls,
+        insecure_skip_verify=insecure_skip_verify,
+    )
 
 
 def fetch(
@@ -194,4 +230,170 @@ def fetch(
         "body": body,
         "content_type": response.headers.get("Content-Type", ""),
         "format": fmt,
+    }
+
+
+def discover_methods(
+    uri: str,
+    *,
+    registry: str = DEFAULT_REGISTRY_URL,
+    insecure: bool = False,
+    insecure_skip_verify: bool = False,
+) -> dict:
+    """
+    Send DISCOVER target=methods to the server hosting the URI's agent.
+
+    Result shape:
+        ok=True:  {ok, agent_id, host, port, status_code, embedded,
+                   custom, summary, raw}
+        ok=False: {ok, error, stage}
+    """
+    try:
+        parsed = parse_uri(uri)
+    except AgentIDError as exc:
+        return {"ok": False, "error": str(exc), "stage": "parse"}
+
+    try:
+        host, port = resolve_target(parsed, registry)
+    except ResolutionError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "stage": "resolve",
+            "agent_id": parsed.agent_id,
+        }
+
+    body = json.dumps({"target": "methods"}).encode("utf-8")
+    try:
+        response = send_method(
+            parsed.agent_id,
+            host,
+            port,
+            "DISCOVER",
+            accept="application/json",
+            body=body,
+            body_content_type="application/json",
+            use_tls=not insecure,
+            insecure_skip_verify=insecure_skip_verify,
+        )
+    except (OSError, wire.WireFormatError) as exc:
+        return {
+            "ok": False,
+            "error": f"connection failed: {exc}",
+            "stage": "discover",
+            "agent_id": parsed.agent_id,
+            "host": host,
+            "port": port,
+        }
+
+    raw = response.body_bytes.decode("utf-8", errors="replace")
+    if response.status_code != 200:
+        return {
+            "ok": False,
+            "error": f"DISCOVER returned {response.status_code} {response.status_text}",
+            "stage": "discover",
+            "status_code": response.status_code,
+            "agent_id": parsed.agent_id,
+            "host": host,
+            "port": port,
+            "raw": raw,
+        }
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return {
+            "ok": False,
+            "error": f"DISCOVER body was not JSON: {exc}",
+            "stage": "discover",
+            "agent_id": parsed.agent_id,
+            "host": host,
+            "port": port,
+            "raw": raw,
+        }
+
+    return {
+        "ok": True,
+        "agent_id": parsed.agent_id,
+        "host": host,
+        "port": port,
+        "status_code": response.status_code,
+        "embedded": payload.get("embedded", []),
+        "custom": payload.get("custom", []),
+        "summary": payload.get("summary", {}),
+        "raw": raw,
+    }
+
+
+def invoke_method(
+    uri: str,
+    method_name: str,
+    body_dict: Optional[dict] = None,
+    *,
+    registry: str = DEFAULT_REGISTRY_URL,
+    insecure: bool = False,
+    insecure_skip_verify: bool = False,
+) -> dict:
+    """
+    Send an arbitrary method with an optional JSON body. Used by the
+    elemen "Try it" form so the UI can invoke any verb DISCOVER reports.
+
+    Result shape mirrors fetch(): {ok, agent_id, host, port, status_code,
+    status_text, headers, body, content_type}.
+    """
+    try:
+        parsed = parse_uri(uri)
+    except AgentIDError as exc:
+        return {"ok": False, "error": str(exc), "stage": "parse"}
+
+    try:
+        host, port = resolve_target(parsed, registry)
+    except ResolutionError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "stage": "resolve",
+            "agent_id": parsed.agent_id,
+        }
+
+    body_bytes = b""
+    body_content_type = None
+    if body_dict is not None and body_dict != {}:
+        body_bytes = json.dumps(body_dict).encode("utf-8")
+        body_content_type = "application/json"
+
+    try:
+        response = send_method(
+            parsed.agent_id,
+            host,
+            port,
+            method_name.upper(),
+            accept="application/json",
+            body=body_bytes,
+            body_content_type=body_content_type,
+            use_tls=not insecure,
+            insecure_skip_verify=insecure_skip_verify,
+        )
+    except (OSError, wire.WireFormatError) as exc:
+        return {
+            "ok": False,
+            "error": f"connection failed: {exc}",
+            "stage": "invoke",
+            "agent_id": parsed.agent_id,
+            "host": host,
+            "port": port,
+        }
+
+    body = response.body_bytes.decode("utf-8", errors="replace")
+    return {
+        "ok": True,
+        "agent_id": parsed.agent_id,
+        "host": host,
+        "port": port,
+        "method": method_name.upper(),
+        "status_code": response.status_code,
+        "status_text": response.status_text,
+        "headers": dict(response.headers),
+        "body": body,
+        "content_type": response.headers.get("Content-Type", ""),
     }

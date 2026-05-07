@@ -31,6 +31,7 @@ Repository = "https://github.com/nomotic-ai/agtp"
 agtp = "agtp.client:main"
 agtp-server = "agtp.server:main"
 agtp-registry = "agtp.registry:main"
+agtp-curl = "agtp.curl:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

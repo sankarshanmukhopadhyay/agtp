@@ -13,30 +13,32 @@ Specification, Internet-Draft, and reference implementation.
 
 ```
 agtp/
-├── ietf/              IETF Internet-Draft sources (markdown)
-├── v1/                Reference implementation (Python)
-│   ├── agent_id.py
-│   ├── agent_document.py
-│   ├── wire_v2.py
-│   ├── renderer.py
-│   ├── server/
-│   │   ├── agent_server.py
-│   │   └── agents/
-│   │       └── lauren.agent.json
-│   ├── registry/
-│   │   └── registry_server.py
-│   ├── client/
-│   │   └── agtp.py
-│   └── run_demo.sh
-├── docs/
-│   └── DEPLOY.md       Deployment guide for fresh VPS
-└── scripts/
-    └── agtp-deploy.sh  VPS deploy automation
+├── ietf/                IETF Internet-Draft sources (markdown)
+├── agtp/                Reference implementation (Python package)
+│   ├── ids.py             Agent ID + URI parsing
+│   ├── identity.py        Agent Document schema
+│   ├── wire.py            AGTP/1.0 wire format
+│   ├── render.py          HTML identity card
+│   ├── methods.py         12-method registry (AMG-ready)
+│   ├── server.py          python -m agtp.server
+│   ├── registry.py        python -m agtp.registry
+│   ├── client.py          python -m agtp
+│   ├── curl.py            agtp-curl diagnostic shim
+│   ├── _paths.py          cross-platform path normalization
+│   └── examples/          opt-in custom-method modules
+├── v1/                  Backward-compat shims and demo
+│   ├── server/agents/   *.agent.json files
+│   └── run_demo.sh      end-to-end 14-scenario walkthrough
+├── elemen/              native AGTP browser (pywebview)
+├── docs/                deployment guide and cross-platform notes
+├── scripts/             VPS deploy automation
+├── pyproject.toml       installable as `pip install -e .`
+└── test_methods.py      method-registry tests
 ```
 
 The protocol specification and the reference implementation live in
 the same repository because they evolve together. Future revisions
-land in `v2/`, `v3/` etc. — earlier `vN/` directories are kept for
+land in `v2/`, `v3/` etc.; earlier `vN/` directories are kept for
 historical reference.
 
 ## What v1 demonstrates
@@ -52,20 +54,40 @@ historical reference.
 - DESCRIBE method serves Agent Identity Documents over AGTP wire format
   on port 4480
 
-## Quick start (local)
+## Quick start
+
+The invocation idiom mirrors `python -m http.server 8000`:
 
 ```bash
-cd v1
-./run_demo.sh
+# Install once (editable; picks up local changes immediately).
+pip install -e .
+
+# Start the registry and an agent server. Loopback binds default to
+# plaintext, so no --insecure flag is needed for local development.
+python -m agtp.registry 8080 &
+python -m agtp.server   4480 --agents-dir v1/server/agents &
+
+# Inspect a server with the curl-equivalent.
+agtp-curl DISCOVER agtp://localhost:4480/methods
+
+# Invoke a method via the official client.
+agtp agtp://{lauren-id}@localhost:4480 QUERY --param intent="hello"
+
+# Or run the bundled 14-scenario demo end-to-end:
+cd v1 && ./run_demo.sh
 ```
 
-This starts a registry on `127.0.0.1:8080`, registers Lauren, starts
-the agent server on `127.0.0.1:4480`, then runs four scenarios:
+Both `python -m agtp.server 4480` (positional) and
+`python -m agtp.server --port 4480` work. After install, the same
+command is also available as the bare name `agtp-server 4480`.
 
-1. `agtp://{lauren-id}` → JSON
-2. `agtp://{lauren-id}` → YAML
-3. `agtp://{lauren-id}` → rendered HTML identity card
-4. `agtp://{lauren-id}@127.0.0.1:4480` → direct host form
+### Cross-platform notes
+
+Git Bash on Windows reports POSIX-form paths (`/x/agtp/v1`) from
+`pwd`; Python on Windows would otherwise misinterpret those as paths
+on the current drive. Anywhere a path crosses the shell-to-Python
+boundary, use `agtp._paths.normalize()` (the demo script and the
+package internals do).
 
 ## Public deployment
 

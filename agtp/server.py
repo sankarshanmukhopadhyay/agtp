@@ -18,6 +18,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import socket
 import ssl
@@ -27,11 +28,23 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from agtp import wire
+from agtp._paths import normalize
 from agtp.identity import AgentDocument, from_dict
 from agtp.methods import REGISTRY, dispatch, error_response
 
 
 DEFAULT_PORT = 4480
+DEFAULT_AGENTS_DIR = "agents"
+
+# Hosts that bind to the loopback interface only. When the server is
+# listening on one of these, plaintext is the convenient default for
+# local development; non-loopback bindings still require explicit TLS
+# or `--insecure`.
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_loopback(host: str) -> bool:
+    return host.lower() in _LOOPBACK_HOSTS
 
 
 class AgentRegistry:
@@ -180,33 +193,104 @@ def run(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="agtp-server", description="AGTP Agent Server"
+        prog="agtp-server",
+        description="AGTP Agent Server",
+        epilog=(
+            "Examples:\n"
+            "  python -m agtp.server 4480              # positional port\n"
+            "  python -m agtp.server --port 4480       # named port\n"
+            "  python -m agtp.server                   # default port 4480\n"
+            "  python -m agtp.server --host 0.0.0.0 --cert c.pem --key k.pem"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument(
+        "port_pos",
+        nargs="?",
+        type=int,
+        metavar="PORT",
+        help=f"Port to listen on (defaults to {DEFAULT_PORT}).",
+    )
+    parser.add_argument("--port", type=int, dest="port_flag")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Interface to bind. Loopback hosts default to plaintext.",
+    )
     parser.add_argument(
         "--agents-dir",
-        default="agents",
-        help="Directory containing *.agent.json files",
+        default=DEFAULT_AGENTS_DIR,
+        help=(
+            f"Directory containing *.agent.json files "
+            f"(defaults to ./{DEFAULT_AGENTS_DIR}; created if missing)."
+        ),
     )
     parser.add_argument("--cert", help="TLS certificate file")
     parser.add_argument("--key", help="TLS private key file")
     parser.add_argument(
         "--insecure",
         action="store_true",
-        help="Run plaintext (development only)",
+        help="Force plaintext on a non-loopback bind (development only).",
+    )
+    parser.add_argument(
+        "--load-module",
+        action="append",
+        default=[],
+        metavar="MODULE",
+        help=(
+            "Import a Python module before serving so it can register "
+            "custom methods (repeatable). Example: "
+            "--load-module agtp.examples.custom_methods"
+        ),
     )
     args = parser.parse_args()
 
-    if not args.insecure and not (args.cert and args.key):
+    if args.port_pos is not None and args.port_flag is not None:
+        parser.error(
+            "specify the port positionally or with --port, not both"
+        )
+    port = args.port_pos if args.port_pos is not None else (
+        args.port_flag if args.port_flag is not None else DEFAULT_PORT
+    )
+
+    for mod_name in args.load_module:
+        try:
+            importlib.import_module(mod_name)
+            print(f"[server] loaded custom-method module: {mod_name}")
+        except ImportError as exc:
+            print(
+                f"[server] failed to load module {mod_name!r}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+
+    use_tls = bool(args.cert and args.key)
+    loopback = _is_loopback(args.host)
+
+    if not use_tls and not loopback and not args.insecure:
         print(
-            "[server] TLS required in production; pass --cert and --key, "
-            "or --insecure for development",
+            f"[server] non-loopback bind ({args.host}) requires either "
+            f"--cert/--key or --insecure",
             file=sys.stderr,
         )
         return 2
 
-    run(args.host, args.port, Path(args.agents_dir), args.cert, args.key)
+    if not use_tls and loopback and not args.insecure:
+        print(
+            f"[server] running plaintext on loopback ({args.host}); "
+            f"production deployments must use TLS",
+            file=sys.stderr,
+        )
+
+    agents_path = normalize(args.agents_dir)
+    if not agents_path.exists():
+        agents_path.mkdir(parents=True, exist_ok=True)
+        print(
+            f"[server] created empty agents directory: {agents_path}",
+            file=sys.stderr,
+        )
+
+    run(args.host, port, agents_path, args.cert, args.key)
     return 0
 
 

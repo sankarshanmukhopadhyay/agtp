@@ -102,8 +102,8 @@ rm -f "$REGISTRY_STORE"
 
 echo                                                                          | tee -a "$TRANSCRIPT"
 echo "[runner] starting registry on $REGISTRY_URL"                            | tee -a "$TRANSCRIPT"
-$PY -m agtp.registry \
-    --host 127.0.0.1 --port 8080 \
+$PY -m agtp.registry 8080 \
+    --host 127.0.0.1 \
     --store "$REGISTRY_STORE" \
     >> "$TRANSCRIPT_DIR/registry.log" 2>&1 &
 REGISTRY_PID=$!
@@ -120,10 +120,11 @@ print(f'[runner] registry now contains: {store.list_all()}')
 " | tee -a "$TRANSCRIPT"
 
 echo "[runner] starting agent server on agtp://127.0.0.1:4480 (plaintext)"    | tee -a "$TRANSCRIPT"
-$PY -m agtp.server \
-    --host 127.0.0.1 --port 4480 \
+# Loopback bind defaults to plaintext, so --insecure is omitted here.
+# Positional port matches the python -m http.server idiom.
+$PY -m agtp.server 4480 \
+    --host 127.0.0.1 \
     --agents-dir "$AGENTS_DIR" \
-    --insecure \
     >> "$TRANSCRIPT_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 sleep 0.6

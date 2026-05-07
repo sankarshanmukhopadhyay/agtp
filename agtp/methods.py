@@ -58,15 +58,20 @@ class ServerState(Protocol):
 @dataclass
 class MethodSpec:
     """
-    Full declaration of a single embedded method.
+    Full declaration of a single method (embedded or custom).
 
     The fields here are the AMG conformance surface. A grammar validator
     iterates REGISTRY and checks each entry: name shape, semantic class,
     parameter declarations, error codes, idempotency, etc.
+
+    The `source` field distinguishes baseline AGTP/1.0 verbs from
+    server-defined custom methods declared under AMG. Embedded methods
+    carry source="agtp/1.0" and no namespace. Custom methods carry
+    source="amg/1.0" and a non-empty namespace for disambiguation.
     """
 
     name: str
-    category: str                     # "cognitive" | "mechanics"
+    category: str                     # "cognitive" | "mechanics" | "transact" | ...
     semantic_class: str               # AMG semantic class (e.g., "action-intent")
     idempotent: bool
     state_modifying: bool
@@ -75,9 +80,48 @@ class MethodSpec:
     error_codes: List[int] = field(default_factory=list)
     description: str = ""
     handler: Optional[HandlerFn] = None
+    source: str = "agtp/1.0"
+    namespace: Optional[str] = None
 
 
 REGISTRY: Dict[str, MethodSpec] = {}
+
+
+# Recognized source values. Anything else fails registration. v1 admits
+# only these two; future revisions may add e.g. "experimental/0.1".
+ALLOWED_SOURCES = {"agtp/1.0", "amg/1.0"}
+
+
+def _validate_spec(
+    name: str,
+    source: str,
+    namespace: Optional[str],
+    description: str,
+    error_codes: Optional[List[int]],
+) -> None:
+    """Shared sanity checks for both decorator and runtime registration."""
+    if not name or not name.isupper() or " " in name:
+        raise ValueError(
+            f"method name must be a single uppercase token (got {name!r})"
+        )
+    if name in REGISTRY:
+        raise RuntimeError(f"method {name!r} already registered")
+    if source not in ALLOWED_SOURCES:
+        raise ValueError(
+            f"source must be one of {sorted(ALLOWED_SOURCES)} (got {source!r})"
+        )
+    if source == "amg/1.0" and not namespace:
+        raise ValueError(
+            f"custom method {name!r} (source=amg/1.0) requires a namespace"
+        )
+    if source == "agtp/1.0" and namespace is not None:
+        raise ValueError(
+            f"embedded method {name!r} (source=agtp/1.0) cannot declare a namespace"
+        )
+    if not description:
+        raise ValueError(f"method {name!r} requires a description")
+    if not error_codes:
+        raise ValueError(f"method {name!r} must declare at least one error code")
 
 
 def method(
@@ -91,18 +135,21 @@ def method(
     optional_params: Optional[List[str]] = None,
     error_codes: Optional[List[int]] = None,
     description: str = "",
+    source: str = "agtp/1.0",
+    namespace: Optional[str] = None,
 ) -> Callable[[HandlerFn], HandlerFn]:
     """
-    Decorator that registers a handler against the 12-method registry.
+    Decorator that registers a handler in REGISTRY.
 
     Names are normalized to uppercase. A second registration of the same
-    name raises, since the registry is the single source of truth.
+    name raises, since the registry is the single source of truth. The
+    `source` and `namespace` fields default to embedded-method values;
+    custom-method registration is normally done via register_custom().
     """
 
     def decorator(fn: HandlerFn) -> HandlerFn:
         normalized = name.upper()
-        if normalized in REGISTRY:
-            raise RuntimeError(f"method {normalized!r} already registered")
+        _validate_spec(normalized, source, namespace, description, error_codes)
         REGISTRY[normalized] = MethodSpec(
             name=normalized,
             category=category,
@@ -114,10 +161,62 @@ def method(
             error_codes=list(error_codes or []),
             description=description,
             handler=fn,
+            source=source,
+            namespace=namespace,
         )
         return fn
 
     return decorator
+
+
+def register_custom(
+    handler: HandlerFn,
+    *,
+    name: str,
+    namespace: str,
+    category: str,
+    semantic_class: str,
+    idempotent: bool,
+    state_modifying: bool,
+    required_params: List[str],
+    optional_params: Optional[List[str]] = None,
+    error_codes: Optional[List[int]] = None,
+    description: str = "",
+) -> MethodSpec:
+    """
+    Register an AMG-flagged custom method at runtime.
+
+    Source is forced to "amg/1.0" and namespace is required; everything
+    else mirrors the @method decorator. Servers call this to expose
+    custom verbs without modifying the core registry. Returns the
+    registered MethodSpec so callers can inspect it.
+    """
+    normalized = name.upper()
+    _validate_spec(normalized, "amg/1.0", namespace, description, error_codes)
+    spec = MethodSpec(
+        name=normalized,
+        category=category,
+        semantic_class=semantic_class,
+        idempotent=idempotent,
+        state_modifying=state_modifying,
+        required_params=list(required_params),
+        optional_params=list(optional_params or []),
+        error_codes=list(error_codes or []),
+        description=description,
+        handler=handler,
+        source="amg/1.0",
+        namespace=namespace,
+    )
+    REGISTRY[normalized] = spec
+    return spec
+
+
+def unregister(name: str) -> None:
+    """
+    Remove a registered method. Used by tests to keep the registry clean
+    across runs. Quiet no-op if the name is unknown.
+    """
+    REGISTRY.pop(name.upper(), None)
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +331,30 @@ def require_params(
     return None
 
 
+def spec_to_dict(spec: MethodSpec) -> Dict[str, Any]:
+    """
+    Serialize a MethodSpec to the JSON shape used by DISCOVER /methods.
+
+    Embedded methods omit `namespace` (always None for them); custom
+    methods include it. Handler is never serialized.
+    """
+    payload: Dict[str, Any] = {
+        "name": spec.name,
+        "category": spec.category,
+        "semantic_class": spec.semantic_class,
+        "idempotent": spec.idempotent,
+        "state_modifying": spec.state_modifying,
+        "required_params": list(spec.required_params),
+        "optional_params": list(spec.optional_params),
+        "error_codes": list(spec.error_codes),
+        "description": spec.description,
+        "source": spec.source,
+    }
+    if spec.namespace is not None:
+        payload["namespace"] = spec.namespace
+    return payload
+
+
 def check_capability(
     spec: MethodSpec, agent_doc: AgentDocument
 ) -> Optional[wire.AGTPResponse]:
@@ -272,6 +395,7 @@ def check_capability(
     optional_params=["scope", "format", "confidence_threshold", "context"],
     error_codes=[400, 405, 422],
     description="Express an information need; semantic retrieval.",
+    source="agtp/1.0",
 )
 def handle_query(
     request: wire.AGTPRequest,
@@ -325,6 +449,7 @@ def handle_query(
     description=(
         "Enumerate available agents, methods, APIs, or tools on this server."
     ),
+    source="agtp/1.0",
 )
 def handle_discover(
     request: wire.AGTPRequest,
@@ -342,24 +467,45 @@ def handle_discover(
         return err
 
     target = str(params["target"]).lower()
-    items: List[Dict[str, Any]]
 
     if target == "methods":
-        items = [
+        # Bucket by source: embedded vs custom. Each bucket is sorted
+        # alphabetically by name. The browser and other consumers rely
+        # on this stable ordering.
+        embedded: List[Dict[str, Any]] = []
+        custom: List[Dict[str, Any]] = []
+        for verb, m in REGISTRY.items():
+            if verb not in agent_doc.capabilities:
+                continue
+            entry = spec_to_dict(m)
+            if m.source == "agtp/1.0":
+                embedded.append(entry)
+            else:
+                custom.append(entry)
+        embedded.sort(key=lambda e: e["name"])
+        custom.sort(key=lambda e: e["name"])
+        return json_response(
+            200,
+            "OK",
             {
-                "name": m.name,
-                "category": m.category,
-                "semantic_class": m.semantic_class,
-                "idempotent": m.idempotent,
-                "state_modifying": m.state_modifying,
-                "required_params": m.required_params,
-                "optional_params": m.optional_params,
-                "description": m.description,
-            }
-            for verb, m in REGISTRY.items()
-            if verb in agent_doc.capabilities
-        ]
-    elif target == "agents":
+                "method": "DISCOVER",
+                "agent_id": agent_doc.agent_id,
+                "target": "methods",
+                "embedded": embedded,
+                "custom": custom,
+                "summary": {
+                    "embedded_count": len(embedded),
+                    "custom_count": len(custom),
+                    "total": len(embedded) + len(custom),
+                },
+                "issued_at": _utc_now_iso(),
+            },
+            method_name="DISCOVER",
+        )
+
+    items: List[Dict[str, Any]]
+
+    if target == "agents":
         items = []
         for aid in server_state.list_ids():
             doc = server_state.lookup(aid)
@@ -412,6 +558,7 @@ def handle_discover(
         "Return a structured characterization of the target. For an agent "
         "target this is the Agent Identity Document."
     ),
+    source="agtp/1.0",
 )
 def handle_describe(
     request: wire.AGTPRequest,
@@ -452,6 +599,7 @@ def handle_describe(
     optional_params=["max_length", "style"],
     error_codes=[400, 405, 422],
     description="Return a condensed form of source content.",
+    source="agtp/1.0",
 )
 def handle_summarize(
     request: wire.AGTPRequest,
@@ -500,6 +648,7 @@ def handle_summarize(
     optional_params=["constraints", "max_steps"],
     error_codes=[400, 405, 422],
     description="Produce an executable strategy without executing it.",
+    source="agtp/1.0",
 )
 def handle_plan(
     request: wire.AGTPRequest,
@@ -547,6 +696,7 @@ def handle_plan(
     optional_params=["parameters", "timeout"],
     error_codes=[400, 405, 422, 409],
     description="Run a plan or registered procedure.",
+    source="agtp/1.0",
 )
 def handle_execute(
     request: wire.AGTPRequest,
@@ -596,6 +746,7 @@ def handle_execute(
     optional_params=["scope", "deadline"],
     error_codes=[400, 405, 422],
     description="Transfer a task with scoped authority to a sub-agent.",
+    source="agtp/1.0",
 )
 def handle_delegate(
     request: wire.AGTPRequest,
@@ -639,6 +790,7 @@ def handle_delegate(
     optional_params=["context", "target_authority"],
     error_codes=[400, 405, 422],
     description="Defer a decision to a human or higher-authority agent.",
+    source="agtp/1.0",
 )
 def handle_escalate(
     request: wire.AGTPRequest,
@@ -682,6 +834,7 @@ def handle_escalate(
     optional_params=["decision", "rationale"],
     error_codes=[400, 405, 422],
     description="Attest to a prior action; resolves an outstanding ESCALATE.",
+    source="agtp/1.0",
 )
 def handle_confirm(
     request: wire.AGTPRequest,
@@ -724,6 +877,7 @@ def handle_confirm(
     optional_params=["reason", "session_id", "ttl_seconds"],
     error_codes=[400, 405],
     description="Pause the session and issue a resumption nonce.",
+    source="agtp/1.0",
 )
 def handle_suspend(
     request: wire.AGTPRequest,
@@ -767,6 +921,7 @@ def handle_suspend(
         "460 Negotiation Failed if the proposal is not negotiable, or "
         "200 with an instantiated endpoint stub if it is."
     ),
+    source="agtp/1.0",
 )
 def handle_propose(
     request: wire.AGTPRequest,
@@ -831,6 +986,7 @@ def handle_propose(
     optional_params=["recipient", "priority", "payload"],
     error_codes=[400, 405, 422],
     description="Asynchronous push of information to a recipient.",
+    source="agtp/1.0",
 )
 def handle_notify(
     request: wire.AGTPRequest,
@@ -908,14 +1064,18 @@ def dispatch(
 
 
 __all__ = [
+    "ALLOWED_SOURCES",
     "MethodSpec",
     "REGISTRY",
     "ServerState",
     "method",
+    "register_custom",
+    "unregister",
     "dispatch",
     "parse_body",
     "json_response",
     "error_response",
     "require_params",
     "check_capability",
+    "spec_to_dict",
 ]

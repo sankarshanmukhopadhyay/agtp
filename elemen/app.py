@@ -106,6 +106,42 @@ class Api:
             insecure_skip_verify=insecure_skip_verify,
         )
 
+    def discover(
+        self,
+        uri: str,
+        registry: str = "",
+        insecure: bool = False,
+        insecure_skip_verify: bool = False,
+    ) -> dict:
+        """Send DISCOVER /methods, return bucketed shape for the UI."""
+        registry_url = registry.strip() or client.DEFAULT_REGISTRY_URL
+        return client.discover_methods(
+            uri.strip(),
+            registry=registry_url,
+            insecure=insecure,
+            insecure_skip_verify=insecure_skip_verify,
+        )
+
+    def invoke(
+        self,
+        uri: str,
+        method_name: str,
+        body_dict: Optional[dict] = None,
+        registry: str = "",
+        insecure: bool = False,
+        insecure_skip_verify: bool = False,
+    ) -> dict:
+        """Invoke a method on the URI's agent. body_dict may be None."""
+        registry_url = registry.strip() or client.DEFAULT_REGISTRY_URL
+        return client.invoke_method(
+            uri.strip(),
+            method_name,
+            body_dict if isinstance(body_dict, dict) else None,
+            registry=registry_url,
+            insecure=insecure,
+            insecure_skip_verify=insecure_skip_verify,
+        )
+
     # ---- history ----
     def history_load(self) -> list[dict]:
         return _read_history()

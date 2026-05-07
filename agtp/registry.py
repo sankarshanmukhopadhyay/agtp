@@ -29,10 +29,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
+from agtp._paths import normalize
 from agtp.ids import AgentIDError, validate_agent_id
 
 
 REGISTRY_FILE_DEFAULT = "registry_data.json"
+DEFAULT_PORT = 8080
 
 
 class RegistryStore:
@@ -161,10 +163,25 @@ def run(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="agtp-registry", description="AGTP Registry Server"
+        prog="agtp-registry",
+        description="AGTP Registry Server",
+        epilog=(
+            "Examples:\n"
+            "  python -m agtp.registry 8080            # positional port\n"
+            "  python -m agtp.registry --port 8080     # named port\n"
+            "  python -m agtp.registry                 # default port 8080"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument(
+        "port_pos",
+        nargs="?",
+        type=int,
+        metavar="PORT",
+        help=f"Port to listen on (defaults to {DEFAULT_PORT}).",
+    )
+    parser.add_argument("--port", type=int, dest="port_flag")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument(
         "--store",
         default=REGISTRY_FILE_DEFAULT,
@@ -174,6 +191,14 @@ def main() -> int:
     parser.add_argument("--key", help="TLS private key file")
     args = parser.parse_args()
 
+    if args.port_pos is not None and args.port_flag is not None:
+        parser.error(
+            "specify the port positionally or with --port, not both"
+        )
+    port = args.port_pos if args.port_pos is not None else (
+        args.port_flag if args.port_flag is not None else DEFAULT_PORT
+    )
+
     if bool(args.cert) != bool(args.key):
         print(
             "[registry] both --cert and --key are required for TLS",
@@ -181,7 +206,7 @@ def main() -> int:
         )
         return 2
 
-    run(args.host, args.port, Path(args.store), args.cert, args.key)
+    run(args.host, port, normalize(args.store), args.cert, args.key)
     return 0
 
 

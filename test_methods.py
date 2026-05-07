@@ -208,12 +208,16 @@ class MethodSetTests(unittest.TestCase):
 
     # ---- registry / AMG metadata ----
 
-    def test_registry_has_all_twelve_methods(self) -> None:
+    def test_registry_has_all_twelve_embedded_methods(self) -> None:
         expected = {
             "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
             "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
         }
-        self.assertEqual(set(REGISTRY.keys()), expected)
+        embedded = {
+            name for name, spec in REGISTRY.items()
+            if spec.source == "agtp/1.0"
+        }
+        self.assertEqual(embedded, expected)
 
     def test_registry_entries_are_amg_complete(self) -> None:
         cognitive = {"QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE"}
@@ -380,20 +384,48 @@ class MethodSetTests(unittest.TestCase):
         self.assertIn("resumption_nonce", payload)
         self.assertGreaterEqual(len(payload["resumption_nonce"]), 16)
 
-    # ---- DISCOVER target=methods reflects per-agent capabilities ----
+    # ---- DISCOVER target=methods returns the bucketed shape ----
 
-    def test_discover_methods_lists_only_agent_capabilities(self) -> None:
+    def test_discover_methods_returns_bucketed_shape(self) -> None:
         resp = _send(
             self.server, LAUREN_ID, "DISCOVER", body={"target": "methods"}
         )
         self.assertEqual(resp.status_code, 200)
         payload = _decode_json(resp)
-        names = {item["name"] for item in payload["items"]}
+
+        self.assertIn("embedded", payload)
+        self.assertIn("custom", payload)
+        self.assertIn("summary", payload)
+        self.assertEqual(payload["target"], "methods")
+
+        names = {item["name"] for item in payload["embedded"]}
         self.assertEqual(
             names,
             {"QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN",
              "EXECUTE", "CONFIRM", "NOTIFY"},
         )
+        self.assertEqual(payload["custom"], [])
+        self.assertEqual(payload["summary"]["embedded_count"], 8)
+        self.assertEqual(payload["summary"]["custom_count"], 0)
+        self.assertEqual(payload["summary"]["total"], 8)
+
+    def test_discover_methods_buckets_are_sorted_alphabetically(self) -> None:
+        resp = _send(
+            self.server, ORCH_ID, "DISCOVER", body={"target": "methods"}
+        )
+        names = [item["name"] for item in _decode_json(resp)["embedded"]]
+        self.assertEqual(names, sorted(names))
+
+    def test_embedded_entries_carry_source_and_no_namespace(self) -> None:
+        resp = _send(
+            self.server, ORCH_ID, "DISCOVER", body={"target": "methods"}
+        )
+        for entry in _decode_json(resp)["embedded"]:
+            self.assertEqual(entry["source"], "agtp/1.0", entry["name"])
+            self.assertNotIn(
+                "namespace", entry,
+                f"{entry['name']} embedded entry must omit namespace",
+            )
 
     # ---- single-agent default routing ----
 
@@ -412,6 +444,149 @@ class MethodSetTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
         payload = _decode_json(resp)
         self.assertEqual(payload["error"]["code"], "missing-target-agent")
+
+
+class CustomMethodTests(unittest.TestCase):
+    """
+    Exercises register_custom and the example RECONCILE method. Lives in
+    its own TestCase so RECONCILE is installed in setUpClass and removed
+    in tearDownClass, leaving the global REGISTRY untouched for other
+    tests that assert the embedded count.
+    """
+
+    server: _TestServer
+    tmp_dir: tempfile.TemporaryDirectory
+    custom_agent_id: str
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from agtp.examples import custom_methods
+        custom_methods.install()
+
+        cls.tmp_dir = tempfile.TemporaryDirectory()
+        agents_dir = Path(cls.tmp_dir.name)
+        _write_test_agents(agents_dir)
+
+        # A fourth agent that declares the custom verb so DISCOVER can
+        # surface it in the `custom` bucket.
+        cls.custom_agent_id = (
+            "ca5703a51c5703a51c5703a51c5703a51c5703a51c5703a51c5703a51c570001"
+        )
+        custom_doc = {
+            "agtp_version": "1.0",
+            "agent_id": cls.custom_agent_id,
+            "name": "AcmeFinanceAgent",
+            "principal": "Acme Finance",
+            "principal_id": "principal-acme-001",
+            "description": "Test agent that declares the RECONCILE custom method.",
+            "status": "active",
+            "capabilities": ["DESCRIBE", "DISCOVER", "RECONCILE"],
+            "scopes_accepted": ["transact:reconcile"],
+            "issued_at": "2026-05-07T00:00:00Z",
+            "issuer": "agtp.io",
+        }
+        (agents_dir / "acme.agent.json").write_text(
+            json.dumps(custom_doc, indent=2), encoding="utf-8"
+        )
+
+        registry = AgentRegistry(agents_dir)
+        cls.server = _TestServer(registry)
+        cls.server.start()
+        time.sleep(0.05)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.stop()
+        cls.tmp_dir.cleanup()
+        from agtp.methods import unregister
+        unregister("RECONCILE")
+
+    def test_reconcile_appears_in_registry_with_amg_source(self) -> None:
+        spec = REGISTRY["RECONCILE"]
+        self.assertEqual(spec.source, "amg/1.0")
+        self.assertEqual(spec.namespace, "acme-finance")
+        self.assertEqual(spec.category, "transact")
+
+    def test_discover_buckets_custom_method_separately(self) -> None:
+        resp = _send(
+            self.server,
+            self.custom_agent_id,
+            "DISCOVER",
+            body={"target": "methods"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        payload = _decode_json(resp)
+
+        embedded_names = {e["name"] for e in payload["embedded"]}
+        custom_names = {e["name"] for e in payload["custom"]}
+
+        self.assertEqual(embedded_names, {"DESCRIBE", "DISCOVER"})
+        self.assertEqual(custom_names, {"RECONCILE"})
+        self.assertEqual(payload["summary"]["embedded_count"], 2)
+        self.assertEqual(payload["summary"]["custom_count"], 1)
+        self.assertEqual(payload["summary"]["total"], 3)
+
+    def test_custom_entry_carries_namespace(self) -> None:
+        resp = _send(
+            self.server,
+            self.custom_agent_id,
+            "DISCOVER",
+            body={"target": "methods"},
+        )
+        custom = _decode_json(resp)["custom"]
+        self.assertEqual(len(custom), 1)
+        entry = custom[0]
+        self.assertEqual(entry["name"], "RECONCILE")
+        self.assertEqual(entry["source"], "amg/1.0")
+        self.assertEqual(entry["namespace"], "acme-finance")
+
+    def test_invoking_reconcile_succeeds_with_required_params(self) -> None:
+        resp = _send(
+            self.server,
+            self.custom_agent_id,
+            "RECONCILE",
+            body={"account_id": "acct-001", "period": "2026-04"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        payload = _decode_json(resp)
+        self.assertEqual(payload["method"], "RECONCILE")
+        self.assertEqual(payload["account_id"], "acct-001")
+        self.assertEqual(payload["status"], "stub-reconciled")
+
+    def test_register_custom_rejects_missing_namespace(self) -> None:
+        from agtp.methods import register_custom
+        with self.assertRaises(ValueError):
+            register_custom(
+                lambda *a, **k: None,  # noqa: E731
+                name="BADCUSTOM",
+                namespace="",
+                category="transact",
+                semantic_class="action-intent",
+                idempotent=False,
+                state_modifying=True,
+                required_params=["x"],
+                error_codes=[400],
+                description="bad",
+            )
+
+    def test_decorator_rejects_namespace_on_embedded_source(self) -> None:
+        from agtp.methods import method
+        with self.assertRaises(ValueError):
+
+            @method(
+                name="BADEMBEDDED",
+                category="cognitive",
+                semantic_class="action-intent",
+                idempotent=True,
+                state_modifying=False,
+                required_params=[],
+                error_codes=[400],
+                description="bad",
+                source="agtp/1.0",
+                namespace="should-not-be-allowed",
+            )
+            def _bad(req, st, doc):
+                return None
 
 
 if __name__ == "__main__":
