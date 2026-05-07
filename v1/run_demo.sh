@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # AGTP v1 demo runner.
 #
-# Starts the registry on localhost:8080 (HTTP, dev mode), starts the
-# agent server on localhost:4480 (plaintext, dev mode), registers Lauren
-# with the registry, and runs the client through three scenarios:
+# Exercises the full 12-method set against two demo agents:
+#   * Lauren (8 methods: 6 cognitive + CONFIRM + NOTIFY)
+#   * Orchestrator (all 12 methods)
 #
-#   1. agtp://{lauren-id}                 -> JSON (default)
-#   2. agtp://{lauren-id}?format=yaml     -> YAML
-#   3. agtp://{lauren-id}?format=html     -> HTML identity card
+# Starts the registry (HTTP, dev mode), starts the agent server
+# (plaintext, dev mode), registers both agents, then walks through
+# fourteen scenarios covering every method plus the 405 and 501 error
+# paths.
 #
-# All output is captured to transcripts/demo-output.txt.
+# Output goes to transcripts/methods-demo.txt and a few sidecar files.
 #
 # Usage:
 #   ./run_demo.sh
@@ -17,20 +18,63 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-mkdir -p transcripts
-TRANSCRIPT="transcripts/demo-output.txt"
+# We cd to the repo root so the agtp package is on Python's default
+# sys.path without needing PYTHONPATH. PYTHONPATH separator clashes with
+# the drive letter on Windows + Git Bash.
+#
+# All paths handed to Python are kept relative to the repo root, since
+# Git Bash returns posix-style paths from `pwd` (e.g. /x/agtp/v1) and
+# Python on Windows mis-interprets those as paths on the current drive.
+cd "$REPO_ROOT"
+
+AGENTS_DIR="v1/server/agents"
+REGISTRY_STORE="v1/registry/registry_data.json"
+TRANSCRIPT_DIR="v1/transcripts"
+
+# Pick whatever Python the host actually has on PATH. We probe each
+# candidate by running --version, since on Windows the App Execution
+# Alias for `python3` lives on PATH but errors out unless the user has
+# installed Python from the Microsoft Store.
+PY=""
+for candidate in python3 python py; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+        && "$candidate" --version >/dev/null 2>&1; then
+        PY="$candidate"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "error: no working python interpreter on PATH (tried python3, python, py)" >&2
+    exit 1
+fi
+
+mkdir -p "$TRANSCRIPT_DIR"
+TRANSCRIPT="$TRANSCRIPT_DIR/methods-demo.txt"
 : > "$TRANSCRIPT"
+: > "$TRANSCRIPT_DIR/registry.log"
+: > "$TRANSCRIPT_DIR/server.log"
 
-LAUREN_ID=$(cat LAUREN_AGENT_ID)
+LAUREN_ID="d8dc6f0df55d66c7b30100db3cffbe383c5f814e6e58a08521fb7636c3bcc230"
+ORCH_ID="9fe1dfc552a64c8bbec8dd2fe8cbe1a275f1a3405f7c5c20acca6453fd479709"
+REGISTRY_URL="http://127.0.0.1:8080"
 
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-echo "AGTP v1 Demo"                                                       | tee -a "$TRANSCRIPT"
-echo "Run at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"                             | tee -a "$TRANSCRIPT"
-echo "Agent: Lauren"                                                      | tee -a "$TRANSCRIPT"
-echo "ID:    $LAUREN_ID"                                                  | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
+CLIENT="$PY -m agtp"
+CLIENT_ARGS=(--registry "$REGISTRY_URL" --insecure --insecure-skip-verify)
+
+run_scenario() {
+    local n="$1"; shift
+    local title="$1"; shift
+    {
+        echo
+        echo "=================================================================="
+        echo "SCENARIO $n  $title"
+        echo "=================================================================="
+        echo "\$ $*"
+        "$@" 2>&1 || true
+    } | tee -a "$TRANSCRIPT"
+}
 
 cleanup() {
     if [ -n "${REGISTRY_PID:-}" ] && kill -0 "$REGISTRY_PID" 2>/dev/null; then
@@ -44,91 +88,130 @@ cleanup() {
 }
 trap cleanup EXIT
 
+{
+    echo "=================================================================="
+    echo "AGTP v1 12-Method Demo"
+    echo "Run at:        $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "Lauren:        $LAUREN_ID"
+    echo "Orchestrator:  $ORCH_ID"
+    echo "=================================================================="
+} | tee -a "$TRANSCRIPT"
+
 # Reset registry state so each run is reproducible.
-rm -f registry/registry_data.json
+rm -f "$REGISTRY_STORE"
 
-echo                                                                      | tee -a "$TRANSCRIPT"
-echo "[runner] starting registry on http://127.0.0.1:8080"                | tee -a "$TRANSCRIPT"
-python3 registry/registry_server.py \
+echo                                                                          | tee -a "$TRANSCRIPT"
+echo "[runner] starting registry on $REGISTRY_URL"                            | tee -a "$TRANSCRIPT"
+$PY -m agtp.registry \
     --host 127.0.0.1 --port 8080 \
-    --store registry/registry_data.json \
-    >> transcripts/registry.log 2>&1 &
+    --store "$REGISTRY_STORE" \
+    >> "$TRANSCRIPT_DIR/registry.log" 2>&1 &
 REGISTRY_PID=$!
-sleep 0.4
+sleep 0.6
 
-echo "[runner] registering Lauren -> 127.0.0.1:4480"                      | tee -a "$TRANSCRIPT"
-python3 -c "
-import sys
-sys.path.insert(0, '.')
-from registry.registry_server import RegistryStore
+echo "[runner] registering Lauren and Orchestrator at 127.0.0.1:4480"         | tee -a "$TRANSCRIPT"
+$PY -c "
 from pathlib import Path
-store = RegistryStore(Path('registry/registry_data.json'))
+from agtp.registry import RegistryStore
+store = RegistryStore(Path(r'$REGISTRY_STORE'))
 store.register('$LAUREN_ID', '127.0.0.1', 4480)
+store.register('$ORCH_ID',   '127.0.0.1', 4480)
 print(f'[runner] registry now contains: {store.list_all()}')
 " | tee -a "$TRANSCRIPT"
 
-echo "[runner] starting agent server on agtp://127.0.0.1:4480 (plaintext)" | tee -a "$TRANSCRIPT"
-python3 server/agent_server.py \
+echo "[runner] starting agent server on agtp://127.0.0.1:4480 (plaintext)"    | tee -a "$TRANSCRIPT"
+$PY -m agtp.server \
     --host 127.0.0.1 --port 4480 \
-    --agents-dir server/agents \
+    --agents-dir "$AGENTS_DIR" \
     --insecure \
-    >> transcripts/server.log 2>&1 &
+    >> "$TRANSCRIPT_DIR/server.log" 2>&1 &
 SERVER_PID=$!
-sleep 0.4
+sleep 0.6
 
-echo                                                                      | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-echo "SCENARIO 1 — agtp://{lauren-id} as JSON (default)"                  | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-python3 client/agtp.py resolve \
-    "agtp://$LAUREN_ID" \
-    --format=json \
-    --registry http://127.0.0.1:8080 \
-    --insecure --insecure-skip-verify \
-    2>&1 | tee -a "$TRANSCRIPT"
+# ---------------------------------------------------------------------------
+# Scenarios.
+# ---------------------------------------------------------------------------
 
-echo                                                                      | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-echo "SCENARIO 2 — agtp://{lauren-id} as YAML"                            | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-python3 client/agtp.py resolve \
-    "agtp://$LAUREN_ID" \
-    --format=yaml \
-    --registry http://127.0.0.1:8080 \
-    --insecure --insecure-skip-verify \
-    2>&1 | tee -a "$TRANSCRIPT"
+run_scenario 1  "DESCRIBE Lauren (default method, JSON)" \
+    $CLIENT "agtp://$LAUREN_ID" "${CLIENT_ARGS[@]}"
 
-echo                                                                      | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-echo "SCENARIO 3 — agtp://{lauren-id} as HTML"                            | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-echo "(HTML body is captured to transcripts/lauren.html for browser viewing)" | tee -a "$TRANSCRIPT"
-python3 client/agtp.py resolve \
-    "agtp://$LAUREN_ID" \
-    --format=html \
-    --registry http://127.0.0.1:8080 \
-    --insecure --insecure-skip-verify \
-    > transcripts/lauren.html 2>>"$TRANSCRIPT"
+run_scenario 2  "DISCOVER methods on Lauren" \
+    $CLIENT "agtp://$LAUREN_ID" DISCOVER \
+    --param target=methods "${CLIENT_ARGS[@]}"
 
-echo "(first 30 lines of the HTML output:)"                               | tee -a "$TRANSCRIPT"
-head -30 transcripts/lauren.html                                          | tee -a "$TRANSCRIPT"
-echo "..."                                                                | tee -a "$TRANSCRIPT"
+run_scenario 3  "QUERY Lauren with an intent" \
+    $CLIENT "agtp://$LAUREN_ID" QUERY \
+    --param "intent=what is the weather in San Francisco today" \
+    --param scope=public "${CLIENT_ARGS[@]}"
 
-echo                                                                      | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-echo "SCENARIO 4 — direct host form (bypasses registry)"                  | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-python3 client/agtp.py resolve \
-    "agtp://$LAUREN_ID@127.0.0.1:4480" \
-    --format=json \
-    --registry http://127.0.0.1:8080 \
-    --insecure --insecure-skip-verify \
-    2>&1 | tee -a "$TRANSCRIPT"
+run_scenario 4  "SUMMARIZE a sample input" \
+    $CLIENT "agtp://$LAUREN_ID" SUMMARIZE \
+    -d '{"source":"AGTP is a dedicated application-layer protocol for AI agent traffic. The reference implementation in v1 demonstrates canonical Agent IDs, registry lookup, and content-negotiated identity documents over a custom wire format on port 4480.","max_length":80}' \
+    "${CLIENT_ARGS[@]}"
 
-echo                                                                      | tee -a "$TRANSCRIPT"
-echo "==================================================================" | tee -a "$TRANSCRIPT"
-echo "Demo complete."                                                     | tee -a "$TRANSCRIPT"
-echo "Transcript:    $TRANSCRIPT"                                         | tee -a "$TRANSCRIPT"
-echo "HTML output:   transcripts/lauren.html"                             | tee -a "$TRANSCRIPT"
-echo "Server log:    transcripts/server.log"                              | tee -a "$TRANSCRIPT"
-echo "Registry log:  transcripts/registry.log"                            | tee -a "$TRANSCRIPT"
+run_scenario 5  "PLAN a multi-step task" \
+    $CLIENT "agtp://$LAUREN_ID" PLAN \
+    --param "goal=draft a release note for AGTP v0.2" \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 6  "EXECUTE a stub plan on Lauren" \
+    $CLIENT "agtp://$LAUREN_ID" EXECUTE \
+    --param plan_id=plan-demo-001 \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 7  "NOTIFY Lauren" \
+    $CLIENT "agtp://$LAUREN_ID" NOTIFY \
+    --param event=demo.started \
+    --param priority=normal \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 8  "CONFIRM a prior action on Lauren" \
+    $CLIENT "agtp://$LAUREN_ID" CONFIRM \
+    --param attestation_target=esc-fake-001 \
+    --param decision=confirmed \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 9  "DELEGATE to Orchestrator" \
+    $CLIENT "agtp://$ORCH_ID" DELEGATE \
+    --param "task=run nightly summarization" \
+    --param "sub_agent=$LAUREN_ID" \
+    --param scope=read-only \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 10 "ESCALATE to Orchestrator" \
+    $CLIENT "agtp://$ORCH_ID" ESCALATE \
+    --param "decision_point=approve high-cost action" \
+    --param target_authority=human \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 11 "SUSPEND on Orchestrator (returns resumption nonce)" \
+    $CLIENT "agtp://$ORCH_ID" SUSPEND \
+    --param reason=demo-pause \
+    --param ttl_seconds=600 \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 12 "PROPOSE to Orchestrator (negotiable=false, returns 460)" \
+    $CLIENT "agtp://$ORCH_ID" PROPOSE \
+    -d '{"endpoint_name":"weather.lookup","schema":{"input":"string","output":"object"},"description":"dynamic endpoint stub"}' \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 13 "DELEGATE on Lauren (not in capabilities, returns 405)" \
+    $CLIENT "agtp://$LAUREN_ID" DELEGATE \
+    --param task=anything \
+    --param "sub_agent=$ORCH_ID" \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 14 "FAKEMETHOD on Lauren (unknown method, returns 501)" \
+    $CLIENT "agtp://$LAUREN_ID" FAKEMETHOD \
+    --param x=1 \
+    "${CLIENT_ARGS[@]}"
+
+{
+    echo
+    echo "=================================================================="
+    echo "Demo complete."
+    echo "Transcript:    $TRANSCRIPT"
+    echo "Server log:    $TRANSCRIPT_DIR/server.log"
+    echo "Registry log:  $TRANSCRIPT_DIR/registry.log"
+    echo "=================================================================="
+} | tee -a "$TRANSCRIPT"

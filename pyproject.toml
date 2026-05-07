@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agtp"
+version = "0.2.0"
+description = "Agent Transfer Protocol reference implementation"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Chris Hood", email = "chris@nomotic.ai" }]
+keywords = ["agtp", "agent", "protocol", "ietf"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet",
+  "Topic :: System :: Networking",
+]
+
+[project.urls]
+Homepage = "https://agtp.io"
+Repository = "https://github.com/nomotic-ai/agtp"
+
+[project.scripts]
+agtp = "agtp.client:main"
+agtp-server = "agtp.server:main"
+agtp-registry = "agtp.registry:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agtp*"]

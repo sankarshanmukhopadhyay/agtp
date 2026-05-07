@@ -7,12 +7,19 @@
   "description": "The first AGTP-identified agent. Lauren can describe herself, list her capabilities, and serve as a reference implementation of the AGTP identity model.",
   "status": "active",
   "capabilities": [
-    "DESCRIBE"
+    "QUERY",
+    "DISCOVER",
+    "DESCRIBE",
+    "SUMMARIZE",
+    "PLAN",
+    "EXECUTE",
+    "CONFIRM",
+    "NOTIFY"
   ],
   "scopes_accepted": [
     "identity:read",
     "capability:read"
   ],
-  "issued_at": "2026-04-30T01:08:08Z",
-  "issuer": "agtp.nomotic.ai"
+  "issued_at": "2026-05-02T04:51:55Z",
+  "issuer": "agtp.io"
 }
