@@ -128,6 +128,7 @@ $PY -m agtp.server 4480 \
     --host 127.0.0.1 \
     --agents-dir "$AGENTS_DIR" \
     --config "$SCRIPT_DIR/agtp-server.toml" \
+    --load-module agtp.examples.custom_methods \
     >> "$TRANSCRIPT_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 sleep 0.6
@@ -194,9 +195,9 @@ run_scenario 11 "SUSPEND on Orchestrator (returns resumption nonce)" \
     --param ttl_seconds=600 \
     "${CLIENT_ARGS[@]}"
 
-run_scenario 12 "PROPOSE to Orchestrator (negotiable=false, returns 460)" \
+run_scenario 12 "PROPOSE to Orchestrator (out-of-scope name, returns 460)" \
     $CLIENT "agtp://$ORCH_ID" PROPOSE \
-    -d '{"endpoint_name":"weather.lookup","schema":{"input":"string","output":"object"},"description":"dynamic endpoint stub"}' \
+    -d '{"name":"ZBLARGON","parameters":{"input":"string"},"outcome":"object","description":"unrelated verb"}' \
     "${CLIENT_ARGS[@]}"
 
 run_scenario 13 "DELEGATE on Lauren (not in requires.methods, returns 405)" \
@@ -212,6 +213,25 @@ run_scenario 14 "FAKEMETHOD on Lauren (unknown method, returns 501)" \
 
 run_scenario 15 "Server-level DISCOVER (Form 2 URI returns Server Manifest)" \
     $CLIENT "agtp://127.0.0.1:4480" "${CLIENT_ARGS[@]}"
+
+run_scenario 16 "Soft-deny: RECONCILE on Lauren (custom method, returns 452)" \
+    $CLIENT "agtp://$LAUREN_ID" RECONCILE \
+    --param account_id=acct-001 \
+    --param period=Q1 \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 17 "PROPOSE counter-proposal (PROPOSEX -> 461 counters with PROPOSE)" \
+    $CLIENT "agtp://$ORCH_ID" PROPOSE \
+    -d '{"name":"PROPOSEX","parameters":{"x":"string"},"outcome":"object","description":"close to PROPOSE"}' \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 18 "PROPOSE accept (QUERY -> 200 with synthesis_id)" \
+    $CLIENT "agtp://$ORCH_ID" PROPOSE \
+    -d '{"name":"QUERY","parameters":{"intent":"string"},"outcome":"results","description":"alias for QUERY"}' \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 19 "--match-check on Lauren (full match against demo server)" \
+    $CLIENT "agtp://$LAUREN_ID" --match-check "${CLIENT_ARGS[@]}"
 
 {
     echo

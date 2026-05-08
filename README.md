@@ -111,6 +111,58 @@ agtp-migrate --check path/to/agent.json  # report only
 A `.v1.bak` backup is written alongside each migrated file unless
 `--no-backup` is set.
 
+## Status codes
+
+In addition to the standard 4xx / 5xx codes, AGTP defines:
+
+| Code | Phrase | When |
+|---|---|---|
+| 451 | Scope Violation | Caller's scope set is missing what the method requires |
+| 452 | Method Outside Agent's Declared Need | Soft-deny: method absent from `requires.methods` and wildcards is false |
+| 460 | Negotiation Refused | PROPOSE refused (`out_of_scope` / `ambiguous` / `insufficient` / `policy_refused`) |
+| 461 | Counter-Proposal | Server suggests a near-match method; body carries a MethodSpec |
+| 462 | Wildcards Refused | Agent declares wildcards but server policy refuses them |
+
+Precedence at the inbound gate: **462 > 452 > 451**. Embedded mechanics
+plus DISCOVER/DESCRIBE bypass soft-deny because they are protocol
+primitives. The server flag `--no-soft-deny` disables 452/462 for
+legacy testing.
+
+## Matching handshake
+
+Before invoking, a client can compare the agent's `requires.methods`
+against the server's manifest universe:
+
+```bash
+agtp agtp://{agent-id} --match-check
+# Match: FULL  (matched=8 missing=0 universe=12)
+# Matched (8): CONFIRM, DESCRIBE, DISCOVER, EXECUTE, NOTIFY, PLAN, QUERY, SUMMARIZE
+# Server has (12): ...
+```
+
+`MatchOutcome.kind` is one of `full` / `partial` / `none`. The match
+also notes wildcard policy mismatches so callers can predict 462s.
+
+## Negotiation (PROPOSE)
+
+PROPOSE has three documented outcomes:
+
+- **Accept (200)** - server returns a `Synthesis` mapping the proposal
+  onto an existing method. Subsequent calls quote the
+  `Synthesis-Id` header to invoke through the synthesis.
+- **Refuse (460)** - body carries `reason` and `explanation`.
+- **Counter (461)** - body carries a `counter_proposal` with the
+  MethodSpec the server is willing to admit instead.
+
+The client gains `--negotiate` (auto-issue PROPOSE on 452/462) and
+`--auto-accept-counter` (re-invoke under a 461 counter-proposal
+without prompting).
+
+Synthesis lifecycle: process-scoped, in-memory, cleared by
+`SUSPEND --param synthesis_id=<id>` or by server restart. Future
+work introduces durable syntheses tied to long-running session
+tokens.
+
 ## Quick start
 
 The invocation idiom mirrors `python -m http.server 8000`:

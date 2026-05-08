@@ -60,7 +60,13 @@ VALID_PARAMS = {
     "ESCALATE":  {"decision_point": "approve high-cost action"},
     "CONFIRM":   {"attestation_target": "esc-fake-001"},
     "SUSPEND":   {},
-    "PROPOSE":   {"endpoint_name": "demo.echo", "schema": {"input": "string"}},
+    # PROPOSE under the v2 negotiation policy: a name that maps onto an
+    # existing embedded method gets accepted with a synthesis.
+    "PROPOSE":   {
+        "name": "QUERY",
+        "parameters": {"intent": "string"},
+        "outcome": "results",
+    },
     "NOTIFY":    {"event": "demo.tick"},
 }
 
@@ -244,17 +250,12 @@ class MethodSetTests(unittest.TestCase):
         for name, params in VALID_PARAMS.items():
             with self.subTest(method=name):
                 resp = _send(self.server, ORCH_ID, name, body=params)
-                if name == "PROPOSE":
-                    # Default PROPOSE is non-negotiable; expect 460. The
-                    # accept path is exercised in test_propose_accept_path.
-                    self.assertEqual(resp.status_code, 460)
-                else:
-                    self.assertEqual(
-                        resp.status_code,
-                        200,
-                        f"{name} returned {resp.status_code}: "
-                        f"{resp.body_bytes!r}",
-                    )
+                self.assertEqual(
+                    resp.status_code,
+                    200,
+                    f"{name} returned {resp.status_code}: "
+                    f"{resp.body_bytes!r}",
+                )
 
     def test_response_shape_carries_method_field(self) -> None:
         for name, params in VALID_PARAMS.items():
@@ -297,21 +298,33 @@ class MethodSetTests(unittest.TestCase):
                     set(spec.required_params),
                 )
 
-    # ---- 405 method not in agent capabilities ----
+    # ---- soft-deny / capability check for an undeclared agent ----
+    #
+    # With v2 soft-deny in front of dispatch:
+    #   * cognitive non-exempt methods (QUERY, SUMMARIZE, PLAN, EXECUTE)
+    #     hit the soft-deny gate and return 452 method-outside-need.
+    #   * DISCOVER, DESCRIBE, and the mechanics (DELEGATE, ESCALATE,
+    #     CONFIRM, SUSPEND, PROPOSE, NOTIFY) are exempt from soft-deny;
+    #     their handler-local capability check returns 405
+    #     method-not-in-requires.
 
-    def test_methods_against_minimal_agent_return_405(self) -> None:
+    def test_methods_against_minimal_agent_return_refusal(self) -> None:
+        from agtp.server import SOFT_DENY_EXEMPT_METHODS
+
         for name, params in VALID_PARAMS.items():
             with self.subTest(method=name):
                 resp = _send(self.server, MINIMAL_ID, name, body=params)
-                self.assertEqual(
-                    resp.status_code,
-                    405,
-                    f"{name} expected 405, got {resp.status_code}",
-                )
                 payload = _decode_json(resp)
-                self.assertEqual(
-                    payload["error"]["code"], "method-not-in-requires"
-                )
+                if name in SOFT_DENY_EXEMPT_METHODS:
+                    self.assertEqual(resp.status_code, 405)
+                    self.assertEqual(
+                        payload["error"]["code"], "method-not-in-requires"
+                    )
+                else:
+                    self.assertEqual(resp.status_code, 452)
+                    self.assertEqual(
+                        payload["error"]["code"], "method-outside-need"
+                    )
 
     # ---- 501 unknown method ----
 
@@ -346,34 +359,40 @@ class MethodSetTests(unittest.TestCase):
         text = resp.body_bytes.decode("utf-8")
         self.assertIn("<!DOCTYPE html>", text)
 
-    # ---- PROPOSE: both negotiation outcomes ----
+    # ---- PROPOSE: structural refusal + accept path on existing verb ----
 
-    def test_propose_default_is_not_negotiable(self) -> None:
+    def test_propose_refuses_insufficient_when_structural_fields_missing(self) -> None:
+        # Old shape (endpoint_name + schema) is missing parameters/outcome.
         resp = _send(
             self.server,
             ORCH_ID,
             "PROPOSE",
-            body={"endpoint_name": "x.y", "schema": {}},
+            body={"name": "FROBNICATE"},
         )
         self.assertEqual(resp.status_code, 460)
         payload = _decode_json(resp)
-        self.assertEqual(payload["error"]["code"], "endpoint-not-negotiable")
+        self.assertEqual(payload["error"]["code"], "negotiation-refused")
+        self.assertEqual(payload["error"]["reason"], "insufficient")
 
-    def test_propose_accept_path(self) -> None:
+    def test_propose_accepts_proposal_naming_existing_method(self) -> None:
+        from agtp.negotiation import SYNTHESES
+        SYNTHESES.clear()
         resp = _send(
             self.server,
             ORCH_ID,
             "PROPOSE",
             body={
-                "endpoint_name": "x.y",
-                "schema": {"input": "string"},
-                "expect_accept": True,
+                "name": "QUERY",
+                "parameters": {"intent": "string"},
+                "outcome": "results",
+                "description": "ask the agent about itself",
             },
         )
         self.assertEqual(resp.status_code, 200)
         payload = _decode_json(resp)
-        self.assertTrue(payload["accepted"])
-        self.assertEqual(payload["instantiated_path"], "/dynamic/x.y")
+        self.assertEqual(payload["outcome"], "accept")
+        self.assertEqual(payload["synthesis"]["target_method"], "QUERY")
+        self.assertTrue(payload["synthesis"]["synthesis_id"].startswith("syn-"))
 
     # ---- SUSPEND nonce shape ----
 

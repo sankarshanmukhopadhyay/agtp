@@ -885,9 +885,13 @@ def handle_confirm(
     idempotent=False,
     state_modifying=True,
     required_params=[],
-    optional_params=["reason", "session_id", "ttl_seconds"],
+    optional_params=["reason", "session_id", "ttl_seconds", "synthesis_id"],
     error_codes=[400, 405],
-    description="Pause the session and issue a resumption nonce.",
+    description=(
+        "Pause the session and issue a resumption nonce. When "
+        "synthesis_id is supplied, the named synthesis is cleared "
+        "from the server's session-scoped registry."
+    ),
     source="agtp/1.0",
 )
 def handle_suspend(
@@ -902,6 +906,15 @@ def handle_suspend(
 
     ttl = int(params.get("ttl_seconds", 3600))
     nonce = secrets.token_urlsafe(16)
+
+    cleared_synthesis: Optional[str] = None
+    syn_id = params.get("synthesis_id")
+    if syn_id:
+        # Local import avoids the negotiation -> methods import cycle.
+        from agtp.negotiation import SYNTHESES
+        if SYNTHESES.remove(str(syn_id)):
+            cleared_synthesis = str(syn_id)
+
     return json_response(
         200,
         "OK",
@@ -912,6 +925,7 @@ def handle_suspend(
             "resumption_nonce": nonce,
             "expires_at": _utc_offset_iso(ttl),
             "reason": params.get("reason"),
+            "synthesis_cleared": cleared_synthesis,
             "suspended_at": _utc_now_iso(),
         },
         method_name="SUSPEND",
@@ -924,13 +938,13 @@ def handle_suspend(
     semantic_class="action-intent",
     idempotent=False,
     state_modifying=True,
-    required_params=["endpoint_name", "schema"],
-    optional_params=["description", "expect_accept"],
-    error_codes=[400, 405, 422, 460],
+    required_params=["name"],
+    optional_params=["parameters", "outcome", "description", "expect_accept"],
+    error_codes=[400, 405, 422, 460, 461],
     description=(
-        "Submit a dynamic endpoint definition for negotiation. Returns "
-        "460 Negotiation Failed if the proposal is not negotiable, or "
-        "200 with an instantiated endpoint stub if it is."
+        "Submit a verb proposal for negotiation. Returns 200 with a "
+        "Synthesis on accept, 460 with a refusal reason, or 461 with "
+        "a counter-proposal."
     ),
     source="agtp/1.0",
 )
@@ -949,41 +963,43 @@ def handle_propose(
     if err:
         return err
 
-    endpoint_name = str(params["endpoint_name"])
+    # Local imports keep the methods module free of negotiation-side
+    # imports at module load time. The policy module pulls in REGISTRY,
+    # which would otherwise create a circular dependency.
+    from agtp import status as status_codes
+    from agtp.negotiation import (
+        BasicNegotiationPolicy,
+        SYNTHESES,
+    )
 
-    # Stub negotiation policy: accept only when the caller signals
-    # `expect_accept=true`. v1 has no real negotiation engine, so the
-    # default outcome is rejection. Tests can opt into the accept path.
-    if not params.get("expect_accept"):
-        return error_response(
-            460,
-            "Negotiation Failed",
-            "endpoint-not-negotiable",
-            (
-                f"agent {agent_doc.agent_id[:12]}... cannot negotiate "
-                f"endpoint {endpoint_name!r} in v1; AMG arrives in v2"
-            ),
-            extra={
+    policy = BasicNegotiationPolicy()
+    decision = policy.evaluate(params, REGISTRY)
+
+    if decision.outcome == "accept":
+        assert decision.synthesis is not None
+        SYNTHESES.add(decision.synthesis)
+        return json_response(
+            200,
+            "OK",
+            {
                 "method": "PROPOSE",
-                "endpoint_name": endpoint_name,
-                "negotiable": False,
+                "agent_id": agent_doc.agent_id,
+                "outcome": "accept",
+                "synthesis": decision.synthesis.to_dict(),
+                "issued_at": _utc_now_iso(),
             },
+            method_name="PROPOSE",
         )
 
-    return json_response(
-        200,
-        "OK",
-        {
-            "method": "PROPOSE",
-            "agent_id": agent_doc.agent_id,
-            "endpoint_name": endpoint_name,
-            "accepted": True,
-            "instantiated_path": f"/dynamic/{endpoint_name}",
-            "schema": params["schema"],
-            "description": params.get("description", ""),
-            "issued_at": _utc_now_iso(),
-        },
-        method_name="PROPOSE",
+    if decision.outcome == "counter":
+        assert decision.counter_proposal is not None
+        return status_codes.counter_proposal(decision.counter_proposal)
+
+    assert decision.outcome == "refuse"
+    return status_codes.negotiation_refused(
+        decision.refusal_reason or status_codes.REFUSAL_OUT_OF_SCOPE,
+        decision.refusal_explanation or "negotiation refused",
+        extra={"agent_id": agent_doc.agent_id},
     )
 
 

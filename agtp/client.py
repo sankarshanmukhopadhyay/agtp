@@ -33,10 +33,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from agtp import DEFAULT_REGISTRY_URL, wire
+from agtp.handshake import format_outcome, match_from_manifest_dict
 from agtp.identity import (
     CONTENT_TYPE_HTML,
     CONTENT_TYPE_JSON,
     CONTENT_TYPE_YAML,
+    from_dict,
 )
 from agtp.ids import parse_uri, ParsedURI, AgentIDError
 
@@ -258,12 +260,300 @@ def open_in_browser(html: str, agent_id: str) -> Path:
     return out_path
 
 
+def _handle_negotiate(
+    args,
+    parsed: ParsedURI,
+    host: str,
+    port: int,
+    original_method: str,
+    original_body: bytes,
+) -> Optional[int]:
+    """
+    Issue a PROPOSE for ``original_method`` and react to the outcome.
+
+    Returns an exit code if it handled the call (200 retry succeeded,
+    460 refused, 461 not auto-accepted), or None if the caller should
+    continue with the original 452/462 response.
+    """
+    print(
+        f"[client] --negotiate: server refused {original_method}; "
+        f"issuing PROPOSE",
+        file=sys.stderr,
+    )
+
+    proposal = {
+        "name": original_method,
+        "parameters": _peek_proposal_parameters(original_body),
+        "outcome": "auto-generated proposal from --negotiate",
+        "description": f"client-driven proposal for {original_method}",
+    }
+
+    try:
+        propose_resp = send_method(
+            parsed.agent_id,
+            host,
+            port,
+            "PROPOSE",
+            accept="application/json",
+            body=json.dumps(proposal).encode("utf-8"),
+            body_content_type="application/json",
+            use_tls=not args.insecure,
+            insecure_skip_verify=args.insecure_skip_verify,
+            verbose=args.verbose,
+        )
+    except (OSError, wire.WireFormatError) as exc:
+        print(f"error: PROPOSE failed: {exc}", file=sys.stderr)
+        return 1
+
+    if propose_resp.status_code == 200:
+        return _retry_via_synthesis(
+            args, parsed, host, port, original_body, propose_resp
+        )
+
+    if propose_resp.status_code == 460:
+        # Refusal: print reason + explanation and exit 1.
+        try:
+            payload = json.loads(propose_resp.body_bytes.decode("utf-8"))
+            err = payload.get("error", {})
+            print(
+                f"PROPOSE refused: {err.get('reason', 'unknown')} - "
+                f"{err.get('explanation', '')}",
+                file=sys.stderr,
+            )
+        except json.JSONDecodeError:
+            print(propose_resp.body_bytes.decode("utf-8"), file=sys.stderr)
+        return 1
+
+    if propose_resp.status_code == 461:
+        # Counter-proposal: print, optionally re-invoke under the
+        # suggested method, otherwise exit 0 to let the caller decide.
+        try:
+            payload = json.loads(propose_resp.body_bytes.decode("utf-8"))
+            counter = payload.get("counter_proposal", {})
+        except json.JSONDecodeError:
+            counter = {}
+        suggested = counter.get("name")
+        print(
+            f"Server suggests {suggested}: "
+            f"{counter.get('description', '')}",
+            file=sys.stderr,
+        )
+        if args.auto_accept_counter and suggested:
+            print(
+                f"[client] --auto-accept-counter: re-invoking with {suggested}",
+                file=sys.stderr,
+            )
+            try:
+                retry = send_method(
+                    parsed.agent_id,
+                    host,
+                    port,
+                    suggested,
+                    accept="application/json",
+                    body=original_body,
+                    body_content_type="application/json" if original_body else None,
+                    use_tls=not args.insecure,
+                    insecure_skip_verify=args.insecure_skip_verify,
+                    verbose=args.verbose,
+                )
+            except (OSError, wire.WireFormatError) as exc:
+                print(f"error: retry failed: {exc}", file=sys.stderr)
+                return 1
+            print(_format_response_body(retry))
+            return 0 if retry.status_code == 200 else 1
+        # No auto-accept: surface the counter and let the user decide.
+        print(_format_response_body(propose_resp))
+        return 1
+
+    # Anything else (typically structural refusal): hand back to caller.
+    return None
+
+
+def _peek_proposal_parameters(body_bytes: bytes) -> Dict[str, Any]:
+    """Extract a parameters skeleton for the PROPOSE body."""
+    if not body_bytes:
+        return {}
+    try:
+        data = json.loads(body_bytes.decode("utf-8"))
+        if isinstance(data, dict):
+            return {k: type(v).__name__ for k, v in data.items()}
+    except json.JSONDecodeError:
+        pass
+    return {}
+
+
+def _retry_via_synthesis(
+    args,
+    parsed: ParsedURI,
+    host: str,
+    port: int,
+    original_body: bytes,
+    propose_response: wire.AGTPResponse,
+) -> int:
+    """Use the synthesis_id from a 200 PROPOSE to retry the original call."""
+    try:
+        payload = json.loads(propose_response.body_bytes.decode("utf-8"))
+        synth = payload["synthesis"]
+        synth_id = synth["synthesis_id"]
+    except (json.JSONDecodeError, KeyError) as exc:
+        print(f"error: malformed PROPOSE accept body: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"[client] PROPOSE accepted: synthesis {synth_id}; retrying via synthesis",
+        file=sys.stderr,
+    )
+
+    # Send any method name with the Synthesis-Id header. The server
+    # rewrites it to the synthesis target. We pass the synthesis name
+    # for clarity in logs.
+    try:
+        sock_method = synth.get("target_method", "QUERY")
+        retry = _send_with_synthesis(
+            args,
+            host,
+            port,
+            sock_method,
+            synth_id,
+            original_body,
+        )
+    except (OSError, wire.WireFormatError) as exc:
+        print(f"error: synthesis retry failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(_format_response_body(retry))
+    return 0 if retry.status_code == 200 else 1
+
+
+def _send_with_synthesis(
+    args,
+    host: str,
+    port: int,
+    method_name: str,
+    synthesis_id: str,
+    body_bytes: bytes,
+) -> wire.AGTPResponse:
+    """Issue a request that names a synthesis via the Synthesis-Id header."""
+    sock = socket.create_connection((host, port), timeout=10.0)
+    if not args.insecure:
+        ctx = ssl.create_default_context()
+        if args.insecure_skip_verify:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        sock = ctx.wrap_socket(sock, server_hostname=host)
+    headers = {
+        "Accept": "application/json",
+        "Host": host,
+        "Synthesis-Id": synthesis_id,
+    }
+    if body_bytes:
+        headers["Content-Type"] = "application/json"
+    request = wire.AGTPRequest(
+        method=method_name,
+        headers=headers,
+        body_bytes=body_bytes,
+    )
+    try:
+        sock.sendall(request.serialize())
+        return wire.parse_response(sock.makefile("rb"))
+    finally:
+        try: sock.close()
+        except OSError: pass
+
+
+def _do_match_check(args, parsed: ParsedURI) -> int:
+    """
+    Implement --match-check: fetch the agent's identity, fetch the
+    server manifest, compute the matching outcome, print it. Does not
+    invoke any other method.
+
+    Requires Form 1 or 1a (the URI must address an agent). Form 2
+    URIs do not carry an agent identity.
+    """
+    if parsed.is_server_level:
+        print(
+            "error: --match-check requires a URI that addresses an agent "
+            "(Form 1 or 1a); the supplied URI addresses a server",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        host, port = resolve_target(parsed, args.registry, verbose=args.verbose)
+    except ResolutionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    # Fetch the Agent Document via DESCRIBE.
+    try:
+        agent_resp = send_method(
+            parsed.agent_id,
+            host,
+            port,
+            "DESCRIBE",
+            accept=CONTENT_TYPE_JSON,
+            use_tls=not args.insecure,
+            insecure_skip_verify=args.insecure_skip_verify,
+            verbose=args.verbose,
+        )
+    except (OSError, wire.WireFormatError) as exc:
+        print(f"error: DESCRIBE failed: {exc}", file=sys.stderr)
+        return 1
+    if agent_resp.status_code != 200:
+        print(
+            f"error: DESCRIBE returned {agent_resp.status_code} "
+            f"{agent_resp.status_text}",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        agent_doc = from_dict(json.loads(agent_resp.body_bytes.decode("utf-8")))
+    except (ValueError, json.JSONDecodeError) as exc:
+        print(f"error: malformed Agent Document: {exc}", file=sys.stderr)
+        return 1
+
+    # Fetch the Server Manifest via server-level DISCOVER.
+    try:
+        manifest_resp = send_method(
+            agent_id=None,
+            host=host,
+            port=port,
+            method_name="DISCOVER",
+            accept="application/json",
+            use_tls=not args.insecure,
+            insecure_skip_verify=args.insecure_skip_verify,
+            verbose=args.verbose,
+        )
+    except (OSError, wire.WireFormatError) as exc:
+        print(f"error: server-level DISCOVER failed: {exc}", file=sys.stderr)
+        return 1
+    if manifest_resp.status_code != 200:
+        print(
+            f"error: manifest DISCOVER returned {manifest_resp.status_code} "
+            f"{manifest_resp.status_text}",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        manifest_dict = json.loads(manifest_resp.body_bytes.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"error: malformed manifest: {exc}", file=sys.stderr)
+        return 1
+
+    outcome = match_from_manifest_dict(agent_doc, manifest_dict)
+    print(format_outcome(outcome))
+    return 0 if outcome.is_actionable else 1
+
+
 def run(args) -> int:
     try:
         parsed = parse_uri(args.uri)
     except AgentIDError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if args.match_check:
+        return _do_match_check(args, parsed)
 
     # Server-level URI (Form 2) defaults to DISCOVER, returning the
     # Server Manifest. DESCRIBE has no meaning at the server level
@@ -334,6 +624,21 @@ def run(args) -> int:
     except (OSError, wire.WireFormatError) as exc:
         print(f"error: connection failed: {exc}", file=sys.stderr)
         return 1
+
+    # Optional --negotiate fallback. Triggers when the original method
+    # is refused via the v2 inbound gate (452/462). The client then
+    # issues a PROPOSE naming the original method and reacts to the
+    # three documented outcomes.
+    if (
+        args.negotiate
+        and response.status_code in (452, 462)
+        and method_name != "PROPOSE"
+    ):
+        rc = _handle_negotiate(
+            args, parsed, host, port, method_name, body
+        )
+        if rc is not None:
+            return rc
 
     body_text = _format_response_body(response)
 
@@ -417,6 +722,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-open",
         action="store_true",
         help="With --html: print HTML to stdout instead of opening browser",
+    )
+    parser.add_argument(
+        "--match-check",
+        action="store_true",
+        help=(
+            "Run the matching handshake against the server's manifest "
+            "and report which of the agent's required methods the "
+            "server exposes. No method is invoked."
+        ),
+    )
+    parser.add_argument(
+        "--negotiate",
+        action="store_true",
+        help=(
+            "When the requested method is refused (452 / 462), "
+            "automatically issue a PROPOSE for it. The PROPOSE "
+            "outcome is then surfaced as a 200 (synthesis), 460 "
+            "(refusal), or 461 (counter-proposal)."
+        ),
+    )
+    parser.add_argument(
+        "--auto-accept-counter",
+        action="store_true",
+        help=(
+            "With --negotiate: accept a 461 counter-proposal "
+            "automatically by re-invoking with the proposed method. "
+            "Without this flag the counter is reported and the user "
+            "decides on a subsequent invocation."
+        ),
     )
     parser.add_argument(
         "-v",
