@@ -1,7 +1,13 @@
-# AMG (Agent Method Grammar)
+# AMG (Agent Method Grammar) — client side
 
 The validation + composition layer for AGTP method declarations.
-Two halves:
+This is the **client-side** implementation; the server has its own
+parallel copy at [`server/amg/`](../../server/amg/), kept in sync
+by [`tests/test_amg_drift.py`](../../tests/test_amg_drift.py).
+The two trees are intentionally parallel implementations of the
+same spec, following the SMTP MTA client/server pattern.
+
+## Two halves
 
 - **Validator** (`validate`) — runs nine passes against any
   `AMGMethodSpec` and returns a structured `ValidationResult`. Wired

@@ -80,6 +80,45 @@ ALL_SOURCES = frozenset({SOURCE_AGTP, SOURCE_AMG})
 
 
 # ---------------------------------------------------------------------------
+# AGIS-style semantic block.
+# ---------------------------------------------------------------------------
+
+
+# Recognized values for the AGIS ``actor`` field. A method is invoked
+# either by an agent (the common case), the human user (sensitive
+# operations gated on UI confirmation), or the system / runtime
+# (housekeeping).
+ALL_ACTORS = frozenset({"agent", "user", "system"})
+
+# Recognized values for the AGIS ``capability`` field. These are the
+# coarse intent buckets a method belongs to. Extending this set is a
+# catalog-level decision; new values should land in the AGIS draft
+# before the composer accepts them.
+ALL_CAPABILITIES = frozenset({
+    "discovery",
+    "transaction",
+    "modification",
+    "retrieval",
+    "analysis",
+    "notification",
+})
+
+# Recognized values for ``impact_tier``. Drives confidence-guidance
+# floors and human-confirmation prompts in interactive composers.
+ALL_IMPACT_TIERS = frozenset({
+    "informational",
+    "reversible",
+    "irreversible",
+})
+
+
+# Confidence-guidance floor for irreversible-tier methods. Composers
+# warn (not error) when an irreversible method is declared with a
+# guidance value below this threshold.
+IRREVERSIBLE_CONFIDENCE_FLOOR = 0.85
+
+
+# ---------------------------------------------------------------------------
 # Dataclasses.
 # ---------------------------------------------------------------------------
 
@@ -153,6 +192,85 @@ class SubstitutionHint:
 
 
 @dataclass
+class SemanticBlock:
+    """
+    AGIS-style semantic declaration for a single method.
+
+    Mirrors the semantic block defined in
+    ``draft-hood-independent-agis-01``. The composer always populates
+    this block when source=amg/1.0; embedded methods (source=agtp/1.0)
+    may omit it for now until the catalog is populated.
+
+    Field summary:
+
+      * intent       single-sentence agent-goal voice ("Reconcile...")
+      * actor        one of ``"agent" | "user" | "system"``
+      * outcome      single-sentence post-condition ("...returns a
+                     structured assessment")
+      * capability   discovery / transaction / modification /
+                     retrieval / analysis / notification
+      * confidence_guidance  0.0-1.0; ecosystems use this as a floor
+                             for autonomous invocation
+      * impact_tier  informational | reversible | irreversible
+      * is_idempotent author's declaration; cross-checked against the
+                      protocol-level ``AMGMethodSpec.idempotent``
+      * state_transition  field -> "[old] -> [new]" mapping
+    """
+
+    intent: str
+    actor: str
+    outcome: str
+    capability: Optional[str] = None
+    confidence_guidance: Optional[float] = None
+    impact_tier: Optional[str] = None
+    is_idempotent: Optional[bool] = None
+    state_transition: Optional[Dict[str, str]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "intent": self.intent,
+            "actor": self.actor,
+            "outcome": self.outcome,
+        }
+        if self.capability is not None:
+            out["capability"] = self.capability
+        if self.confidence_guidance is not None:
+            out["confidence_guidance"] = float(self.confidence_guidance)
+        if self.impact_tier is not None:
+            out["impact_tier"] = self.impact_tier
+        if self.is_idempotent is not None:
+            out["is_idempotent"] = bool(self.is_idempotent)
+        if self.state_transition is not None:
+            out["state_transition"] = dict(self.state_transition)
+        return out
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SemanticBlock":
+        return cls(
+            intent=str(data.get("intent", "")),
+            actor=str(data.get("actor", "")),
+            outcome=str(data.get("outcome", "")),
+            capability=data.get("capability"),
+            confidence_guidance=(
+                float(data["confidence_guidance"])
+                if data.get("confidence_guidance") is not None
+                else None
+            ),
+            impact_tier=data.get("impact_tier"),
+            is_idempotent=(
+                bool(data["is_idempotent"])
+                if data.get("is_idempotent") is not None
+                else None
+            ),
+            state_transition=(
+                dict(data["state_transition"])
+                if data.get("state_transition") is not None
+                else None
+            ),
+        )
+
+
+@dataclass
 class AMGMethodSpec:
     """
     The wire form of a method declaration that AMG validates.
@@ -160,6 +278,10 @@ class AMGMethodSpec:
     Fields mirror the published catalog shape so a CI step or a
     server's ``register_custom`` path can pass the spec straight into
     ``validate()``.
+
+    The optional ``semantic`` block carries the AGIS-style declaration
+    used by the composer. Embedded methods may omit it for now;
+    composer-produced specs always populate it.
     """
 
     name: str
@@ -174,6 +296,7 @@ class AMGMethodSpec:
     source: str
     namespace: Optional[str] = None
     substitutes_for: List[SubstitutionHint] = field(default_factory=list)
+    semantic: Optional[SemanticBlock] = None
 
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {
@@ -194,6 +317,8 @@ class AMGMethodSpec:
             out["substitutes_for"] = [
                 s.to_dict() for s in self.substitutes_for
             ]
+        if self.semantic is not None:
+            out["semantic"] = self.semantic.to_dict()
         return out
 
     @classmethod
@@ -225,6 +350,12 @@ class AMGMethodSpec:
             for s in (data.get("substitutes_for") or [])
         ]
 
+        semantic_raw = data.get("semantic")
+        semantic_obj: Optional[SemanticBlock] = (
+            SemanticBlock.from_dict(semantic_raw)
+            if isinstance(semantic_raw, dict) else None
+        )
+
         return cls(
             name=str(data.get("name", "")),
             semantic_class=str(data.get("semantic_class", SEMANTIC_ACTION_INTENT)),
@@ -238,6 +369,7 @@ class AMGMethodSpec:
             source=str(data.get("source", SOURCE_AMG)),
             namespace=data.get("namespace"),
             substitutes_for=substitutes,
+            semantic=semantic_obj,
         )
 
     @classmethod
@@ -297,9 +429,13 @@ class AMGMethodSpec:
 
 __all__ = [
     "AMG_VERSION",
+    "ALL_ACTORS",
+    "ALL_CAPABILITIES",
+    "ALL_IMPACT_TIERS",
     "ALL_SEMANTIC_CLASSES",
     "ALL_SOURCES",
     "AMGMethodSpec",
+    "IRREVERSIBLE_CONFIDENCE_FLOOR",
     "PARAM_TYPES",
     "PARAM_TYPES_REQUIRING_SCHEMA",
     "ParamSpec",
@@ -308,6 +444,7 @@ __all__ = [
     "SEMANTIC_QUERY_INTENT",
     "SOURCE_AGTP",
     "SOURCE_AMG",
+    "SemanticBlock",
     "SubstitutionHint",
     "USER_SEMANTIC_CLASSES",
 ]

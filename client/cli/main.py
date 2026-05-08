@@ -95,13 +95,32 @@ def build_body(
         return parsed
 
     if params_file is not None:
+        ext = params_file.suffix.lower()
         try:
             text = params_file.read_text(encoding="utf-8")
-            parsed = json.loads(text)
-        except (OSError, json.JSONDecodeError) as exc:
+        except OSError as exc:
             raise ValueError(f"could not read --params-file: {exc}") from exc
+        if ext in (".yaml", ".yml"):
+            try:
+                import yaml  # type: ignore[import-not-found]
+            except ImportError as exc:
+                raise ValueError(
+                    "PyYAML is required for --params-file *.yaml. "
+                    "Install with `pip install pyyaml`."
+                ) from exc
+            try:
+                parsed = yaml.safe_load(text)
+            except yaml.YAMLError as exc:
+                raise ValueError(f"invalid YAML in --params-file: {exc}") from exc
+        else:
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"--params-file is not valid JSON: {exc}"
+                ) from exc
         if not isinstance(parsed, dict):
-            raise ValueError("--params-file content must be a JSON object")
+            raise ValueError("--params-file content must be a mapping")
         return parsed
 
     payload: Dict[str, Any] = {}
@@ -338,6 +357,31 @@ def run(args) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
+    if args.propose:
+        if args.method:
+            print(
+                "error: --propose is mutually exclusive with a positional "
+                "method argument",
+                file=sys.stderr,
+            )
+            return 2
+        if not (args.interactive or args.data or args.params_file):
+            print(
+                "error: --propose requires one of --interactive, -d, or "
+                "--params-file",
+                file=sys.stderr,
+            )
+            return 2
+        from client.cli.propose import run_propose
+        return run_propose(args)
+
+    if args.interactive:
+        print(
+            "error: --interactive is only meaningful with --propose",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.match_check:
         return _do_match_check(args, parsed)
 
@@ -461,7 +505,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  agtp agtp://d8dc6f0d... QUERY --param intent='hello'\n"
             "  agtp agtp://d8dc6f0d... DISCOVER --param target=methods\n"
             "  agtp agtp://d8dc6f0d... --html\n"
-            "  agtp agtp://d8dc6f0d...@agents.agtp.io"
+            "  agtp agtp://d8dc6f0d...@agents.agtp.io\n"
+            "  agtp agtp://d8dc6f0d... --propose -i\n"
+            "  agtp agtp://d8dc6f0d... --propose --params-file method.yaml"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -488,7 +534,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--params-file",
         type=Path,
-        help="Read the request body JSON from a file",
+        help=(
+            "Read the request body from a file. JSON by default; "
+            "files with .yaml/.yml extension are parsed as YAML "
+            "(requires pyyaml)."
+        ),
+    )
+
+    parser.add_argument(
+        "--propose",
+        action="store_true",
+        help=(
+            "Submit a PROPOSE for a new method. Pair with -d / "
+            "--params-file to send a fixture, or with --interactive "
+            "to walk through composition."
+        ),
+    )
+    parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help=(
+            "With --propose: walk through method composition "
+            "interactively, with per-field validation and a "
+            "preview before submission."
+        ),
     )
 
     fmt_group = parser.add_mutually_exclusive_group()
