@@ -54,6 +54,63 @@ historical reference.
 - DESCRIBE method serves Agent Identity Documents over AGTP wire format
   on port 4480
 
+## URI forms
+
+```
+agtp://{agent-id}                  Form 1   - canonical, registry lookup
+agtp://{agent-id}@{host}[:{port}]  Form 1a  - direct host
+agtp://{host}[:{port}]             Form 2   - server-level (no agent ID)
+```
+
+Form 2 addresses the server itself. Sending DISCOVER to a Form 2 URI
+returns a Server Manifest at media type
+`application/vnd.agtp.manifest+json`. The manifest declares the server's
+identity, the methods it supports (embedded + custom, bucketed), and
+the agents it discloses according to its policy.
+
+```bash
+# Server Manifest (defaults to DISCOVER on Form 2 URIs):
+agtp agtp://localhost:4480
+
+# Equivalent, explicit:
+agtp agtp://localhost:4480 DISCOVER
+
+# Per-agent identity (Form 1 / 1a remain unchanged):
+agtp agtp://{lauren-id}
+```
+
+A `agtp-server.toml` next to the working directory (or pointed at by
+`--config`) declares the issuer, operator, contact, policy posture, and
+agent disclosure level that surface in the manifest. When no config is
+present the server uses sensible defaults so local development needs no
+ceremony.
+
+## Agent Document v2
+
+The Agent Document schema is versioned. v2 replaces the v1 `capabilities`
+field with two complementary declarations:
+
+- **`skills`** - prose, human-readable, the primary "what does this
+  agent do" surface.
+- **`requires`** - structured: `methods`, `scopes`, and a `wildcards`
+  flag for orchestrators that accept any method.
+
+v1 documents continue to load. `from_dict` detects the older shape and
+converts on the fly: `capabilities` lifts to `requires.methods`,
+`skills` is seeded from the description, and the result carries
+`document_version: "v1-migrated"`.
+
+To migrate a v1 file to v2 on disk:
+
+```bash
+agtp-migrate path/to/agent.json
+agtp-migrate path/to/dir/                # all *.agent.json under dir
+agtp-migrate --check path/to/agent.json  # report only
+```
+
+A `.v1.bak` backup is written alongside each migrated file unless
+`--no-backup` is set.
+
 ## Quick start
 
 The invocation idiom mirrors `python -m http.server 8000`:

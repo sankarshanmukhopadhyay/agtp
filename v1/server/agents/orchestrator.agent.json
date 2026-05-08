@@ -1,25 +1,43 @@
 {
   "agtp_version": "1.0",
+  "document_version": "v2",
   "agent_id": "9fe1dfc552a64c8bbec8dd2fe8cbe1a275f1a3405f7c5c20acca6453fd479709",
   "name": "Orchestrator",
   "principal": "Chris Hood",
   "principal_id": "principal-chris-hood-001",
   "description": "Multi-agent coordination demo agent. Declares the full 12-method set so DELEGATE, ESCALATE, SUSPEND, and PROPOSE can be exercised against it.",
   "status": "active",
-  "capabilities": [
-    "QUERY",
-    "DISCOVER",
-    "DESCRIBE",
-    "SUMMARIZE",
-    "PLAN",
-    "EXECUTE",
-    "DELEGATE",
-    "ESCALATE",
-    "CONFIRM",
-    "SUSPEND",
-    "PROPOSE",
-    "NOTIFY"
+  "skills": [
+    "delegates scoped tasks to sub-agents and tracks their completion",
+    "escalates ambiguous decisions to humans or higher-authority agents",
+    "suspends and resumes long-running sessions across reconnections",
+    "negotiates dynamic endpoint shapes via PROPOSE",
+    "fans out NOTIFY events to subscribed peers"
   ],
+  "requires": {
+    "methods": [
+      "QUERY",
+      "DISCOVER",
+      "DESCRIBE",
+      "SUMMARIZE",
+      "PLAN",
+      "EXECUTE",
+      "DELEGATE",
+      "ESCALATE",
+      "CONFIRM",
+      "SUSPEND",
+      "PROPOSE",
+      "NOTIFY"
+    ],
+    "scopes": [
+      "identity:read",
+      "capability:read",
+      "delegation:create",
+      "session:suspend",
+      "negotiation:propose"
+    ],
+    "wildcards": true
+  },
   "scopes_accepted": [
     "identity:read",
     "capability:read",

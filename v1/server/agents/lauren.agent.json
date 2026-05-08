@@ -1,21 +1,34 @@
 {
   "agtp_version": "1.0",
+  "document_version": "v2",
   "agent_id": "d8dc6f0df55d66c7b30100db3cffbe383c5f814e6e58a08521fb7636c3bcc230",
   "name": "Lauren",
   "principal": "Chris Hood",
   "principal_id": "principal-chris-hood-001",
-  "description": "The first AGTP-identified agent. Lauren can describe herself, list her capabilities, and serve as a reference implementation of the AGTP identity model.",
+  "description": "The first AGTP-identified agent.",
   "status": "active",
-  "capabilities": [
-    "QUERY",
-    "DISCOVER",
-    "DESCRIBE",
-    "SUMMARIZE",
-    "PLAN",
-    "EXECUTE",
-    "CONFIRM",
-    "NOTIFY"
+  "skills": [
+    "describes own identity and capabilities for inspection",
+    "summarizes provided text within length budgets",
+    "answers semantic queries about her own metadata"
   ],
+  "requires": {
+    "methods": [
+      "QUERY",
+      "DISCOVER",
+      "DESCRIBE",
+      "SUMMARIZE",
+      "PLAN",
+      "EXECUTE",
+      "CONFIRM",
+      "NOTIFY"
+    ],
+    "scopes": [
+      "identity:read",
+      "capability:read"
+    ],
+    "wildcards": false
+  },
   "scopes_accepted": [
     "identity:read",
     "capability:read"

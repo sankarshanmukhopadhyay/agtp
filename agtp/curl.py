@@ -80,34 +80,46 @@ def _parse_target(
     """
     Resolve the URI to (target_agent_id, host, port, path_sugar).
 
-    target_agent_id is None when the URI is the server-form
-    (`agtp://localhost:4480/methods`); otherwise it's the canonical
-    agent ID. path_sugar is the trailing `/path` if any (used as
-    DISCOVER target sugar by the caller).
+    The trailing ``/path`` (if present) is curl-flavored sugar: on
+    DISCOVER, the caller fills the body with ``{"target": "<path>"}``
+    so ``agtp-curl DISCOVER agtp://localhost:4480/methods`` works
+    without an explicit -d argument. The path is stripped before the
+    URI is handed to the formal parser.
+
+    ``target_agent_id`` is None for server-level (Form 2) URIs;
+    otherwise it is the canonical 64-char hex ID.
     """
-    import re
+    text = uri.strip()
+    path_sugar: Optional[str] = None
+    scheme, sep, rest = text.partition("://")
+    if sep and "/" in rest:
+        authority, _, path = rest.partition("/")
+        text = f"{scheme}://{authority}"
+        path_sugar = path or None
 
     try:
-        parsed = parse_uri(uri.split("/methods")[0] if "/methods" in uri else uri)
-        if parsed.has_explicit_host:
-            return parsed.agent_id, parsed.host, parsed.effective_port, None
-        host, port = _resolve_via_registry(parsed.agent_id, registry_url)
-        if verbose:
-            print(
-                f"* registry {registry_url} -> {host}:{port}",
-                file=sys.stderr,
-            )
-        return parsed.agent_id, host, port, None
-    except AgentIDError:
-        pass  # Try server form next.
+        parsed = parse_uri(text)
+    except AgentIDError as exc:
+        raise CurlError(f"not a recognized AGTP URI: {uri!r}") from exc
 
-    m = re.match(_SERVER_FORM, uri.strip())
-    if not m:
-        raise CurlError(f"not a recognized AGTP URI: {uri!r}")
-    host = m.group("host")
-    port = int(m.group("port") or DEFAULT_AGTP_PORT)
-    path = m.group("path")
-    return None, host, port, path
+    if parsed.is_server_level:
+        # Server-level: agent_id is None; the manifest path activates
+        # in server.py when no Target-Agent header is sent.
+        assert parsed.host is not None
+        return None, parsed.host, parsed.effective_port, path_sugar
+
+    if parsed.has_explicit_host:
+        # Form 1a: agent ID with embedded host.
+        return parsed.agent_id, parsed.host, parsed.effective_port, path_sugar
+
+    # Form 1: bare agent ID; resolve via registry.
+    host, port = _resolve_via_registry(parsed.agent_id, registry_url)
+    if verbose:
+        print(
+            f"* registry {registry_url} -> {host}:{port}",
+            file=sys.stderr,
+        )
+    return parsed.agent_id, host, port, path_sugar
 
 
 def _split_header(text: str) -> Tuple[str, str]:
@@ -179,8 +191,6 @@ def _format_response(response: wire.AGTPResponse, *, include_headers: bool) -> s
 
 
 def run(args: argparse.Namespace) -> int:
-    method = (args.method_pos or args.method_flag or "DESCRIBE").upper()
-
     if args.method_pos and args.method_flag:
         print(
             "error: method given both positionally and via -X",
@@ -198,6 +208,17 @@ def run(args: argparse.Namespace) -> int:
     except CurlError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+    # Choose the default method: agent-targeting URIs default to
+    # DESCRIBE (the v1 behavior); server-level URIs default to
+    # DISCOVER, which returns the Server Manifest.
+    explicit_method = args.method_pos or args.method_flag
+    if explicit_method:
+        method = explicit_method.upper()
+    elif target_id is None:
+        method = "DISCOVER"
+    else:
+        method = "DESCRIBE"
 
     headers: Dict[str, str] = {"Host": host}
     if target_id is not None:

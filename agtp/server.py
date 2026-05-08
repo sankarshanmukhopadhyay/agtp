@@ -29,7 +29,13 @@ from typing import Dict, List, Optional
 
 from agtp import wire
 from agtp._paths import normalize
-from agtp.identity import AgentDocument, from_dict
+from agtp.config import CONFIG_FILENAME, ServerConfig, default_config, load as load_config
+from agtp.identity import (
+    CONTENT_TYPE_MANIFEST_JSON,
+    AgentDocument,
+    from_dict,
+)
+from agtp.manifest import generate as generate_manifest
 from agtp.methods import REGISTRY, dispatch, error_response
 
 
@@ -107,11 +113,53 @@ def _select_target(
     return doc, None
 
 
-def handle_connection(conn, registry: AgentRegistry) -> None:
+def serve_manifest(
+    request: wire.AGTPRequest,
+    registry: AgentRegistry,
+    config: ServerConfig,
+) -> wire.AGTPResponse:
+    """
+    Build and return the Server Manifest for a server-level DISCOVER.
+
+    Server-level DISCOVER does not require an agent target; it does not
+    consult any per-agent capability list. The disclosure policy in the
+    config decides how openly the agents.list reflects the server's
+    hosted agents.
+    """
+    manifest = generate_manifest(config, registry.agents)
+    body = manifest.to_json(pretty=True).encode("utf-8")
+    return wire.AGTPResponse(
+        status_code=200,
+        status_text="OK",
+        headers={
+            "Content-Type": CONTENT_TYPE_MANIFEST_JSON,
+            "Content-Length": str(len(body)),
+        },
+        body_bytes=body,
+    )
+
+
+def handle_connection(
+    conn,
+    registry: AgentRegistry,
+    config: Optional[ServerConfig] = None,
+) -> None:
     """Handle a single AGTP connection: read one request, write one response."""
+    if config is None:
+        config = default_config()
     try:
         reader = conn.makefile("rb")
         request = wire.parse_request(reader)
+        method_name = request.method.upper()
+        target_header = wire.header(request, "Target-Agent")
+
+        # Server-level DISCOVER: no Target-Agent header, method is
+        # DISCOVER. Returns the Server Manifest. Does not require any
+        # agent to advertise DISCOVER in its requires.methods.
+        if method_name == "DISCOVER" and not target_header:
+            response = serve_manifest(request, registry, config)
+            conn.sendall(response.serialize())
+            return
 
         agent_doc, target_err = _select_target(request, registry)
         if target_err is not None:
@@ -146,12 +194,27 @@ def run(
     agents_dir: Path,
     certfile: Optional[str] = None,
     keyfile: Optional[str] = None,
+    config: Optional[ServerConfig] = None,
 ) -> None:
     registry = AgentRegistry(agents_dir)
     if not registry.agents:
         print(
             f"[server] WARNING: no agents loaded from {agents_dir}",
             file=sys.stderr,
+        )
+
+    if config is None:
+        config = default_config(host)
+    if config.is_default:
+        print(
+            f"[server] no {CONFIG_FILENAME} found; using default manifest "
+            f"identity (issuer={config.server.issuer!r})",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"[server] manifest identity: {config.server.issuer} "
+            f"(operator: {config.server.operator})"
         )
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -182,7 +245,9 @@ def run(
                 print(f"[server] TLS handshake failed: {exc}", file=sys.stderr)
                 continue
             t = threading.Thread(
-                target=handle_connection, args=(conn, registry), daemon=True
+                target=handle_connection,
+                args=(conn, registry, config),
+                daemon=True,
             )
             t.start()
     except KeyboardInterrupt:
@@ -243,6 +308,14 @@ def main() -> int:
             "--load-module agtp.examples.custom_methods"
         ),
     )
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        help=(
+            "Path to an agtp-server.toml. If omitted, looks for "
+            "./agtp-server.toml; if none is present, defaults are used."
+        ),
+    )
     args = parser.parse_args()
 
     if args.port_pos is not None and args.port_flag is not None:
@@ -290,7 +363,16 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    run(args.host, port, agents_path, args.cert, args.key)
+    try:
+        config = load_config(
+            Path(args.config) if args.config else None,
+            host=args.host,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"[server] config error: {exc}", file=sys.stderr)
+        return 2
+
+    run(args.host, port, agents_path, args.cert, args.key, config=config)
     return 0
 
 

@@ -1,0 +1,19 @@
+# Demo server config consumed by ./run_demo.sh.
+#
+# A real deployment ships its own copy of this file; the demo's values
+# are placeholders that surface in the Server Manifest so the manifest
+# scenarios produce stable, recognizable output.
+
+[server]
+issuer       = "demo.agtp.io"
+operator     = "AGTP demo runner"
+contact      = "demo@agtp.io"
+amg_version  = "1.0"
+
+[policy]
+wildcards_accepted             = true
+anonymous_discovery            = true
+scope_required_for_invocation  = true
+
+[agents]
+disclosure = "public"

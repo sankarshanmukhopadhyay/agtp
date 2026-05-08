@@ -80,6 +80,12 @@ def lookup_registry(
 def resolve_target(
     parsed: ParsedURI, registry_url: str, *, verbose: bool = False
 ) -> Tuple[str, int]:
+    """
+    Map a ParsedURI to a (host, port) pair to connect to.
+
+    Form 1a / Form 2 (host present) skip the registry. Form 1 (bare
+    agent ID) goes through the configured registry.
+    """
     if parsed.has_explicit_host:
         if verbose:
             print(
@@ -87,11 +93,14 @@ def resolve_target(
                 file=sys.stderr,
             )
         return parsed.host, parsed.effective_port
+    if parsed.agent_id is None:
+        # Should not happen since the URI grammar guarantees one of the two.
+        raise ResolutionError("URI has neither agent ID nor host")
     return lookup_registry(parsed.agent_id, registry_url, verbose=verbose)
 
 
 def send_method(
-    agent_id: str,
+    agent_id: Optional[str],
     host: str,
     port: int,
     method_name: str,
@@ -103,7 +112,13 @@ def send_method(
     insecure_skip_verify: bool = False,
     verbose: bool = False,
 ) -> wire.AGTPResponse:
-    """Open an AGTP connection, send one method, return the response."""
+    """
+    Open an AGTP connection, send one method, return the response.
+
+    ``agent_id`` is None for server-level requests (Form 2 URIs). In
+    that case the Target-Agent header is omitted, which is the cue
+    server.py uses to route DISCOVER to the manifest path.
+    """
     if verbose:
         scheme = "agtps" if use_tls else "agtp"
         print(
@@ -120,11 +135,12 @@ def send_method(
             ctx.verify_mode = ssl.CERT_NONE
         sock = ctx.wrap_socket(sock, server_hostname=host)
 
-    headers = {
-        "Target-Agent": agent_id,
+    headers: Dict[str, str] = {
         "Accept": accept,
         "Host": host,
     }
+    if agent_id is not None:
+        headers["Target-Agent"] = agent_id
     if body and body_content_type:
         headers["Content-Type"] = body_content_type
 
@@ -249,7 +265,21 @@ def run(args) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    method_name = (args.method or DEFAULT_METHOD).upper()
+    # Server-level URI (Form 2) defaults to DISCOVER, returning the
+    # Server Manifest. DESCRIBE has no meaning at the server level
+    # because it requires a Target-Agent.
+    if parsed.is_server_level and not args.method:
+        method_name = "DISCOVER"
+    else:
+        method_name = (args.method or DEFAULT_METHOD).upper()
+
+    if parsed.is_server_level and method_name == "DESCRIBE":
+        print(
+            "error: DESCRIBE requires an agent target; this URI addresses "
+            "the server (use a method like DISCOVER or supply an agent ID)",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.yaml:
         fmt = "yaml"
@@ -259,12 +289,20 @@ def run(args) -> int:
         fmt = "json"
 
     if method_name != "DESCRIBE" and fmt in ("yaml", "html"):
-        print(
-            f"error: --{fmt} is meaningful only for DESCRIBE; "
-            f"{method_name} returns JSON",
-            file=sys.stderr,
-        )
-        return 2
+        if parsed.is_server_level and method_name == "DISCOVER" and fmt == "html":
+            print(
+                "[client] HTML rendering of the Server Manifest is not "
+                "implemented; falling back to JSON",
+                file=sys.stderr,
+            )
+            fmt = "json"
+        else:
+            print(
+                f"error: --{fmt} is meaningful only for DESCRIBE; "
+                f"{method_name} returns JSON",
+                file=sys.stderr,
+            )
+            return 2
 
     accept = _accept_for_format(fmt, method_name)
 

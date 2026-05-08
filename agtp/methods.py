@@ -359,25 +359,32 @@ def check_capability(
     spec: MethodSpec, agent_doc: AgentDocument
 ) -> Optional[wire.AGTPResponse]:
     """
-    Return a 405 response if the target agent does not declare the method
-    in its capabilities list. The capability check is per-agent: the
-    server may host agents with different supported method sets.
+    Return a 405 response if the target agent does not accept the method.
+
+    Acceptance is decided by the v2 ``requires`` declaration:
+
+      * ``requires.wildcards == True`` accepts any method.
+      * Otherwise, the method must appear in ``requires.methods``.
+
+    Agents migrated from v1 fall through this same check (their old
+    ``capabilities`` field is lifted into ``requires.methods`` at load
+    time, with wildcards=False).
     """
-    if spec.name not in agent_doc.capabilities:
-        return error_response(
-            405,
-            "Method Not Allowed",
-            "method-not-in-capabilities",
-            (
-                f"agent {agent_doc.agent_id[:12]}... does not declare "
-                f"{spec.name} in its capabilities"
-            ),
-            extra={
-                "method": spec.name,
-                "agent_capabilities": list(agent_doc.capabilities),
-            },
-        )
-    return None
+    if agent_doc.accepts_method(spec.name):
+        return None
+    return error_response(
+        405,
+        "Method Not Allowed",
+        "method-not-in-requires",
+        (
+            f"agent {agent_doc.agent_id[:12]}... does not declare "
+            f"{spec.name} in requires.methods"
+        ),
+        extra={
+            "method": spec.name,
+            "requires": agent_doc.requires.to_dict(),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -471,11 +478,12 @@ def handle_discover(
     if target == "methods":
         # Bucket by source: embedded vs custom. Each bucket is sorted
         # alphabetically by name. The browser and other consumers rely
-        # on this stable ordering.
+        # on this stable ordering. Wildcard agents surface every method
+        # in REGISTRY; strict agents surface only what they declare.
         embedded: List[Dict[str, Any]] = []
         custom: List[Dict[str, Any]] = []
         for verb, m in REGISTRY.items():
-            if verb not in agent_doc.capabilities:
+            if not agent_doc.accepts_method(verb):
                 continue
             entry = spec_to_dict(m)
             if m.source == "agtp/1.0":
@@ -497,6 +505,7 @@ def handle_discover(
                     "embedded_count": len(embedded),
                     "custom_count": len(custom),
                     "total": len(embedded) + len(custom),
+                    "wildcards": agent_doc.requires.wildcards,
                 },
                 "issued_at": _utc_now_iso(),
             },
@@ -506,6 +515,9 @@ def handle_discover(
     items: List[Dict[str, Any]]
 
     if target == "agents":
+        # v2-aware lightweight entries: skills_summary + methods_count.
+        # Full per-agent details require a follow-up DESCRIBE.
+        from agtp.manifest import _summarize_skills  # local to avoid cycle
         items = []
         for aid in server_state.list_ids():
             doc = server_state.lookup(aid)
@@ -515,9 +527,8 @@ def handle_discover(
                 {
                     "agent_id": doc.agent_id,
                     "name": doc.name,
-                    "principal": doc.principal,
-                    "status": doc.status,
-                    "capabilities": list(doc.capabilities),
+                    "skills_summary": _summarize_skills(doc.skills),
+                    "methods_count": len(doc.requires.methods),
                 }
             )
     elif target in ("tools", "apis"):

@@ -1,0 +1,25 @@
+{
+  "agtp_version": "1.0",
+  "agent_id": "d8dc6f0df55d66c7b30100db3cffbe383c5f814e6e58a08521fb7636c3bcc230",
+  "name": "Lauren",
+  "principal": "Chris Hood",
+  "principal_id": "principal-chris-hood-001",
+  "description": "The first AGTP-identified agent. Lauren can describe herself, list her capabilities, and serve as a reference implementation of the AGTP identity model.",
+  "status": "active",
+  "capabilities": [
+    "QUERY",
+    "DISCOVER",
+    "DESCRIBE",
+    "SUMMARIZE",
+    "PLAN",
+    "EXECUTE",
+    "CONFIRM",
+    "NOTIFY"
+  ],
+  "scopes_accepted": [
+    "identity:read",
+    "capability:read"
+  ],
+  "issued_at": "2026-05-02T04:51:55Z",
+  "issuer": "agtp.io"
+}

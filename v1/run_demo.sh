@@ -122,9 +122,12 @@ print(f'[runner] registry now contains: {store.list_all()}')
 echo "[runner] starting agent server on agtp://127.0.0.1:4480 (plaintext)"    | tee -a "$TRANSCRIPT"
 # Loopback bind defaults to plaintext, so --insecure is omitted here.
 # Positional port matches the python -m http.server idiom.
+# --config points the manifest identity at v1/agtp-server.toml so the
+# Server Manifest scenarios produce stable, demo-flavored output.
 $PY -m agtp.server 4480 \
     --host 127.0.0.1 \
     --agents-dir "$AGENTS_DIR" \
+    --config "$SCRIPT_DIR/agtp-server.toml" \
     >> "$TRANSCRIPT_DIR/server.log" 2>&1 &
 SERVER_PID=$!
 sleep 0.6
@@ -196,7 +199,7 @@ run_scenario 12 "PROPOSE to Orchestrator (negotiable=false, returns 460)" \
     -d '{"endpoint_name":"weather.lookup","schema":{"input":"string","output":"object"},"description":"dynamic endpoint stub"}' \
     "${CLIENT_ARGS[@]}"
 
-run_scenario 13 "DELEGATE on Lauren (not in capabilities, returns 405)" \
+run_scenario 13 "DELEGATE on Lauren (not in requires.methods, returns 405)" \
     $CLIENT "agtp://$LAUREN_ID" DELEGATE \
     --param task=anything \
     --param "sub_agent=$ORCH_ID" \
@@ -206,6 +209,9 @@ run_scenario 14 "FAKEMETHOD on Lauren (unknown method, returns 501)" \
     $CLIENT "agtp://$LAUREN_ID" FAKEMETHOD \
     --param x=1 \
     "${CLIENT_ARGS[@]}"
+
+run_scenario 15 "Server-level DISCOVER (Form 2 URI returns Server Manifest)" \
+    $CLIENT "agtp://127.0.0.1:4480" "${CLIENT_ARGS[@]}"
 
 {
     echo

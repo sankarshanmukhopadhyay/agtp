@@ -550,23 +550,49 @@ function renderMethods(tab) {
 }
 
 function capabilitiesForTab(tab) {
-  // The Pretty pane shows the identity card; pull capabilities out of
-  // the JSON response if we have one. Falls back to []. If the user
-  // chose YAML/HTML we rely on the structured DISCOVER result and
-  // intersect against the universe of method names.
+  // The Pretty pane shows the identity card; the agent's accepted
+  // method set comes from the v2 ``requires.methods`` array. We still
+  // fall back to the legacy ``capabilities`` field for documents that
+  // were served without migration. YAML parsing is best-effort.
   if (!tab.result || !tab.result.ok || !tab.result.body) return [];
   try {
     if (tab.result.format === "json") {
       const obj = JSON.parse(tab.result.body);
+      if (obj && obj.requires && Array.isArray(obj.requires.methods)) {
+        return obj.requires.methods;
+      }
       return Array.isArray(obj.capabilities) ? obj.capabilities : [];
     }
     if (tab.result.format === "yaml") {
-      // Best-effort YAML parse: capabilities is a sequence of strings.
-      const m = tab.result.body.match(
+      // v2: methods are nested inside `requires:`. Match that block first.
+      const reqBlock = tab.result.body.match(
+        /^requires:\s*\n((?:\s+\S.*\n?)+)/m,
+      );
+      if (reqBlock) {
+        // Inline list form: `methods: [A, B, C]`
+        const inline = reqBlock[1].match(/methods:\s*\[([^\]]*)\]/);
+        if (inline) {
+          return inline[1].split(",")
+            .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+            .filter(Boolean);
+        }
+        // Block list form (rare for our emitter but still supported).
+        const block = reqBlock[1].match(
+          /methods:\s*\n((?:\s+-\s+\S+\s*\n)+)/,
+        );
+        if (block) {
+          return block[1].split("\n")
+            .map((line) => line.match(/^\s+-\s+(.+?)\s*$/))
+            .filter(Boolean)
+            .map((mm) => mm[1].replace(/^["']|["']$/g, ""));
+        }
+      }
+      // Legacy fallback: top-level `capabilities:` list.
+      const legacy = tab.result.body.match(
         /^capabilities:\s*\n((?:\s+-\s+\S+\s*\n)+)/m,
       );
-      if (!m) return [];
-      return m[1].split("\n")
+      if (!legacy) return [];
+      return legacy[1].split("\n")
         .map((line) => line.match(/^\s+-\s+(.+?)\s*$/))
         .filter(Boolean)
         .map((mm) => mm[1].replace(/^["']|["']$/g, ""));

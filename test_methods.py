@@ -310,7 +310,7 @@ class MethodSetTests(unittest.TestCase):
                 )
                 payload = _decode_json(resp)
                 self.assertEqual(
-                    payload["error"]["code"], "method-not-in-capabilities"
+                    payload["error"]["code"], "method-not-in-requires"
                 )
 
     # ---- 501 unknown method ----
