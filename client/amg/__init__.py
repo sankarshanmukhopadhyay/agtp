@@ -96,6 +96,7 @@ from client.amg.composer import (
     compose_from_yaml,
     compose_method,
     suggest_fix,
+    validate_partial,
 )
 
 
@@ -162,5 +163,6 @@ __all__ = [
     "stoplist_suggestion",
     "suggest_fix",
     "validate",
+    "validate_partial",
     "validate_synthesis",
 ]

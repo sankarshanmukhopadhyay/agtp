@@ -204,6 +204,115 @@ elemen/
 
 ---
 
+## Developer drawer
+
+Press **F12** (or **Ctrl+Shift+I** / **⌘+Shift+I**) to slide a
+DevTools-style drawer up from the bottom of the window. The drawer
+shares vertical space with the page above it — nothing is overlaid.
+Drag the thin bar at its top edge to resize; press **Escape** to close.
+
+The drawer hosts authoring tools that don't belong in the agent /
+manifest views. Today there is one tab — **Compose** — and the same
+tab bar will host **Inspect**, **Storage**, and **Network** in future
+revisions.
+
+State (open / closed, height) persists in `localStorage` under
+`elemen.drawer.v1`. Default closed on first launch.
+
+### Compose Method
+
+The Compose tab is Elemen's authoring surface for new agent methods.
+Use it to:
+
+- Draft a new method specification with live AMG grammar feedback.
+- Save drafts to a local library for iteration.
+- Submit proposals to agent servers via PROPOSE.
+- Receive synthesis IDs when servers accept proposals.
+
+The composer enforces AMG (Agent Method Grammar) validation
+continuously as you type. The **name** field validates on every
+keystroke after the third character — stoplist warnings,
+HTTP-method conflicts, and embedded-method clashes surface inline
+with substitution catalog suggestions you can click to apply. Other
+fields validate on blur (200ms debounced).
+
+Cross-field warnings (irreversible methods with low confidence
+guidance, descriptions that match the intent verbatim) collect in a
+sticky amber footer at the bottom of the form. Click a warning to
+scroll to the field it concerns.
+
+When a server is loaded in the URL bar, the **Submit PROPOSE**
+button sends the proposal to that server and renders the response
+inline:
+
+- **200** — proposal accepted; the synthesis ID, target method,
+  and parameter mapping appear in a green banner. The library entry
+  flips to `accepted`.
+- **460** — server refused; reason and detail appear in a red
+  banner. The library entry flips to `refused`.
+- **461** — counter-proposal offered; an amber banner shows the
+  suggested name plus a Differences card. Three buttons: accept and
+  re-submit, modify, or decline. The library entry flips to
+  `countered` and stores the counter spec.
+
+### Method library
+
+The left sidebar lists every saved draft. Each card shows the
+method name (monospace), a colored status dot
+(`draft` / `submitted` / `accepted` / `refused` / `countered`), a
+relative timestamp, and (for submitted entries) the destination
+server. Click a card to load it into the form.
+
+The library lives in `localStorage` at `elemen.method_library.v1`
+(capped at 50 entries, oldest fall off). The sidebar's `⋮` menu
+exposes:
+
+- **Export Library** — opens a native save dialog and writes the
+  full library as JSON.
+- **Import Library** — opens a native file picker and replaces the
+  current library with the imported file's contents.
+- **Clear Library** — removes every entry (with confirmation).
+
+Submitted methods load into the form **read-only**. A blue banner
+at the top of the form offers an *Edit as new draft* button that
+forks the entry to a fresh `draft` copy you can modify and resubmit.
+
+### Live YAML preview
+
+The right pane shows the current draft as YAML, updated on every
+form change (200ms debounced). The **Copy** button copies the YAML
+to the clipboard via `navigator.clipboard.writeText`. Click the `‹`
+button at the top of the pane to collapse it for narrow drawer
+widths.
+
+### Save as File
+
+The **Save as File** button under the form invokes pywebview's
+native save dialog and writes the spec as YAML
+(`{name}.method.yaml` by default). The saved file round-trips
+through `agtp <uri> --propose --params-file <path>` for later
+submission.
+
+### Bridge surface
+
+The drawer talks to Python via `window.pywebview.api`:
+
+| Method | Purpose |
+|---|---|
+| `validate_compose(draft)`     | Per-field validation with completion summary. |
+| `get_substitution_catalog()`  | The AMG substitution catalog as a list of dicts. |
+| `save_method_yaml(spec, fn)`  | Native save dialog → YAML file. |
+| `export_library(library)`     | Native save dialog → JSON library. |
+| `import_library()`            | Native open dialog → parsed library JSON. |
+| `invoke(uri, "PROPOSE", body)`| The existing invocation surface, used to ship the proposal. |
+
+`validate_compose` is a thin wrapper around
+[`client.amg.composer.validate_partial`](../amg/composer.py); both
+sides of the AMG drift gate ship the same function so a UI authored
+against either tree behaves identically.
+
+---
+
 ## Troubleshooting
 
 **"Could not locate AGTP v1 library"**: set `AGTP_LIB_PATH` to the

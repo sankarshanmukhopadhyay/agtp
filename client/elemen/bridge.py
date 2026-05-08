@@ -165,6 +165,72 @@ def _write_history(entries: list) -> None:
         pass
 
 
+def _open_save_dialog(
+    default_filename: str,
+    *,
+    file_types: tuple = ("All files (*.*)",),
+) -> str:
+    """
+    Open pywebview's native save dialog. Returns "" when pywebview is
+    unavailable (e.g., in unit tests) or the user cancels.
+
+    Tests monkeypatch this function to return a fixed path.
+    """
+    try:
+        import webview  # type: ignore[import-not-found]
+    except ImportError:
+        return ""
+    try:
+        windows = list(getattr(webview, "windows", []) or [])
+    except Exception:
+        return ""
+    if not windows:
+        return ""
+    try:
+        result = windows[0].create_file_dialog(
+            webview.SAVE_DIALOG,
+            save_filename=default_filename,
+            file_types=file_types,
+        )
+    except Exception:
+        return ""
+    if not result:
+        return ""
+    if isinstance(result, (list, tuple)):
+        return result[0] if result else ""
+    return str(result)
+
+
+def _open_open_dialog(
+    *,
+    file_types: tuple = ("All files (*.*)",),
+) -> str:
+    """Native open-file dialog; counterpart of ``_open_save_dialog``."""
+    try:
+        import webview  # type: ignore[import-not-found]
+    except ImportError:
+        return ""
+    try:
+        windows = list(getattr(webview, "windows", []) or [])
+    except Exception:
+        return ""
+    if not windows:
+        return ""
+    try:
+        result = windows[0].create_file_dialog(
+            webview.OPEN_DIALOG,
+            allow_multiple=False,
+            file_types=file_types,
+        )
+    except Exception:
+        return ""
+    if not result:
+        return ""
+    if isinstance(result, (list, tuple)):
+        return result[0] if result else ""
+    return str(result)
+
+
 class Api:
     """Methods exposed to the JS frontend via ``window.pywebview.api``."""
 
@@ -301,6 +367,111 @@ class Api:
         if result.ok:
             envelope["method"] = method_name.upper()
         return envelope
+
+    # ---- Compose drawer ----
+
+    def validate_compose(self, draft: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate a partial composition draft. Returns per-field errors,
+        warnings, and section completion status. The Compose drawer
+        calls this on every keystroke (for the name field) and on blur
+        for other fields.
+        """
+        from client.amg.composer import validate_partial
+        if not isinstance(draft, dict):
+            draft = {}
+        return validate_partial(draft)
+
+    def get_substitution_catalog(self) -> list:
+        """
+        Return the AMG substitution catalog as a list of plain dicts
+        for the UI's autocomplete and "Show all matches" panels.
+
+        Each entry has the shape::
+
+            {
+              "members": ["CHECK", "PROBE", "POLL"],
+              "intent": "verification of state or existence",
+              "conditions": "..."  # optional
+            }
+        """
+        from client.amg.substitution import DEFAULT_SUBSTITUTIONS
+        out: list = []
+        for ec in DEFAULT_SUBSTITUTIONS:
+            entry: Dict[str, Any] = {
+                "name": getattr(ec, "name", ""),
+                "members": sorted(ec.members),
+            }
+            conditions = getattr(ec, "conditions", None)
+            if conditions:
+                entry["conditions"] = conditions
+            out.append(entry)
+        return out
+
+    def save_method_yaml(
+        self,
+        spec: Dict[str, Any],
+        suggested_filename: str = "",
+    ) -> str:
+        """
+        Open a native save-file dialog and write the spec as YAML.
+        Returns the saved path or "" when the user cancels (or pyyaml
+        is not installed; the caller surfaces a fallback message).
+        """
+        if not isinstance(spec, dict):
+            return ""
+        try:
+            import yaml  # type: ignore[import-not-found]
+        except ImportError:
+            return ""
+        text = yaml.safe_dump(spec, sort_keys=False)
+        suggested = (suggested_filename or "method.yaml").strip()
+        path = _open_save_dialog(suggested, file_types=("YAML files (*.yaml;*.yml)", "All files (*.*)"))
+        if not path:
+            return ""
+        try:
+            Path(path).write_text(text, encoding="utf-8")
+        except OSError:
+            return ""
+        return path
+
+    def export_library(self, library_data: Dict[str, Any]) -> str:
+        """
+        Export the method library as a JSON file via the native save
+        dialog. Returns the saved path or "" on cancellation.
+        """
+        if not isinstance(library_data, dict):
+            library_data = {}
+        path = _open_save_dialog(
+            "elemen-method-library.json",
+            file_types=("JSON files (*.json)", "All files (*.*)"),
+        )
+        if not path:
+            return ""
+        try:
+            Path(path).write_text(
+                json.dumps(library_data, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            return ""
+        return path
+
+    def import_library(self) -> Dict[str, Any]:
+        """
+        Open a file picker and return the parsed library JSON.
+        Returns an empty dict on cancel or parse error.
+        """
+        path = _open_open_dialog(
+            file_types=("JSON files (*.json)", "All files (*.*)"),
+        )
+        if not path:
+            return {}
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+            data = json.loads(text)
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
     # ---- per-user URL/fetch history ----
 

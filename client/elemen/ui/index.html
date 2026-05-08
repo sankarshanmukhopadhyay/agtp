@@ -36,6 +36,12 @@
         spellcheck="false"
       />
       <button id="go" type="submit">Go</button>
+      <button
+        id="drawer-toggle"
+        type="button"
+        class="nav-btn drawer-toggle"
+        title="Developer drawer (F12)"
+      >⚒</button>
       <div class="menu-wrap">
         <button id="menu-btn" type="button" title="Menu">⋮</button>
         <div id="menu" class="menu hidden">
@@ -190,6 +196,245 @@
     <ul id="history-list"></ul>
     <div id="history-empty" class="hist-empty hidden">No history yet.</div>
   </aside>
+
+  <!--
+    Developer drawer.
+
+    A slide-up panel hosted at the bottom of the window. Toggled with
+    F12 / Ctrl+Shift+I / the wrench button in the URL bar; closed with
+    Escape when focus is inside it. Tabs at the top — only Compose for
+    now; Inspect / Storage / Network slot in next to it later.
+
+    State (open/closed, height in pixels) persists in localStorage at
+    `elemen.drawer.v1`. The drawer is rendered as a flex column;
+    inside it the Compose tab is a three-column grid (library / form /
+    yaml preview).
+  -->
+  <div id="dev-drawer" class="dev-drawer hidden" aria-hidden="true">
+    <div id="dev-drawer-resize" class="dev-drawer-resize" title="Drag to resize"></div>
+    <div class="dev-drawer-tabs">
+      <button class="dev-tab active" data-dev-tab="compose">Compose</button>
+      <span class="dev-drawer-spacer"></span>
+      <button id="dev-drawer-close" type="button" class="dev-drawer-close" title="Close (Esc)">×</button>
+    </div>
+
+    <div id="dev-pane-compose" class="dev-pane active">
+      <!-- Library sidebar -->
+      <aside class="compose-library">
+        <div class="compose-library-head">
+          <span>Method Library</span>
+          <button id="lib-new" type="button" class="lib-new" title="New draft">+ New</button>
+          <div class="menu-wrap">
+            <button id="lib-menu-btn" type="button" class="lib-menu-btn" title="Library menu">⋮</button>
+            <div id="lib-menu" class="menu hidden">
+              <button class="menu-item" data-lib-action="export">Export Library</button>
+              <button class="menu-item" data-lib-action="import">Import Library</button>
+              <hr />
+              <button class="menu-item" data-lib-action="clear">Clear Library</button>
+            </div>
+          </div>
+        </div>
+        <ul id="lib-list" class="lib-list"></ul>
+        <div id="lib-empty" class="lib-empty">No saved methods yet.</div>
+      </aside>
+
+      <!-- Composition form -->
+      <section class="compose-form" id="compose-form">
+        <div id="compose-empty" class="compose-empty">
+          <div class="compose-empty-title">Start a new method</div>
+          <button id="compose-empty-new" type="button" class="try-invoke">+ New Method</button>
+        </div>
+
+        <div id="compose-active" class="compose-active hidden">
+          <!-- Read-only banner for submitted methods -->
+          <div id="compose-readonly-banner" class="compose-readonly-banner hidden"></div>
+
+          <!-- Inline response (200 / 460 / 461) appears here when submitted -->
+          <div id="compose-response" class="compose-response hidden"></div>
+
+          <!-- Identity section -->
+          <div class="compose-section" data-section="identity">
+            <button type="button" class="compose-section-head" data-toggle="identity">
+              <span class="compose-section-indicator" data-indicator="identity">○</span>
+              <span class="compose-section-title">Identity</span>
+              <span class="caret">▾</span>
+            </button>
+            <div class="compose-section-body" data-body="identity">
+              <div class="compose-field">
+                <label>Method name <span class="compose-field-hint">uppercase, single token</span></label>
+                <input id="cf-name" type="text" autocomplete="off" spellcheck="false" data-field="name" />
+                <div class="compose-feedback" data-feedback="name"></div>
+              </div>
+              <div class="compose-field">
+                <label>Description <span class="compose-field-hint">optional; defaults to intent</span></label>
+                <textarea id="cf-description" rows="2" data-field="description"></textarea>
+                <div class="compose-feedback" data-feedback="description"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- AMG semantic block -->
+          <div class="compose-section" data-section="semantic">
+            <button type="button" class="compose-section-head" data-toggle="semantic">
+              <span class="compose-section-indicator" data-indicator="semantic">○</span>
+              <span class="compose-section-title">AMG semantic block</span>
+              <span class="caret">▾</span>
+            </button>
+            <div class="compose-section-body" data-body="semantic">
+              <div class="compose-field">
+                <label>Intent <span class="compose-field-hint">what this method does, in agent-goal voice (one sentence)</span></label>
+                <textarea id="cf-intent" rows="2" data-field="semantic.intent"></textarea>
+                <div class="compose-feedback" data-feedback="semantic.intent"></div>
+              </div>
+              <div class="compose-field">
+                <label>Actor <span class="compose-field-hint">who initiates this action</span></label>
+                <div class="compose-radios" data-field="semantic.actor">
+                  <label><input type="radio" name="cf-actor" value="agent" checked /> agent</label>
+                  <label><input type="radio" name="cf-actor" value="user" /> user</label>
+                  <label><input type="radio" name="cf-actor" value="system" /> system</label>
+                </div>
+              </div>
+              <div class="compose-field">
+                <label>Outcome <span class="compose-field-hint">post-condition voice (one sentence)</span></label>
+                <textarea id="cf-outcome" rows="2" data-field="semantic.outcome"></textarea>
+                <div class="compose-feedback" data-feedback="semantic.outcome"></div>
+              </div>
+              <div class="compose-field">
+                <label>Capability</label>
+                <select id="cf-capability" data-field="semantic.capability">
+                  <option value="">(none)</option>
+                  <option value="discovery" title="Finding out what's available; e.g., DISCOVER">discovery</option>
+                  <option value="transaction" title="Stateful exchange that completes; e.g., RECONCILE">transaction</option>
+                  <option value="modification" title="Changes server-side state; e.g., UPDATE">modification</option>
+                  <option value="retrieval" title="Reads existing data; e.g., FETCH">retrieval</option>
+                  <option value="analysis" title="Computes over data; e.g., EVALUATE">analysis</option>
+                  <option value="notification" title="Outbound signal; e.g., NOTIFY">notification</option>
+                </select>
+              </div>
+              <div class="compose-field">
+                <label>Impact tier</label>
+                <div class="compose-impact" data-field="semantic.impact_tier">
+                  <button type="button" class="impact-btn" data-impact="informational">informational</button>
+                  <button type="button" class="impact-btn" data-impact="reversible">reversible</button>
+                  <button type="button" class="impact-btn" data-impact="irreversible">irreversible</button>
+                </div>
+              </div>
+              <div class="compose-field">
+                <label>Confidence guidance <span id="cf-confidence-value" class="compose-field-value">—</span></label>
+                <input id="cf-confidence" type="range" min="0" max="1" step="0.01" value="0" data-field="semantic.confidence_guidance" />
+                <div class="compose-confidence-marks">
+                  <span style="left: 50%">0.50</span>
+                  <span style="left: 75%">0.75</span>
+                  <span style="left: 85%">0.85</span>
+                </div>
+                <div class="compose-feedback" data-feedback="semantic.confidence_guidance"></div>
+              </div>
+              <div class="compose-field compose-field-inline">
+                <label><input id="cf-idempotent" type="checkbox" data-field="semantic.is_idempotent" /> Idempotent</label>
+                <span class="compose-field-hint">unchecked methods default to state-modifying</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Parameters -->
+          <div class="compose-section collapsed" data-section="parameters">
+            <button type="button" class="compose-section-head" data-toggle="parameters">
+              <span class="compose-section-indicator" data-indicator="parameters">○</span>
+              <span class="compose-section-title">Parameters</span>
+              <span class="caret">▾</span>
+            </button>
+            <div class="compose-section-body" data-body="parameters">
+              <div class="compose-params-block">
+                <div class="compose-params-head">Required parameters</div>
+                <table class="compose-params" data-params="required_params">
+                  <thead><tr><th>Name</th><th>Type</th><th>Description</th><th>Schema</th><th></th></tr></thead>
+                  <tbody></tbody>
+                </table>
+                <button type="button" class="compose-params-add" data-add="required_params">+ Add required parameter</button>
+              </div>
+              <div class="compose-params-block">
+                <div class="compose-params-head">Optional parameters</div>
+                <table class="compose-params" data-params="optional_params">
+                  <thead><tr><th>Name</th><th>Type</th><th>Description</th><th>Schema</th><th></th></tr></thead>
+                  <tbody></tbody>
+                </table>
+                <button type="button" class="compose-params-add" data-add="optional_params">+ Add optional parameter</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Authority -->
+          <div class="compose-section collapsed" data-section="authority">
+            <button type="button" class="compose-section-head" data-toggle="authority">
+              <span class="compose-section-indicator" data-indicator="authority">○</span>
+              <span class="compose-section-title">Authority</span>
+              <span class="caret">▾</span>
+            </button>
+            <div class="compose-section-body" data-body="authority">
+              <div class="compose-field">
+                <label>Source</label>
+                <input id="cf-source" type="text" value="amg/1.0" readonly data-field="source" />
+              </div>
+              <div class="compose-field">
+                <label>Namespace <span class="compose-field-hint">your organization or project (lowercase-snake-case)</span></label>
+                <input id="cf-namespace" type="text" autocomplete="off" data-field="namespace" />
+                <div class="compose-feedback" data-feedback="namespace"></div>
+              </div>
+              <div class="compose-field">
+                <label>Error codes</label>
+                <div id="cf-error-codes" class="compose-chips" data-field="error_codes">
+                  <button type="button" class="chip" data-code="400">400</button>
+                  <button type="button" class="chip" data-code="405">405</button>
+                  <button type="button" class="chip" data-code="422">422</button>
+                  <button type="button" class="chip" data-code="451">451</button>
+                  <button type="button" class="chip" data-code="460">460</button>
+                  <button type="button" class="chip" data-code="461">461</button>
+                  <button type="button" class="chip" data-code="462">462</button>
+                </div>
+                <div class="compose-feedback" data-feedback="error_codes"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Substitution -->
+          <div class="compose-section collapsed" data-section="substitution">
+            <button type="button" class="compose-section-head" data-toggle="substitution">
+              <span class="compose-section-indicator" data-indicator="substitution">○</span>
+              <span class="compose-section-title">Substitution</span>
+              <span class="caret">▾</span>
+            </button>
+            <div class="compose-section-body" data-body="substitution">
+              <div id="cf-substitutes" class="compose-subs"></div>
+              <button type="button" id="cf-sub-add" class="compose-params-add">+ Add substitution</button>
+            </div>
+          </div>
+
+          <!-- Cross-field warnings (sticky footer) -->
+          <div id="compose-warnings" class="compose-warnings hidden"></div>
+
+          <!-- Action row -->
+          <div class="compose-actions">
+            <button type="button" id="cf-submit" class="try-invoke" disabled>Submit PROPOSE</button>
+            <button type="button" id="cf-save-file" class="compose-action-secondary">Save as File</button>
+            <button type="button" id="cf-add-library" class="compose-action-secondary">Add to Library</button>
+            <span id="cf-submit-target" class="compose-target-hint"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live YAML preview -->
+      <aside class="compose-yaml" id="compose-yaml">
+        <div class="compose-yaml-head">
+          <button type="button" id="cf-yaml-toggle" class="compose-yaml-toggle" title="Collapse preview">‹</button>
+          <span>YAML preview</span>
+          <button type="button" id="cf-yaml-copy" class="compose-yaml-copy">Copy</button>
+        </div>
+        <pre id="cf-yaml-pre" class="compose-yaml-pre"></pre>
+      </aside>
+    </div>
+
+    <div id="compose-toast" class="compose-toast hidden"></div>
+  </div>
 
   <script src="app.js"></script>
 </body>

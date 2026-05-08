@@ -2257,3 +2257,1042 @@ els.form.addEventListener("submit", (e) => {
     els.uri.focus();
   }
 })();
+
+/* ============================================================
+   Developer drawer + Compose tab.
+
+   Self-contained module: the drawer's state, library persistence,
+   form rendering, validation, YAML preview, and submission flow
+   all live below. Hooks into the rest of the app only via:
+     - the wrench button + F12 / Ctrl+Shift+I keyboard shortcuts
+     - window.pywebview.api.{validate_compose, get_substitution_catalog,
+       save_method_yaml, export_library, import_library, invoke}
+     - reading the current tab's URI for "Will submit to:" target
+
+   Future drawer tabs (Inspect, Storage, Network) drop into the same
+   .dev-drawer-tabs bar with their own .dev-pane sibling.
+   ============================================================ */
+(function devDrawer() {
+  "use strict";
+
+  // ---- localStorage keys ----
+  const DRAWER_KEY  = "elemen.drawer.v1";
+  const LIBRARY_KEY = "elemen.method_library.v1";
+  const LIBRARY_LIMIT = 50;
+
+  // ---- DOM cache ----
+  const D = {
+    drawer:        $("#dev-drawer"),
+    toggle:        $("#drawer-toggle"),
+    closeBtn:      $("#dev-drawer-close"),
+    resize:        $("#dev-drawer-resize"),
+    composePane:   $("#dev-pane-compose"),
+    composeForm:   $("#compose-form"),
+    composeEmpty:  $("#compose-empty"),
+    composeActive: $("#compose-active"),
+    composeRO:     $("#compose-readonly-banner"),
+    response:      $("#compose-response"),
+    libList:       $("#lib-list"),
+    libEmpty:      $("#lib-empty"),
+    libNew:        $("#lib-new"),
+    libMenuBtn:    $("#lib-menu-btn"),
+    libMenu:       $("#lib-menu"),
+    emptyNew:      $("#compose-empty-new"),
+    name:          $("#cf-name"),
+    description:   $("#cf-description"),
+    intent:        $("#cf-intent"),
+    outcome:       $("#cf-outcome"),
+    capability:    $("#cf-capability"),
+    confidence:    $("#cf-confidence"),
+    confidenceVal: $("#cf-confidence-value"),
+    idempotent:    $("#cf-idempotent"),
+    namespace:     $("#cf-namespace"),
+    errorCodes:    $("#cf-error-codes"),
+    impact:        document.querySelector(".compose-impact"),
+    submit:        $("#cf-submit"),
+    saveFile:      $("#cf-save-file"),
+    addLibrary:    $("#cf-add-library"),
+    submitTarget:  $("#cf-submit-target"),
+    yamlPane:      $("#compose-yaml"),
+    yamlPre:       $("#cf-yaml-pre"),
+    yamlCopy:      $("#cf-yaml-copy"),
+    yamlToggle:    $("#cf-yaml-toggle"),
+    warnings:      $("#compose-warnings"),
+    subList:       $("#cf-substitutes"),
+    subAdd:        $("#cf-sub-add"),
+    toast:         $("#compose-toast"),
+  };
+
+  // ---- state ----
+  const drawerState = loadDrawerState();
+  let library = loadLibrary();
+  let activeLibId = null;        // null = unsaved draft
+  let readOnly = false;
+  let yamlCollapsed = false;
+  let substitutionCatalog = [];
+  const debounceTimers = new Map();
+
+  // ---- utilities ----
+  function loadDrawerState() {
+    try {
+      const raw = localStorage.getItem(DRAWER_KEY);
+      if (!raw) return { open: false, height: 0 };
+      const parsed = JSON.parse(raw);
+      return {
+        open: !!parsed.open,
+        height: Number(parsed.height) || 0,
+      };
+    } catch (e) {
+      return { open: false, height: 0 };
+    }
+  }
+  function saveDrawerState() {
+    try {
+      localStorage.setItem(DRAWER_KEY, JSON.stringify(drawerState));
+    } catch (e) { /* ignore quota errors */ }
+  }
+  function loadLibrary() {
+    try {
+      const raw = localStorage.getItem(LIBRARY_KEY);
+      if (!raw) return { version: 1, entries: [] };
+      const parsed = JSON.parse(raw);
+      if (!parsed || !Array.isArray(parsed.entries)) {
+        return { version: 1, entries: [] };
+      }
+      return { version: 1, entries: parsed.entries.slice(0, LIBRARY_LIMIT) };
+    } catch (e) {
+      return { version: 1, entries: [] };
+    }
+  }
+  function saveLibrary() {
+    try {
+      library.entries = library.entries.slice(0, LIBRARY_LIMIT);
+      localStorage.setItem(LIBRARY_KEY, JSON.stringify(library));
+    } catch (e) { /* ignore */ }
+  }
+  function newLibId(name) {
+    const slug = (name || "draft").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    const stamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+    return `lib_${slug}_${stamp}`;
+  }
+  function nowIso() { return new Date().toISOString(); }
+  function relTime(iso) {
+    if (!iso) return "";
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return "";
+    const diff = Date.now() - t;
+    if (diff < 60_000) return "just now";
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+    return `${Math.floor(diff / 86_400_000)}d ago`;
+  }
+  function debounce(key, fn, ms = 200) {
+    if (debounceTimers.has(key)) clearTimeout(debounceTimers.get(key));
+    debounceTimers.set(key, setTimeout(() => {
+      debounceTimers.delete(key);
+      fn();
+    }, ms));
+  }
+  function showToast(text) {
+    D.toast.textContent = text;
+    D.toast.classList.remove("hidden");
+    setTimeout(() => D.toast.classList.add("hidden"), 1800);
+  }
+  function currentUri() {
+    if (typeof getActive === "function") {
+      const tab = getActive();
+      return (tab && tab.uri) || "";
+    }
+    return (els.uri && els.uri.value || "").trim();
+  }
+
+  // ---- drawer open/close + resize ----
+  function openDrawer() {
+    D.drawer.classList.remove("hidden");
+    D.drawer.setAttribute("aria-hidden", "false");
+    D.toggle.classList.add("active");
+    if (drawerState.height) {
+      D.drawer.style.height = drawerState.height + "px";
+    }
+    drawerState.open = true;
+    saveDrawerState();
+    if (!activeLibId && library.entries.length === 0) {
+      // First-time or empty: show empty state.
+      D.composeEmpty.classList.remove("hidden");
+      D.composeActive.classList.add("hidden");
+    }
+  }
+  function closeDrawer() {
+    D.drawer.classList.add("hidden");
+    D.drawer.setAttribute("aria-hidden", "true");
+    D.toggle.classList.remove("active");
+    drawerState.open = false;
+    saveDrawerState();
+  }
+  function toggleDrawer() {
+    if (D.drawer.classList.contains("hidden")) openDrawer();
+    else closeDrawer();
+  }
+
+  // ---- form: read state into a draft dict matching validate_partial shape ----
+  function readDraft() {
+    const draft = {
+      name: D.name.value.trim(),
+      description: D.description.value.trim(),
+      semantic: {
+        intent: D.intent.value.trim(),
+        actor: (document.querySelector('input[name="cf-actor"]:checked') || {}).value || "agent",
+        outcome: D.outcome.value.trim(),
+        capability: D.capability.value || null,
+        impact_tier: getActiveImpact(),
+        confidence_guidance: D.confidence.value === "" || D.confidence.value === "0"
+          ? null : Number(D.confidence.value),
+        is_idempotent: D.idempotent.checked,
+      },
+      required_params: readParamRows("required_params"),
+      optional_params: readParamRows("optional_params"),
+      namespace: D.namespace.value.trim(),
+      source: "amg/1.0",
+      error_codes: getActiveCodes(),
+      substitutes_for: readSubRows(),
+    };
+    return draft;
+  }
+
+  function getActiveImpact() {
+    const btn = document.querySelector(".impact-btn.active");
+    return btn ? btn.dataset.impact : null;
+  }
+  function getActiveCodes() {
+    return $$("#cf-error-codes .chip.active").map((c) => Number(c.dataset.code));
+  }
+  function readParamRows(which) {
+    const tbl = document.querySelector(`.compose-params[data-params="${which}"] tbody`);
+    if (!tbl) return [];
+    const rows = [];
+    Array.from(tbl.querySelectorAll("tr")).forEach((tr) => {
+      const name = tr.querySelector('input[data-pf="name"]').value.trim();
+      const type = tr.querySelector('select[data-pf="type"]').value;
+      const desc = tr.querySelector('input[data-pf="description"]').value.trim();
+      const schemaRaw = tr.querySelector('input[data-pf="schema"]').value.trim();
+      if (!name && !type && !desc) return; // skip blank rows
+      const row = { name, type, description: desc };
+      if (schemaRaw) {
+        try { row.schema = JSON.parse(schemaRaw); }
+        catch (e) { row.schema = { _invalid: schemaRaw }; }
+      } else if (type === "object" || type === "array") {
+        // sentinel so validate_partial flags the missing schema
+        row.schema = null;
+      }
+      rows.push(row);
+    });
+    return rows;
+  }
+  function readSubRows() {
+    if (!D.subList) return [];
+    return Array.from(D.subList.querySelectorAll(".compose-sub-row")).map((r) => ({
+      target: r.querySelector('input[data-sf="target"]').value.trim(),
+      conditions: r.querySelector('input[data-sf="conditions"]').value.trim(),
+    })).filter((s) => s.target);
+  }
+
+  // ---- form: write a draft dict back into the DOM (used when loading library) ----
+  function writeDraft(draft) {
+    draft = draft || {};
+    D.name.value = draft.name || "";
+    D.description.value = draft.description || "";
+    const sb = draft.semantic || {};
+    D.intent.value = sb.intent || "";
+    D.outcome.value = sb.outcome || "";
+    D.capability.value = sb.capability || "";
+    const actor = sb.actor || "agent";
+    const radio = document.querySelector(`input[name="cf-actor"][value="${actor}"]`);
+    if (radio) radio.checked = true;
+    setActiveImpact(sb.impact_tier || null);
+    const cg = sb.confidence_guidance == null ? 0 : Number(sb.confidence_guidance);
+    D.confidence.value = String(cg);
+    D.confidenceVal.textContent = cg ? cg.toFixed(2) : "—";
+    D.idempotent.checked = !!sb.is_idempotent;
+    D.namespace.value = draft.namespace || "";
+    setActiveCodes(Array.isArray(draft.error_codes) && draft.error_codes.length
+      ? draft.error_codes : [400, 405, 422]);
+    writeParamRows("required_params", draft.required_params || []);
+    writeParamRows("optional_params", draft.optional_params || []);
+    writeSubRows(draft.substitutes_for || []);
+  }
+  function setActiveImpact(tier) {
+    $$(".impact-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.impact === tier);
+    });
+  }
+  function setActiveCodes(codes) {
+    const set = new Set(codes.map(Number));
+    $$("#cf-error-codes .chip").forEach((c) => {
+      c.classList.toggle("active", set.has(Number(c.dataset.code)));
+    });
+  }
+  function writeParamRows(which, rows) {
+    const tbody = document.querySelector(`.compose-params[data-params="${which}"] tbody`);
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    rows.forEach((r) => addParamRow(which, r));
+  }
+  function addParamRow(which, row) {
+    row = row || {};
+    const tbody = document.querySelector(`.compose-params[data-params="${which}"] tbody`);
+    if (!tbody) return;
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td><input data-pf="name" type="text" value="${escapeHtml(row.name || "")}" placeholder="lower_snake" /></td>` +
+      `<td><select data-pf="type">${
+        ["string", "integer", "number", "boolean", "object", "array"].map(
+          (t) => `<option value="${t}"${row.type === t ? " selected" : ""}>${t}</option>`
+        ).join("")
+      }</select></td>` +
+      `<td><input data-pf="description" type="text" value="${escapeHtml(row.description || "")}" placeholder="what this parameter is for" /></td>` +
+      `<td><input data-pf="schema" type="text" value="${escapeHtml(row.schema ? JSON.stringify(row.schema) : "")}" placeholder='{"type":"object"}' /></td>` +
+      `<td><button type="button" class="param-row-del" title="Remove">×</button></td>`;
+    tr.querySelector(".param-row-del").addEventListener("click", () => {
+      tr.remove(); onFormChange();
+    });
+    tr.querySelectorAll("input, select").forEach((el) => {
+      el.addEventListener("input", () => onFormChange());
+      el.addEventListener("blur", () => onFormChange());
+    });
+    tbody.appendChild(tr);
+  }
+  function writeSubRows(rows) {
+    if (!D.subList) return;
+    D.subList.innerHTML = "";
+    rows.forEach((r) => addSubRow(r));
+  }
+  function addSubRow(row) {
+    row = row || {};
+    const div = document.createElement("div");
+    div.className = "compose-sub-row";
+    div.innerHTML =
+      `<input data-sf="target" type="text" value="${escapeHtml(row.target || row.target_method || "")}" placeholder="VALIDATE" />` +
+      `<input data-sf="conditions" type="text" value="${escapeHtml(row.conditions || "")}" placeholder="when ruleset is JSON Schema" />` +
+      `<button type="button" class="compose-sub-del" title="Remove">×</button>`;
+    div.querySelector(".compose-sub-del").addEventListener("click", () => {
+      div.remove(); onFormChange();
+    });
+    div.querySelectorAll("input").forEach((el) => {
+      el.addEventListener("input", () => onFormChange());
+    });
+    D.subList.appendChild(div);
+  }
+
+  // ---- validation + UI feedback ----
+  async function runValidation() {
+    if (!window.pywebview || !window.pywebview.api) return;
+    const draft = readDraft();
+    let result;
+    try {
+      result = await window.pywebview.api.validate_compose(draft);
+    } catch (e) { return; }
+    renderFeedback(result);
+    renderSectionIndicators(result.completion || {});
+    renderWarnings(result.warnings || {});
+    updateSubmitState(result);
+  }
+  function renderFeedback(result) {
+    const errs = result.errors || {};
+    const warns = result.warnings || {};
+    // Clear all first.
+    $$(".compose-feedback").forEach((el) => {
+      el.textContent = "";
+      el.className = "compose-feedback";
+    });
+    $$(".compose-field input.error, .compose-field input.warn, .compose-field textarea.error, .compose-field textarea.warn, .compose-field select.error, .compose-field select.warn")
+      .forEach((el) => el.classList.remove("error", "warn"));
+    Object.keys(errs).forEach((field) => {
+      const fb = document.querySelector(`.compose-feedback[data-feedback="${cssEscape(field)}"]`);
+      const input = document.querySelector(`[data-field="${cssEscape(field)}"]`);
+      if (input) input.classList.add("error");
+      if (fb) {
+        fb.className = "compose-feedback error";
+        renderFieldFeedback(fb, errs[field], field, "error");
+      }
+    });
+    Object.keys(warns).forEach((field) => {
+      if (errs[field]) return; // error wins
+      const fb = document.querySelector(`.compose-feedback[data-feedback="${cssEscape(field)}"]`);
+      const input = document.querySelector(`[data-field="${cssEscape(field)}"]`);
+      if (input) input.classList.add("warn");
+      if (fb) {
+        fb.className = "compose-feedback warn";
+        renderFieldFeedback(fb, warns[field], field, "warn");
+      }
+    });
+    // Live "ok" feedback for the name field once it passes.
+    if (!errs.name && !warns.name && D.name.value.trim().length >= 3) {
+      const fb = document.querySelector('.compose-feedback[data-feedback="name"]');
+      if (fb) {
+        fb.className = "compose-feedback ok";
+        fb.textContent = "✓ Name passes lexical and stoplist checks.";
+      }
+    }
+  }
+  function renderFieldFeedback(fb, message, field, level) {
+    const text = document.createElement("span");
+    text.textContent = (level === "error" ? "✗ " : "⚠ ") + message;
+    fb.appendChild(text);
+    if (field === "name") {
+      injectNameSuggestions(fb, D.name.value.trim().toUpperCase());
+    }
+  }
+  function injectNameSuggestions(fb, name) {
+    if (!substitutionCatalog || !substitutionCatalog.length) return;
+    // Find catalogs matching by member name OR by prefix overlap.
+    const matches = [];
+    substitutionCatalog.forEach((cls) => {
+      if (cls.members.includes(name) || cls.members.some((m) => m.startsWith(name.slice(0, 3)) && m !== name)) {
+        cls.members.forEach((m) => {
+          if (m !== name && !matches.includes(m)) matches.push(m);
+        });
+      }
+    });
+    if (!matches.length) return;
+    const top = matches.slice(0, 3);
+    fb.appendChild(document.createTextNode(" "));
+    top.forEach((m) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "compose-feedback-suggest";
+      btn.textContent = m;
+      btn.addEventListener("click", () => {
+        D.name.value = m;
+        D.name.dispatchEvent(new Event("input"));
+        D.name.focus();
+      });
+      fb.appendChild(btn);
+    });
+    if (matches.length > 3) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "compose-feedback-show-all";
+      more.textContent = `Show all ${matches.length} matches →`;
+      more.addEventListener("click", () => showCatalogPanel(fb, matches));
+      fb.appendChild(more);
+    }
+  }
+  function showCatalogPanel(fb, allMatches) {
+    let panel = fb.parentElement.querySelector(".compose-catalog-panel");
+    if (panel) { panel.remove(); return; }
+    panel = document.createElement("div");
+    panel.className = "compose-catalog-panel";
+    panel.appendChild(makeText("From the AMG substitution catalog:", "compose-catalog-entry-name"));
+    allMatches.forEach((m) => {
+      const row = document.createElement("div");
+      row.className = "compose-catalog-entry";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "compose-feedback-suggest";
+      btn.textContent = `Use ${m}`;
+      btn.addEventListener("click", () => {
+        D.name.value = m;
+        D.name.dispatchEvent(new Event("input"));
+        panel.remove();
+      });
+      row.appendChild(btn);
+      panel.appendChild(row);
+    });
+    fb.parentElement.appendChild(panel);
+  }
+  function makeText(text, cls) {
+    const s = document.createElement("span");
+    s.className = cls || "";
+    s.textContent = text;
+    return s;
+  }
+  function renderSectionIndicators(completion) {
+    Object.keys(completion).forEach((section) => {
+      const ind = document.querySelector(`.compose-section-indicator[data-indicator="${section}"]`);
+      if (!ind) return;
+      const status = completion[section];
+      ind.className = `compose-section-indicator ${status}`;
+      const glyph =
+        status === "complete" ? "●" :
+        status === "partial"  ? "◐" :
+                                "○";
+      ind.textContent = glyph;
+    });
+  }
+  function renderWarnings(warnings) {
+    const items = Object.keys(warnings);
+    if (!items.length) {
+      D.warnings.classList.add("hidden");
+      D.warnings.innerHTML = "";
+      return;
+    }
+    D.warnings.classList.remove("hidden");
+    D.warnings.innerHTML = "";
+    items.forEach((field) => {
+      const item = document.createElement("div");
+      item.className = "compose-warning-item";
+      item.textContent = `⚠ ${warnings[field]}`;
+      item.addEventListener("click", () => {
+        const target = document.querySelector(`[data-field="${cssEscape(field)}"]`);
+        if (target && typeof target.scrollIntoView === "function") {
+          target.scrollIntoView({ behavior: "smooth", block: "center" });
+          if (typeof target.focus === "function") target.focus();
+        }
+      });
+      D.warnings.appendChild(item);
+    });
+  }
+  function cssEscape(s) {
+    if (window.CSS && CSS.escape) return CSS.escape(s);
+    return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
+  }
+  function updateSubmitState(result) {
+    const hasUri = !!currentUri();
+    const valid = result && result.valid;
+    D.submit.disabled = readOnly || !valid || !hasUri;
+    D.submitTarget.textContent = hasUri
+      ? `Will submit to: ${currentUri()}`
+      : "Load a server URL to enable submission.";
+  }
+
+  // ---- YAML preview ----
+  function renderYaml() {
+    const draft = readDraft();
+    D.yamlPre.textContent = toYaml(draft);
+  }
+  function toYaml(obj, indent = 0) {
+    // Minimal hand-rolled YAML emitter — enough for spec dicts.
+    const pad = "  ".repeat(indent);
+    if (obj === null || obj === undefined) return "null";
+    if (typeof obj === "boolean") return obj ? "true" : "false";
+    if (typeof obj === "number") return String(obj);
+    if (typeof obj === "string") {
+      if (/^[\w\-./]+$/.test(obj) && obj.length < 120) return obj;
+      return JSON.stringify(obj);
+    }
+    if (Array.isArray(obj)) {
+      if (!obj.length) return "[]";
+      return obj.map((v) =>
+        `\n${pad}- ${toYamlValue(v, indent + 1)}`
+      ).join("");
+    }
+    const keys = Object.keys(obj);
+    if (!keys.length) return "{}";
+    return keys.map((k) => {
+      const val = obj[k];
+      if (val && typeof val === "object" && (Array.isArray(val) ? val.length : Object.keys(val).length)) {
+        return `${pad}${k}:${toYaml(val, indent + 1)}`;
+      }
+      return `${pad}${k}: ${toYamlValue(val, indent + 1)}`;
+    }).join("\n");
+  }
+  function toYamlValue(v, indent) {
+    if (v === null || v === undefined) return "null";
+    if (typeof v === "object") {
+      if (Array.isArray(v) && !v.length) return "[]";
+      if (!Array.isArray(v) && !Object.keys(v).length) return "{}";
+      // For inline-prefix lists/objects, emit on the next lines.
+      const inner = toYaml(v, indent);
+      // Strip first line indent so list-marker '- ' and key prefix line up.
+      return inner.startsWith("\n") ? inner.replace(/^\n/, "") : inner;
+    }
+    if (typeof v === "boolean") return v ? "true" : "false";
+    if (typeof v === "number") return String(v);
+    if (typeof v === "string") {
+      if (/^[\w\-./]+$/.test(v) && v.length < 120) return v;
+      return JSON.stringify(v);
+    }
+    return JSON.stringify(v);
+  }
+
+  // ---- onFormChange — single entry point for reactivity ----
+  function onFormChange(opts) {
+    opts = opts || {};
+    const ms = opts.immediate ? 0 : 200;
+    debounce("validate", runValidation, ms);
+    debounce("yaml", renderYaml, ms);
+  }
+
+  // ---- library rendering ----
+  function renderLibrary() {
+    D.libList.innerHTML = "";
+    if (!library.entries.length) {
+      D.libEmpty.classList.remove("hidden");
+      return;
+    }
+    D.libEmpty.classList.add("hidden");
+    library.entries.forEach((e) => {
+      const li = document.createElement("li");
+      li.className = "lib-card" + (e.id === activeLibId ? " active" : "");
+      li.innerHTML =
+        `<div class="lib-card-row">` +
+          `<span class="lib-name">${escapeHtml(e.name || "(unnamed)")}</span>` +
+          `<span class="lib-status-dot ${e.status || "draft"}" title="${e.status || "draft"}"></span>` +
+        `</div>` +
+        `<div class="lib-meta">${escapeHtml(e.status || "draft")} · ${escapeHtml(relTime(e.saved_at))}</div>` +
+        (e.submitted_to ? `<div class="lib-server">${escapeHtml(serverFromUri(e.submitted_to))}</div>` : "");
+      li.addEventListener("click", () => loadLibraryEntry(e.id));
+      D.libList.appendChild(li);
+    });
+  }
+  function serverFromUri(uri) {
+    if (!uri) return "";
+    const m = uri.match(/^agtp:\/\/(?:[0-9a-f]+@)?(.+)$/i);
+    return m ? m[1] : uri;
+  }
+  function loadLibraryEntry(id) {
+    const entry = library.entries.find((e) => e.id === id);
+    if (!entry) return;
+    activeLibId = id;
+    readOnly = entry.status === "submitted" || entry.status === "accepted";
+    writeDraft(entry.spec || {});
+    D.composeEmpty.classList.add("hidden");
+    D.composeActive.classList.remove("hidden");
+    setReadOnly(readOnly, entry);
+    renderLibrary();
+    onFormChange({ immediate: true });
+  }
+  function setReadOnly(yes, entry) {
+    const inputs = D.composeActive.querySelectorAll(
+      "input, textarea, select, button.param-row-del, button.compose-params-add, button.impact-btn, button.chip"
+    );
+    inputs.forEach((el) => {
+      if (el.type === "checkbox" || el.type === "radio") {
+        el.disabled = yes;
+      } else if (el.tagName === "BUTTON") {
+        el.disabled = yes;
+      } else {
+        el.readOnly = yes;
+      }
+    });
+    if (yes && entry) {
+      D.composeRO.classList.remove("hidden");
+      const when = entry.submitted_at ? new Date(entry.submitted_at).toLocaleString() : "(unknown date)";
+      D.composeRO.innerHTML =
+        `<span>This method was submitted on ${escapeHtml(when)}.</span>` +
+        `<button type="button" id="cf-edit-as-new">Edit as new draft</button>`;
+      D.composeRO.querySelector("#cf-edit-as-new").addEventListener("click", () => {
+        forkAsNewDraft(entry);
+      });
+    } else {
+      D.composeRO.classList.add("hidden");
+      D.composeRO.innerHTML = "";
+    }
+    D.submit.disabled = yes;
+    D.saveFile.disabled = false;     // saving is always allowed
+    D.addLibrary.disabled = false;
+  }
+  function forkAsNewDraft(entry) {
+    const spec = JSON.parse(JSON.stringify(entry.spec || {}));
+    const id = newLibId(spec.name);
+    const newEntry = {
+      id,
+      name: spec.name,
+      spec,
+      status: "draft",
+      saved_at: nowIso(),
+    };
+    library.entries.unshift(newEntry);
+    saveLibrary();
+    activeLibId = id;
+    readOnly = false;
+    writeDraft(spec);
+    setReadOnly(false, null);
+    renderLibrary();
+    onFormChange({ immediate: true });
+    showToast("Forked as new draft.");
+  }
+  function newDraft() {
+    activeLibId = null;
+    readOnly = false;
+    setReadOnly(false, null);
+    writeDraft({
+      name: "",
+      semantic: { actor: "agent", is_idempotent: false },
+      error_codes: [400, 405, 422],
+    });
+    D.response.classList.add("hidden");
+    D.response.innerHTML = "";
+    D.composeEmpty.classList.add("hidden");
+    D.composeActive.classList.remove("hidden");
+    renderLibrary();
+    onFormChange({ immediate: true });
+    setTimeout(() => D.name.focus(), 0);
+  }
+  function addToLibrary() {
+    const draft = readDraft();
+    const id = activeLibId || newLibId(draft.name);
+    const existing = library.entries.find((e) => e.id === id);
+    const entry = existing || { id, status: "draft", saved_at: nowIso() };
+    entry.name = draft.name || "(unnamed)";
+    entry.spec = draft;
+    entry.saved_at = nowIso();
+    if (!existing) library.entries.unshift(entry);
+    library.entries = library.entries.slice(0, LIBRARY_LIMIT);
+    activeLibId = id;
+    saveLibrary();
+    renderLibrary();
+    showToast("Saved to library.");
+  }
+
+  // ---- submission flow ----
+  async function submitPropose() {
+    const uri = currentUri();
+    if (!uri) {
+      showToast("Load a server URL first.");
+      return;
+    }
+    const draft = readDraft();
+    D.submit.disabled = true;
+    D.submit.textContent = "Submitting…";
+    let result;
+    try {
+      result = await window.pywebview.api.invoke(uri, "PROPOSE", draft);
+    } catch (e) {
+      result = { ok: false, error: String(e) };
+    }
+    D.submit.textContent = "Submit PROPOSE";
+    handleProposeResponse(result, draft);
+  }
+  function handleProposeResponse(result, draft) {
+    D.response.classList.remove("hidden");
+    D.response.className = "compose-response";
+    D.response.innerHTML = "";
+    if (!result || !result.ok) {
+      D.response.classList.add("refused");
+      D.response.innerHTML = `<div class="compose-response-title">✗ Bridge error</div>` +
+        `<div>${escapeHtml(result && result.error || "(unknown)")}</div>`;
+      D.submit.disabled = false;
+      return;
+    }
+    const code = result.status_code;
+    const payload = parseBody(result.body);
+    if (code === 200) {
+      const synth = (payload && payload.synthesis) || {};
+      D.response.classList.add("accepted");
+      const id = synth.synthesis_id || "(unknown)";
+      const target = synth.target_method || "";
+      const mapping = synth.parameter_mapping || {};
+      const mappingHtml = Object.keys(mapping).map((p) =>
+        `<dd>${escapeHtml(target)} → ${escapeHtml(mapping[p])} (from ${escapeHtml(p)})</dd>`
+      ).join("");
+      D.response.innerHTML =
+        `<div class="compose-response-title">✓ Server accepted. Synthesis instantiated.</div>` +
+        `<dl>` +
+          `<dt>Synthesis ID</dt><dd>${escapeHtml(id)}</dd>` +
+          (target ? `<dt>Underlying method</dt><dd>${escapeHtml(target)}</dd>` : "") +
+          mappingHtml +
+        `</dl>` +
+        `<div class="compose-response-actions">` +
+          `<button type="button" id="cf-go-invoke">Invoke this synthesis</button>` +
+        `</div>`;
+      const btn = D.response.querySelector("#cf-go-invoke");
+      if (btn) btn.addEventListener("click", () => {
+        showToast(`Synthesis ${id} ready — switch to the Methods tab to invoke.`);
+        closeDrawer();
+      });
+      markLibraryStatus("accepted", { synthesis_id: id });
+    } else if (code === 460) {
+      const err = (payload && payload.error) || {};
+      D.response.classList.add("refused");
+      D.response.innerHTML =
+        `<div class="compose-response-title">✗ Server refused negotiation.</div>` +
+        `<dl>` +
+          `<dt>Reason</dt><dd>${escapeHtml(err.reason || "(unknown)")}</dd>` +
+          (err.explanation ? `<dt>Detail</dt><dd>${escapeHtml(err.explanation)}</dd>` : "") +
+        `</dl>` +
+        `<div>Try a different server, or modify and re-submit.</div>`;
+      markLibraryStatus("refused");
+    } else if (code === 461) {
+      const counter = (payload && payload.counter_proposal) || {};
+      D.response.classList.add("countered");
+      const sName = counter.name || "(unknown)";
+      D.response.innerHTML =
+        `<div class="compose-response-title">↻ Server proposed an alternative.</div>` +
+        `<dl>` +
+          `<dt>Suggests</dt><dd>${escapeHtml(sName)} instead of ${escapeHtml(draft.name || "")}</dd>` +
+          (counter.description ? `<dt>Reason</dt><dd>${escapeHtml(counter.description)}</dd>` : "") +
+        `</dl>` +
+        renderCounterCard(draft, counter) +
+        `<div class="compose-response-actions">` +
+          `<button type="button" id="cf-counter-accept">Accept counter and re-submit</button>` +
+          `<button type="button" id="cf-counter-modify" class="secondary">Modify and re-submit</button>` +
+          `<button type="button" id="cf-counter-decline" class="secondary">Decline</button>` +
+        `</div>`;
+      D.response.querySelector("#cf-counter-accept").addEventListener("click", () => {
+        D.name.value = sName;
+        D.name.dispatchEvent(new Event("input"));
+        submitPropose();
+      });
+      D.response.querySelector("#cf-counter-modify").addEventListener("click", () => {
+        D.response.classList.add("hidden");
+      });
+      D.response.querySelector("#cf-counter-decline").addEventListener("click", () => {
+        D.response.classList.add("hidden");
+      });
+      markLibraryStatus("countered", { counter_proposal: counter });
+    } else {
+      D.response.classList.add("refused");
+      D.response.innerHTML =
+        `<div class="compose-response-title">${escapeHtml(`${code} ${result.status_text || ""}`)}</div>` +
+        `<pre>${escapeHtml(result.body || "")}</pre>`;
+    }
+    D.submit.disabled = false;
+    onFormChange({ immediate: true });
+  }
+  function parseBody(body) {
+    if (!body) return null;
+    try { return JSON.parse(body); } catch (e) { return null; }
+  }
+  function renderCounterCard(orig, counter) {
+    const diffs = [];
+    if (counter.name && counter.name !== orig.name) {
+      diffs.push(`Name: ${escapeHtml(orig.name)} → <span class="counter-diff">${escapeHtml(counter.name)}</span>`);
+    }
+    if (Array.isArray(counter.required_params)) {
+      const ourNames = (orig.required_params || []).map((p) => p.name).sort();
+      const theirNames = counter.required_params.map((p) => p.name).sort();
+      if (JSON.stringify(ourNames) === JSON.stringify(theirNames)) {
+        diffs.push(`Required params: identical (${ourNames.join(", ") || "(none)"})`);
+      } else {
+        diffs.push(`Required params: <span class="counter-diff">${escapeHtml(ourNames.join(","))} → ${escapeHtml(theirNames.join(","))}</span>`);
+      }
+    }
+    if (!diffs.length) return "";
+    return `<div class="counter-card">Differences:<br>${diffs.map((d) => `· ${d}`).join("<br>")}</div>`;
+  }
+  function markLibraryStatus(status, extra) {
+    if (!activeLibId) {
+      // Auto-save submitted drafts into the library so they don't go missing.
+      addToLibrary();
+    }
+    const entry = library.entries.find((e) => e.id === activeLibId);
+    if (!entry) return;
+    entry.status = status;
+    entry.submitted_to = currentUri();
+    entry.submitted_at = nowIso();
+    Object.assign(entry, extra || {});
+    saveLibrary();
+    renderLibrary();
+  }
+
+  // ---- save-as-file flow ----
+  async function saveAsFile() {
+    const draft = readDraft();
+    const filename = (draft.name || "method").toLowerCase() + ".method.yaml";
+    let path = "";
+    try {
+      path = await window.pywebview.api.save_method_yaml(draft, filename);
+    } catch (e) { /* ignore */ }
+    if (path) {
+      showToast(`Saved to ${path}`);
+    } else {
+      showToast("Save cancelled or pyyaml not installed.");
+    }
+  }
+
+  async function exportLibrary() {
+    let path = "";
+    try {
+      path = await window.pywebview.api.export_library(library);
+    } catch (e) { /* ignore */ }
+    if (path) showToast(`Exported to ${path}`);
+  }
+  async function importLibrary() {
+    let data = {};
+    try {
+      data = await window.pywebview.api.import_library();
+    } catch (e) { /* ignore */ }
+    if (!data || !Array.isArray(data.entries)) {
+      showToast("Import cancelled or invalid file.");
+      return;
+    }
+    library = { version: 1, entries: data.entries.slice(0, LIBRARY_LIMIT) };
+    saveLibrary();
+    renderLibrary();
+    showToast(`Imported ${library.entries.length} entries.`);
+  }
+  function clearLibrary() {
+    if (!confirm("Clear all saved methods? This cannot be undone.")) return;
+    library = { version: 1, entries: [] };
+    saveLibrary();
+    activeLibId = null;
+    renderLibrary();
+    D.composeEmpty.classList.remove("hidden");
+    D.composeActive.classList.add("hidden");
+  }
+
+  // ---- wire everything up ----
+  function wire() {
+    D.toggle.addEventListener("click", toggleDrawer);
+    D.closeBtn.addEventListener("click", closeDrawer);
+    D.libNew.addEventListener("click", newDraft);
+    D.emptyNew.addEventListener("click", newDraft);
+    D.subAdd.addEventListener("click", () => { addSubRow(); onFormChange(); });
+
+    // Library menu
+    D.libMenuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      D.libMenu.classList.toggle("hidden");
+    });
+    document.addEventListener("click", (e) => {
+      if (!D.libMenu.classList.contains("hidden") && !D.libMenu.contains(e.target) && e.target !== D.libMenuBtn) {
+        D.libMenu.classList.add("hidden");
+      }
+    });
+    D.libMenu.querySelectorAll("[data-lib-action]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        D.libMenu.classList.add("hidden");
+        const action = btn.dataset.libAction;
+        if (action === "export") exportLibrary();
+        else if (action === "import") importLibrary();
+        else if (action === "clear") clearLibrary();
+      });
+    });
+
+    // Section collapse toggles
+    $$(".compose-section-head").forEach((head) => {
+      head.addEventListener("click", () => {
+        const sec = head.closest(".compose-section");
+        if (sec) sec.classList.toggle("collapsed");
+      });
+    });
+
+    // Continuous validation on the name field — fires on every
+    // keystroke after the third character, per spec.
+    D.name.addEventListener("input", () => {
+      if (D.name.value.trim().length >= 3) {
+        debounce("validate", runValidation, 60);
+      }
+      debounce("yaml", renderYaml, 120);
+    });
+
+    // On-blur validation for everything else.
+    [D.description, D.intent, D.outcome, D.namespace].forEach((el) => {
+      el.addEventListener("input", () => onFormChange());
+      el.addEventListener("blur", () => onFormChange({ immediate: true }));
+    });
+    D.capability.addEventListener("change", () => onFormChange({ immediate: true }));
+    D.idempotent.addEventListener("change", () => onFormChange({ immediate: true }));
+    document.querySelectorAll('input[name="cf-actor"]').forEach((r) =>
+      r.addEventListener("change", () => onFormChange({ immediate: true })));
+
+    // Confidence slider
+    D.confidence.addEventListener("input", () => {
+      const v = Number(D.confidence.value);
+      D.confidenceVal.textContent = v ? v.toFixed(2) : "—";
+      onFormChange();
+    });
+
+    // Impact buttons + auto-snap to 0.85 when irreversible chosen low.
+    $$(".impact-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tier = btn.dataset.impact;
+        const wasActive = btn.classList.contains("active");
+        $$(".impact-btn").forEach((b) => b.classList.remove("active"));
+        if (!wasActive) btn.classList.add("active");
+        if (!wasActive && tier === "irreversible") {
+          if (Number(D.confidence.value) < 0.85) {
+            D.confidence.value = "0.85";
+            D.confidenceVal.textContent = "0.85";
+            showToast("AMG recommends ≥ 0.85 for irreversible methods.");
+          }
+        }
+        onFormChange({ immediate: true });
+      });
+    });
+
+    // Error code chips
+    $$("#cf-error-codes .chip").forEach((c) => {
+      c.addEventListener("click", () => {
+        c.classList.toggle("active");
+        onFormChange({ immediate: true });
+      });
+    });
+
+    // Parameter table "+ Add" buttons
+    $$(".compose-params-add").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        addParamRow(btn.dataset.add);
+        onFormChange();
+      });
+    });
+
+    // Submit / Save / Add to library
+    D.submit.addEventListener("click", submitPropose);
+    D.saveFile.addEventListener("click", saveAsFile);
+    D.addLibrary.addEventListener("click", addToLibrary);
+
+    // YAML preview
+    D.yamlCopy.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(D.yamlPre.textContent); showToast("Copied YAML."); }
+      catch (e) { showToast("Clipboard unavailable."); }
+    });
+    D.yamlToggle.addEventListener("click", () => {
+      yamlCollapsed = !yamlCollapsed;
+      D.yamlPane.classList.toggle("collapsed", yamlCollapsed);
+      D.composePane.classList.toggle("yaml-collapsed", yamlCollapsed);
+    });
+
+    // Resize handle
+    let resizeStartY = 0, resizeStartH = 0;
+    D.resize.addEventListener("mousedown", (e) => {
+      resizeStartY = e.clientY;
+      resizeStartH = D.drawer.getBoundingClientRect().height;
+      const onMove = (ev) => {
+        const dy = resizeStartY - ev.clientY;
+        const h = Math.max(160, Math.min(window.innerHeight - 80, resizeStartH + dy));
+        D.drawer.style.height = h + "px";
+        drawerState.height = h;
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        saveDrawerState();
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "F12") {
+        e.preventDefault();
+        toggleDrawer();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "I" || e.key === "i")) {
+        e.preventDefault();
+        toggleDrawer();
+        return;
+      }
+      if (e.key === "Escape" && !D.drawer.classList.contains("hidden")) {
+        if (D.drawer.contains(document.activeElement) || document.activeElement === document.body) {
+          closeDrawer();
+        }
+      }
+    });
+
+    // Re-validate when the active main tab changes (URL changes).
+    if (els.uri) {
+      els.uri.addEventListener("input", () => onFormChange());
+    }
+  }
+
+  async function bootstrap() {
+    await whenApiReady();
+    try {
+      substitutionCatalog = await window.pywebview.api.get_substitution_catalog();
+    } catch (e) { substitutionCatalog = []; }
+    wire();
+    renderLibrary();
+    if (drawerState.open) {
+      openDrawer();
+      // Fall through: empty state visible until user picks New or a card.
+    }
+    // Pre-render YAML so the pane isn't blank on first open.
+    renderYaml();
+  }
+
+  bootstrap();
+})();

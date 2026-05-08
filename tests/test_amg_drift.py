@@ -222,6 +222,32 @@ class BehavioralParityTests(unittest.TestCase):
             )
         self.assertEqual(str(cclient.exception), str(cserver.exception))
 
+    def test_validate_partial_parity(self):
+        # validate_partial drives the Elemen Compose drawer; both
+        # sides must produce identical structured output for the
+        # same draft so a UI authored against either side works
+        # against the other.
+        client_amg, server_amg = _import_both()
+        draft = {
+            "name": "STATUS",
+            "description": "check the status of running things in the system",
+            "semantic": {
+                "intent": "checks the running status of a thing",
+                "actor": "agent",
+                "outcome": "the running status is reported back",
+                "impact_tier": "irreversible",
+                "confidence_guidance": 0.5,
+            },
+            "namespace": "acme-store",
+            "source": "amg/1.0",
+        }
+        c_out = client_amg.validate_partial(draft)
+        s_out = server_amg.validate_partial(draft)
+        self.assertEqual(c_out, s_out)
+        # Sanity: STATUS triggers the stoplist; should be invalid.
+        self.assertFalse(c_out["valid"])
+        self.assertIn("name", c_out["errors"])
+
     def test_irreversible_low_confidence_warning_is_identical(self):
         client_amg, server_amg = _import_both()
         params = dict(

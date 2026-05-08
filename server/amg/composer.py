@@ -910,6 +910,365 @@ def compose_from_yaml(
     return compose_from_dict(data, known_methods=known_methods)
 
 
+# ---------------------------------------------------------------------------
+# Partial validation (UI-friendly).
+#
+# ``validate_partial`` is the entry point used by the Elemen Compose
+# drawer (and any other UI that wants per-field feedback while the
+# author is still typing). Unlike ``compose_method``, it does not
+# require a complete spec — fields that are absent or empty are
+# skipped, not rejected, so the UI can call it on every keystroke
+# without spamming the user with "this field is required" errors
+# they have not yet had a chance to fill.
+#
+# The output is keyed by field path so the UI can render feedback
+# directly under the relevant input. Field paths use dot notation:
+#
+#     name                          -> the method name input
+#     description                   -> the description textarea
+#     semantic.intent               -> the intent textarea
+#     semantic.actor                -> the actor radios
+#     semantic.outcome              -> the outcome textarea
+#     semantic.capability           -> the capability dropdown
+#     semantic.confidence_guidance  -> the confidence slider
+#     semantic.impact_tier          -> the impact-tier toggle
+#     semantic.is_idempotent        -> the idempotent checkbox
+#     required_params[i].{name,type,description,schema}
+#     optional_params[i].{...}
+#     namespace                     -> the namespace input
+#     error_codes                   -> the multi-select chips
+#     substitutes_for[i].{target,conditions}
+# ---------------------------------------------------------------------------
+
+
+# Section -> ordered list of field paths that belong to it. Used by
+# the completion summary and by the UI to scroll-to-field on warning
+# clicks. Paths under an indexed list (e.g. required_params[0].name)
+# match the prefix entries here.
+_PARTIAL_SECTIONS: Dict[str, List[str]] = {
+    "identity": ["name", "description"],
+    "semantic": [
+        "semantic.intent",
+        "semantic.actor",
+        "semantic.outcome",
+        "semantic.capability",
+        "semantic.confidence_guidance",
+        "semantic.impact_tier",
+        "semantic.is_idempotent",
+    ],
+    "parameters": ["required_params", "optional_params"],
+    "authority": ["source", "namespace", "error_codes"],
+    "substitution": ["substitutes_for"],
+}
+
+
+def _present(value: Any) -> bool:
+    """Return True when a draft field has user-supplied content."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    return True
+
+
+def _check_name_partial(name: str) -> Optional[str]:
+    """Run lexical / reserved / stoplist checks against a name draft."""
+    import re
+    if not re.match(r"^[A-Z]{3,32}$", name):
+        if name and name.isalpha():
+            return (
+                f"{name!r} is not valid; method names must be 3-32 "
+                f"uppercase ASCII letters (try {name.upper()!r})"
+            )
+        return (
+            f"{name!r} is not valid; use 3-32 uppercase ASCII letters "
+            f"with no digits, hyphens, underscores, or unicode"
+        )
+    if name in HTTP_METHODS:
+        return f"{name!r} is reserved as an HTTP method"
+    from server.amg.reserved import EMBEDDED_METHODS
+    if name in EMBEDDED_METHODS:
+        return (
+            f"{name!r} is one of the 12 embedded AGTP methods and "
+            f"cannot be redefined"
+        )
+    if name in STOPLIST:
+        return (
+            f"{name!r} is in the AMG stoplist (describes a state, "
+            f"not an action)"
+        )
+    return None
+
+
+def validate_partial(draft: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate a partial composition draft with per-field feedback.
+
+    Unlike :func:`compose_method`, missing fields do not raise — they
+    simply do not contribute errors. This is the contract the UI
+    relies on while the author is still typing.
+
+    Returns a dict with the shape::
+
+        {
+          "valid": bool,
+          "errors": {field_path: error_message, ...},
+          "warnings": {field_path: warning_message, ...},
+          "completion": {section_name: status, ...},
+        }
+
+    where ``status`` is one of ``"untouched"``, ``"partial"``,
+    ``"complete"``. ``valid`` is True when every populated field
+    passes its individual checks AND the cross-field coherence layer
+    raises no errors (warnings do not flip the flag).
+    """
+    if not isinstance(draft, dict):
+        return {
+            "valid": False,
+            "errors": {"_root": "draft must be an object"},
+            "warnings": {},
+            "completion": {s: "untouched" for s in _PARTIAL_SECTIONS},
+        }
+
+    errors: Dict[str, str] = {}
+    warnings: Dict[str, str] = {}
+
+    name = (draft.get("name") or "").strip()
+    if _present(name):
+        msg = _check_name_partial(name)
+        if msg:
+            errors["name"] = msg
+
+    description = (draft.get("description") or "").strip()
+    if _present(description) and len(description) < 20:
+        errors["description"] = (
+            f"description is {len(description)} chars; aim for at "
+            f"least 20"
+        )
+
+    sb = draft.get("semantic") or {}
+    if not isinstance(sb, dict):
+        errors["semantic"] = "semantic block must be an object"
+        sb = {}
+
+    intent = (sb.get("intent") or "").strip()
+    if _present(intent) and len(intent) < 20:
+        errors["semantic.intent"] = (
+            f"intent is {len(intent)} chars; aim for at least 20"
+        )
+
+    actor = (sb.get("actor") or "").strip()
+    if _present(actor) and actor not in ALL_ACTORS:
+        errors["semantic.actor"] = (
+            f"actor must be one of {sorted(ALL_ACTORS)} (got {actor!r})"
+        )
+
+    outcome = (sb.get("outcome") or "").strip()
+    if _present(outcome) and len(outcome) < 20:
+        errors["semantic.outcome"] = (
+            f"outcome is {len(outcome)} chars; aim for at least 20"
+        )
+
+    capability = (sb.get("capability") or "").strip() or None
+    if capability is not None and capability not in ALL_CAPABILITIES:
+        errors["semantic.capability"] = (
+            f"capability must be one of {sorted(ALL_CAPABILITIES)} "
+            f"(got {capability!r})"
+        )
+
+    impact_tier = (sb.get("impact_tier") or "").strip() or None
+    if impact_tier is not None and impact_tier not in ALL_IMPACT_TIERS:
+        errors["semantic.impact_tier"] = (
+            f"impact_tier must be one of {sorted(ALL_IMPACT_TIERS)} "
+            f"(got {impact_tier!r})"
+        )
+
+    confidence = sb.get("confidence_guidance")
+    if confidence is not None and confidence != "":
+        try:
+            cg = float(confidence)
+        except (TypeError, ValueError):
+            errors["semantic.confidence_guidance"] = (
+                f"confidence_guidance must be a number (got {confidence!r})"
+            )
+            cg = None
+        else:
+            if not (0.0 <= cg <= 1.0):
+                errors["semantic.confidence_guidance"] = (
+                    f"confidence_guidance must be in [0.0, 1.0] (got {cg})"
+                )
+        if (
+            cg is not None
+            and impact_tier == "irreversible"
+            and cg < IRREVERSIBLE_CONFIDENCE_FLOOR
+        ):
+            warnings["semantic.confidence_guidance"] = (
+                f"impact_tier=irreversible recommends "
+                f"confidence_guidance >= {IRREVERSIBLE_CONFIDENCE_FLOOR}; "
+                f"got {cg}"
+            )
+
+    # Description / intent overlap warning, mirroring the composer's
+    # coherence layer.
+    if (
+        description
+        and intent
+        and description.lower() == intent.lower()
+    ):
+        warnings["description"] = (
+            "description matches intent verbatim; describe the "
+            "implementation (what + how) rather than the goal"
+        )
+
+    # Parameters: validate each populated row. Empty rows are skipped.
+    for key in ("required_params", "optional_params"):
+        rows = draft.get(key) or []
+        if not isinstance(rows, list):
+            errors[key] = f"{key} must be a list"
+            continue
+        for i, row in enumerate(rows):
+            if not isinstance(row, dict):
+                errors[f"{key}[{i}]"] = "parameter row must be an object"
+                continue
+            pname = (row.get("name") or "").strip()
+            ptype = (row.get("type") or "").strip()
+            pdesc = (row.get("description") or "").strip()
+            if not _present(pname) and not _present(ptype) and not _present(pdesc):
+                continue  # blank row; nothing to flag yet
+            if pname:
+                import re
+                if not re.match(r"^[a-z][a-z0-9_]*$", pname):
+                    errors[f"{key}[{i}].name"] = (
+                        f"parameter name {pname!r} must be lowercase "
+                        f"snake_case"
+                    )
+            else:
+                errors[f"{key}[{i}].name"] = "parameter name is required"
+            if ptype:
+                if ptype not in PARAM_TYPES:
+                    errors[f"{key}[{i}].type"] = (
+                        f"parameter type must be one of "
+                        f"{sorted(PARAM_TYPES)} (got {ptype!r})"
+                    )
+                elif ptype in ("object", "array") and not row.get("schema"):
+                    errors[f"{key}[{i}].schema"] = (
+                        f"{ptype!r} parameters must declare a JSON schema"
+                    )
+            if not pdesc:
+                errors[f"{key}[{i}].description"] = (
+                    "parameter description is required"
+                )
+
+    # Authority section.
+    namespace = (draft.get("namespace") or "").strip()
+    source = (draft.get("source") or "amg/1.0").strip()
+    if source == SOURCE_AMG and _present(namespace):
+        # Lower-snake guidance is a soft check (warning, not error).
+        import re
+        if not re.match(r"^[a-z][a-z0-9-]*$", namespace):
+            warnings["namespace"] = (
+                "namespace is conventionally lowercase with hyphens "
+                "(e.g., acme-finance)"
+            )
+    elif source == SOURCE_AMG and not _present(namespace):
+        # Required by the validator, but only flag once the user has
+        # started filling the form — namespace alone shouldn't error
+        # on a brand-new draft.
+        if any(_present(draft.get(k)) for k in ("name", "semantic")):
+            errors["namespace"] = (
+                "amg/1.0 methods must declare a namespace"
+            )
+
+    error_codes = draft.get("error_codes")
+    if _present(error_codes):
+        if not isinstance(error_codes, list):
+            errors["error_codes"] = "error_codes must be a list of integers"
+        else:
+            for i, code in enumerate(error_codes):
+                try:
+                    int(code)
+                except (TypeError, ValueError):
+                    errors[f"error_codes[{i}]"] = (
+                        f"error code {code!r} must be an integer"
+                    )
+            if 422 not in [int(c) for c in error_codes if _is_int_like(c)]:
+                warnings["error_codes"] = (
+                    "error_codes should include 422 (validation refused)"
+                )
+
+    # Substitutes-for: each entry should at least name a target.
+    subs = draft.get("substitutes_for") or []
+    if isinstance(subs, list):
+        for i, entry in enumerate(subs):
+            if not isinstance(entry, dict):
+                errors[f"substitutes_for[{i}]"] = (
+                    "substitution entry must be an object"
+                )
+                continue
+            target = (entry.get("target") or entry.get("target_method") or "").strip()
+            if not _present(target):
+                errors[f"substitutes_for[{i}].target"] = (
+                    "substitution target is required"
+                )
+
+    completion = _completion_summary(draft, errors)
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "completion": completion,
+    }
+
+
+def _is_int_like(value: Any) -> bool:
+    try:
+        int(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _completion_summary(
+    draft: Dict[str, Any],
+    errors: Dict[str, str],
+) -> Dict[str, str]:
+    """Per-section completion: untouched / partial / complete."""
+    result: Dict[str, str] = {}
+    for section, fields in _PARTIAL_SECTIONS.items():
+        present = 0
+        total = len(fields)
+        for path in fields:
+            value = _walk_path(draft, path)
+            if _present(value):
+                present += 1
+        section_has_error = any(
+            err_path == section
+            or err_path.startswith(f"{section}.")
+            or any(err_path == p or err_path.startswith(f"{p}.") or err_path.startswith(f"{p}[")
+                   for p in fields)
+            for err_path in errors
+        )
+        if present == 0:
+            result[section] = "untouched"
+        elif section_has_error or present < total:
+            result[section] = "partial"
+        else:
+            result[section] = "complete"
+    return result
+
+
+def _walk_path(obj: Any, path: str) -> Any:
+    """Resolve a dotted field path against the draft dict."""
+    cur: Any = obj
+    for segment in path.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(segment)
+    return cur
+
+
 __all__ = [
     "CompositionError",
     "MethodBuilder",
@@ -918,4 +1277,5 @@ __all__ = [
     "compose_from_yaml",
     "compose_method",
     "suggest_fix",
+    "validate_partial",
 ]
