@@ -18,33 +18,20 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
-# AGTP v1 reference library lives outside this project. Allow override via
-# AGTP_LIB_PATH env var; otherwise try two common layouts:
-#   1. elemen is a subdirectory of the agtp repo  -> ../v1
-#   2. elemen is a sibling of the agtp repo       -> ../agtp/v1
-_DEFAULT_LIB_CANDIDATES = [
-    Path(os.environ.get("AGTP_LIB_PATH", "")),
-    Path(__file__).resolve().parent.parent / "v1",
-    Path(__file__).resolve().parent.parent / "agtp" / "v1",
-]
+# Make the repo's ``core`` package importable when elemen is launched
+# as ``python elemen/app.py`` from anywhere. The repo root is the
+# directory containing core/, server/, client/, etc.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-for _candidate in _DEFAULT_LIB_CANDIDATES:
-    if _candidate and _candidate.is_dir() and (_candidate / "wire_v2.py").exists():
-        sys.path.insert(0, str(_candidate))
-        break
-else:
-    raise RuntimeError(
-        "Could not locate AGTP v1 library (agent_id.py, agent_document.py, "
-        "wire_v2.py). Set AGTP_LIB_PATH env var to its directory."
-    )
-
-from agent_id import parse_uri, ParsedURI, AgentIDError  # noqa: E402
-from agent_document import (  # noqa: E402
+from core.ids import parse_uri, ParsedURI, AgentIDError  # noqa: E402
+from core.identity import (  # noqa: E402
     CONTENT_TYPE_HTML,
     CONTENT_TYPE_JSON,
     CONTENT_TYPE_YAML,
 )
-import wire_v2 as wire  # noqa: E402
+from core import wire  # noqa: E402
 
 
 DEFAULT_REGISTRY_URL = "https://registry.agtp.io"
@@ -314,6 +301,86 @@ def _fetch_manifest(
     }
 
 
+def fetch_mcp_catalog(
+    catalog_url: str,
+    *,
+    insecure_skip_verify: bool = False,
+) -> dict:
+    """
+    Fetch a Model Context Protocol tool catalog over HTTPS.
+
+    MCP runs on HTTPS, not on AGTP, so this side-steps the wire layer
+    and uses urllib. Returns a dict with the same envelope shape as
+    other elemen client functions:
+
+      ok=True:  {ok, kind="mcp_catalog", url, status_code, body, tools}
+      ok=False: {ok, error, stage}
+
+    The ``tools`` field is best-effort: when the catalog is a JSON
+    object with a ``tools`` array, that array is exposed as-is; when
+    the catalog is the array itself, it is returned directly. Other
+    shapes pass through as ``raw``.
+    """
+    import urllib.error
+    import urllib.request
+    import ssl as _ssl
+
+    if not catalog_url or not catalog_url.startswith(("http://", "https://")):
+        return {
+            "ok": False,
+            "error": f"catalog URL must be HTTP(S): {catalog_url!r}",
+            "stage": "parse",
+        }
+
+    ctx = None
+    if insecure_skip_verify:
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+
+    try:
+        with urllib.request.urlopen(catalog_url, timeout=10.0, context=ctx) as resp:
+            status = resp.getcode()
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        return {
+            "ok": False,
+            "error": f"catalog HTTP {exc.code}",
+            "stage": "fetch",
+            "url": catalog_url,
+        }
+    except (urllib.error.URLError, OSError) as exc:
+        return {
+            "ok": False,
+            "error": f"catalog unreachable: {exc}",
+            "stage": "fetch",
+            "url": catalog_url,
+        }
+
+    tools: list = []
+    raw = None
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, dict) and isinstance(parsed.get("tools"), list):
+            tools = parsed["tools"]
+        elif isinstance(parsed, list):
+            tools = parsed
+        else:
+            raw = parsed
+    except json.JSONDecodeError:
+        raw = body
+
+    return {
+        "ok": True,
+        "kind": "mcp_catalog",
+        "url": catalog_url,
+        "status_code": status,
+        "body": body,
+        "tools": tools,
+        "raw": raw,
+    }
+
+
 def fetch_manifest(
     host: str,
     port: int,
@@ -326,7 +393,7 @@ def fetch_manifest(
     by the matching handshake when an agent URI is loaded). Returns
     the same shape as ``fetch`` for a server-level URI.
     """
-    from agtp.ids import ParsedURI
+    from core.ids import ParsedURI
     parsed = ParsedURI(agent_id=None, host=host, port=port)
     return _fetch_manifest(
         parsed,

@@ -41,25 +41,25 @@ credentials/
 # The registry's data file MUST live outside the repo on the VPS
 # (typically /var/lib/agtp/registry_data.json). Never commit this.
 registry_data.json
-v1/registry/registry_data.json
+server/transcripts/registry_data.json
 
 # Server logs and audit trails
 *.log
 logs/
-v1/transcripts/
+server/transcripts/
 transcripts/
 
 # Captured outputs from demo runs
-v1/transcripts/demo-output.txt
-v1/transcripts/server.log
-v1/transcripts/registry.log
-v1/transcripts/lauren.html
-v1/transcripts/lauren-card.png
+server/transcripts/demo-output.txt
+server/transcripts/server.log
+server/transcripts/registry.log
+server/transcripts/lauren.html
+server/transcripts/lauren-card.png
 
 # Custom agent definitions added at runtime should be reviewed before
 # committing. The seed agents (Lauren) are tracked; runtime additions
 # go in agents-runtime/ which is gitignored.
-v1/server/agents-runtime/
+server/agents-runtime/
 
 # -----------------------------------------------------------------------------
 # elemen (AGTP browser) — runtime data

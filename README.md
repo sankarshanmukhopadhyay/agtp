@@ -5,56 +5,91 @@ Specification, Internet-Draft, and reference implementation.
 
 - **IETF submission:** `draft-hood-independent-agtp-06`
 - **IANA-registered ports:** 4480/TCP (`agtp`) and 4480/UDP (`agtp-quic`)
-- **Reference implementation:** `v1/` (this repository)
+- **Reference implementation:** `core/`, `server/`, `client/`, `registry/` (this repository)
 - **First registered agent:** Lauren —
   `agtp://d8dc6f0df55d66c7b30100db3cffbe383c5f814e6e58a08521fb7636c3bcc230`
 
 ## Repository layout
 
+This repo is a **monorepo of products**, all sharing the AGTP wire
+format defined in `core/`. Each product is its own top-level
+directory with its own entry point, agents, and configuration. The
+AMG (Agent Method Grammar) validator is duplicated under
+`server/amg/` and `client/amg/` deliberately, mirroring SMTP's MTA
+client / server split: same protocol, two distinct user agents that
+may evolve independently.
+
 ```
 agtp/
-├── ietf/                IETF Internet-Draft sources (markdown)
-├── agtp/                Reference implementation (Python package)
-│   ├── ids.py             Agent ID + URI parsing
-│   ├── identity.py        Agent Document schema
-│   ├── wire.py            AGTP/1.0 wire format
-│   ├── render.py          HTML identity card
-│   ├── methods.py         12-method registry (AMG-ready)
-│   ├── server.py          python -m agtp.server
-│   ├── registry.py        python -m agtp.registry
-│   ├── client.py          python -m agtp
-│   ├── curl.py            agtp-curl diagnostic shim
-│   ├── _paths.py          cross-platform path normalization
-│   └── examples/          opt-in custom-method modules
-├── v1/                  Backward-compat shims and demo
-│   ├── server/agents/   *.agent.json files
-│   └── run_demo.sh      end-to-end 14-scenario walkthrough
-├── elemen/              native AGTP browser (pywebview)
-├── docs/                deployment guide and cross-platform notes
-├── scripts/             VPS deploy automation
-├── pyproject.toml       installable as `pip install -e .`
-└── test_methods.py      method-registry tests
+├── core/                 AGTP wire-protocol primitives (shared)
+│   ├── wire.py             AGTPRequest/Response framing
+│   ├── ids.py              URI + agent-ID parsing (Forms 1, 1a, 2)
+│   ├── identity.py         Agent Document v2 schema
+│   ├── manifest.py         Server Manifest dataclasses
+│   ├── status.py           451/452/460/461/462 helpers
+│   ├── handshake.py        client-side matching outcome
+│   ├── render.py           HTML identity-card renderer
+│   └── _paths.py           cross-platform path normalization
+│
+├── server/               AGTP server product
+│   ├── main.py             python -m server  /  agtp-server
+│   ├── methods.py          12-method registry + dispatch
+│   ├── manifest.py         Server Manifest generation
+│   ├── config.py           agtp-server.toml loader
+│   ├── negotiation.py      PROPOSE policy
+│   ├── synthesis_runtime.py  Synthesis registry (in-memory)
+│   ├── amg/                AMG validator (server-side)
+│   ├── examples/           opt-in custom-method modules
+│   ├── agents/             reference agent docs (Lauren, Orchestrator, legacy/)
+│   ├── agtp-server.toml    reference config
+│   └── run_demo.sh         end-to-end 19-scenario demo
+│
+├── client/               AGTP CLI client product
+│   ├── main.py             python -m client  /  agtp
+│   ├── curl.py             agtp-curl diagnostic shim
+│   ├── migrate.py          agtp-migrate (v1 -> v2 Agent Document)
+│   └── amg/                AMG validator (client-side; agtp-amg)
+│
+├── registry/             AGTP registry product
+│   └── main.py             python -m registry  /  agtp-registry
+│
+├── elemen/               AGTP desktop browser (pywebview)
+├── mcp-on-agtp/          MCP-on-AGTP bridge product (in development)
+├── ietf/                 IETF Internet-Draft sources
+├── docs/                 deployment + cross-platform notes
+├── scripts/              VPS deploy automation
+├── tests/                cross-product test suite
+├── pyproject.toml        installable: `pip install -e .`
+└── README.md
 ```
 
-The protocol specification and the reference implementation live in
-the same repository because they evolve together. Future revisions
-land in `v2/`, `v3/` etc.; earlier `vN/` directories are kept for
-historical reference.
-
-## What v1 demonstrates
+## What this repo demonstrates
 
 - Canonical AGTP URIs (`agtp://{agent-id}`) resolve end-to-end via
-  registry lookup
+  registry lookup.
 - Form 1a (`agtp://{agent-id}@{host}`) bypasses the registry for direct
-  resolution before federated infrastructure exists
-- Agent Identity Documents in `application/vnd.agtp.identity+json` carry
-  the eleven-field v1 identity schema
+  resolution before federated infrastructure exists.
+- Form 2 (`agtp://{host}`) addresses the server itself; DISCOVER
+  returns a Server Manifest at `application/vnd.agtp.manifest+json`.
+- Agent Identity Documents in `application/vnd.agtp.identity+json`
+  carry the v2 identity schema (skills + requires + scopes_accepted).
 - Content negotiation produces JSON, YAML, or rendered HTML from the
-  same URI based on the client's `Accept` header
-- DESCRIBE method serves Agent Identity Documents over AGTP wire format
-  on port 4480
+  same URI based on the client's `Accept` header.
+- Twelve embedded methods (six cognitive + six mechanics) plus the
+  AMG validator that gates every custom method registration and every
+  PROPOSE proposal.
 
-## URI forms
+## Three URI types, three entity types
+
+AGTP recognizes three URI forms; each addresses a fundamentally
+different kind of entity. The elemen browser renders each one
+differently, with a tab structure that matches the entity type.
+
+| URI                                  | Entity      | Analogy        |
+|--------------------------------------|-------------|----------------|
+| `agtp://{host}`                      | **Server**  | a workplace    |
+| `agtp://{agent-id}` or `…@{host}`    | **Agent**   | a user         |
+| `agtp://{host}` (with `hosts_protocols`) | **Application server** | applications hosted on AGTP (MCP, OpenAPI, GraphQL bridges) |
 
 ```
 agtp://{agent-id}                  Form 1   - canonical, registry lookup
@@ -62,11 +97,37 @@ agtp://{agent-id}@{host}[:{port}]  Form 1a  - direct host
 agtp://{host}[:{port}]             Form 2   - server-level (no agent ID)
 ```
 
+### Agents are users, not APIs
+
+This is the conceptual frame that makes the protocol coherent: agents
+do not "have methods" in the way HTTP services do. **Servers have
+methods. Agents have permissions to invoke methods at servers.**
+
+That distinction shows up everywhere:
+
+- An agent's `requires.methods` is the set of method names the
+  principal has authorized that agent to invoke. The 452 status code
+  reads "Method Not Permitted for Agent" for that reason; the body
+  explanation says the principal has not authorized the method, not
+  that the agent "lacks" anything.
+- The elemen browser renders agents as user profiles
+  (Identity, Goals, Skills, Permissions, Credentials). It does not
+  show a Methods tab on agent URIs because the concept does not
+  apply.
+- Servers render as workplace dashboards (Server identity, Methods
+  inventory, APIs preview, Hosted agents, Hosted protocols, Policies).
+  Methods, APIs, and protocols are all server-level concepts.
+- Application servers (servers that bridge a non-AGTP protocol like
+  MCP) render their bridged protocol's catalog in a dedicated tab.
+
+### Server URIs (workplaces)
+
 Form 2 addresses the server itself. Sending DISCOVER to a Form 2 URI
 returns a Server Manifest at media type
 `application/vnd.agtp.manifest+json`. The manifest declares the server's
-identity, the methods it supports (embedded + custom, bucketed), and
-the agents it discloses according to its policy.
+identity, the methods it supports (embedded + custom, bucketed), the
+agents it discloses according to its policy, and (when populated) the
+APIs it exposes and any non-AGTP protocols it bridges.
 
 ```bash
 # Server Manifest (defaults to DISCOVER on Form 2 URIs):
@@ -111,6 +172,96 @@ agtp-migrate --check path/to/agent.json  # report only
 A `.v1.bak` backup is written alongside each migrated file unless
 `--no-backup` is set.
 
+## AMG (Agent Method Grammar)
+
+AMG is the validation layer that makes runtime method synthesis safe.
+Every method — embedded, custom, or proposed at runtime via PROPOSE —
+passes the same nine-pass validator before becoming invocable. The
+validator lives in `agtp/amg/`; the public surface is:
+
+```python
+from server.amg import AMGMethodSpec, ParamSpec, validate, InvalidMethodError
+
+spec = AMGMethodSpec(
+    name="RECONCILE",
+    semantic_class="action-intent",
+    category="transact",
+    description="Reconcile transactions for a given account and period.",
+    idempotent=False,
+    state_modifying=True,
+    required_params=[
+        ParamSpec(name="account_id", type="string", description="ledger account"),
+        ParamSpec(name="period",     type="string", description="time window"),
+    ],
+    optional_params=[],
+    error_codes=[400, 422, 451],
+    source="amg/1.0",
+    namespace="acme-finance",
+)
+result = validate(spec)
+print(result.valid, result.error)
+```
+
+### The nine passes (in order)
+
+| # | Pass | Checks |
+|---|---|---|
+| 1 | lexical | name matches `/^[A-Z]{3,32}$/` |
+| 2 | reserved | not in `HTTP_METHODS`; not in `EMBEDDED_METHODS` for `source=amg/1.0` |
+| 3 | semantic-class | one of `action-intent` / `query-intent` / `protocol-mechanic`; the last is embedded-only |
+| 4 | stoplist | not a noun, adjective, or static state (suggestion attached) |
+| 5 | required-fields | all required fields present; `error_codes` includes 422; namespace required for `amg/1.0`; namespace forbidden for `agtp/1.0` |
+| 6 | description | ≥ 20 chars, non-stub (no TODO / placeholder / etc.) |
+| 7 | parameters | snake_case names, recognized types, descriptions present, `object`/`array` carry a JSON Schema, no name collisions |
+| 8 | schemas | each schema is valid JSON Schema (Draft 7 when `jsonschema` is installed; structural fallback otherwise) |
+| 9 | substitution | substitution targets exist, no self-reference, no duplicates |
+
+Passes run in declared order; the first failure aborts and surfaces a
+structured `ValidationError` with a machine-readable code and a
+human-readable suggestion.
+
+### Integration with the runtime
+
+- **`register_custom`** runs AMG validation on the proposed spec before
+  registering. Failed validations raise `InvalidMethodError` (which
+  inherits from `ValueError`, so existing call sites that
+  `except ValueError` keep catching refusals).
+- **`handle_propose`** filters proposals through AMG before the
+  negotiation policy. Lexical / reserved / stoplist / semantic-class
+  failures return **460 Negotiation Refused** with `reason="ambiguous"`
+  and the AMG error code in the body's `amg_code` field. The benign
+  case where a proposal names an embedded method (the
+  accept-with-synthesis path) is allowed through.
+
+### `agtp-validate` CLI
+
+After `pip install -e .`:
+
+```bash
+agtp-validate path/to/method.json                  # validate one spec
+agtp-validate path/to/methods/                     # validate every *.method.json
+agtp-validate --check-substitution BOOK            # show substitution candidates
+agtp-validate --known-methods extra-methods.json   # extend the universe
+```
+
+Output is per-pass (`✓` / `✗` with detail), with a final `VALID` /
+`INVALID` summary. Exit code 0 on success, 1 on validation failure,
+2 on argument or I/O errors.
+
+### Substitution catalog
+
+`server.amg.DEFAULT_SUBSTITUTIONS` ships seed equivalence classes
+(reservation, retrieval, execution, validation, creation). Servers
+discover candidates with `find_substitutes(name, registry)`. The
+ecosystem catalog (future work) is the canonical extension point.
+
+### Optional dependency
+
+AMG works without external dependencies. Installing the
+`amg-schemas` extra (`pip install -e ".[amg-schemas]"`) pulls in
+`jsonschema>=4` so Pass 8 uses the Draft 7 metaschema validator
+instead of the structural fallback.
+
 ## Status codes
 
 In addition to the standard 4xx / 5xx codes, AGTP defines:
@@ -118,7 +269,7 @@ In addition to the standard 4xx / 5xx codes, AGTP defines:
 | Code | Phrase | When |
 |---|---|---|
 | 451 | Scope Violation | Caller's scope set is missing what the method requires |
-| 452 | Method Outside Agent's Declared Need | Soft-deny: method absent from `requires.methods` and wildcards is false |
+| 452 | Method Not Permitted for Agent | Permission refusal: method absent from agent's `requires.methods` and wildcards is false |
 | 460 | Negotiation Refused | PROPOSE refused (`out_of_scope` / `ambiguous` / `insufficient` / `policy_refused`) |
 | 461 | Counter-Proposal | Server suggests a near-match method; body carries a MethodSpec |
 | 462 | Wildcards Refused | Agent declares wildcards but server policy refuses them |
@@ -173,8 +324,8 @@ pip install -e .
 
 # Start the registry and an agent server. Loopback binds default to
 # plaintext, so no --insecure flag is needed for local development.
-python -m agtp.registry 8080 &
-python -m agtp.server   4480 --agents-dir v1/server/agents &
+python -m registry 8080 &
+python -m server   4480 --agents-dir server/agents &
 
 # Inspect a server with the curl-equivalent.
 agtp-curl DISCOVER agtp://localhost:4480/methods
@@ -186,13 +337,13 @@ agtp agtp://{lauren-id}@localhost:4480 QUERY --param intent="hello"
 cd v1 && ./run_demo.sh
 ```
 
-Both `python -m agtp.server 4480` (positional) and
-`python -m agtp.server --port 4480` work. After install, the same
+Both `python -m server 4480` (positional) and
+`python -m server --port 4480` work. After install, the same
 command is also available as the bare name `agtp-server 4480`.
 
 ### Cross-platform notes
 
-Git Bash on Windows reports POSIX-form paths (`/x/agtp/v1`) from
+Git Bash on Windows reports POSIX-form paths (`/x/agtp/server`) from
 `pwd`; Python on Windows would otherwise misinterpret those as paths
 on the current drive. Anywhere a path crosses the shell-to-Python
 boundary, use `agtp._paths.normalize()` (the demo script and the

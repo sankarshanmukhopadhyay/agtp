@@ -106,6 +106,17 @@ class Api:
             insecure_skip_verify=insecure_skip_verify,
         )
 
+    def fetch_mcp_catalog(
+        self,
+        catalog_url: str,
+        insecure_skip_verify: bool = False,
+    ) -> dict:
+        """Fetch an MCP tool catalog over HTTPS for the protocol tab."""
+        return client.fetch_mcp_catalog(
+            catalog_url,
+            insecure_skip_verify=insecure_skip_verify,
+        )
+
     def fetch_manifest(
         self,
         host: str,

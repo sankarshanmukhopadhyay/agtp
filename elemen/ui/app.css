@@ -1312,3 +1312,258 @@ button.section-head:hover { background: var(--panel-3); }
   background: rgba(224, 163, 90, 0.08);
   color: var(--warn);
 }
+
+/* ---------- agent profile (Identity/Goals/Skills/Permissions/Credentials) ---------- */
+.profile-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.identity-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  font-size: 12.5px;
+  font-family: var(--mono);
+}
+.identity-grid dt { color: var(--text-dim); }
+.identity-grid dd { color: var(--text); margin: 0; word-break: break-word; }
+
+.goals-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.permission-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.permission-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(106, 166, 255, 0.10);
+  color: var(--accent);
+  border: 1px solid rgba(106, 166, 255, 0.30);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.permission-tag:hover {
+  background: rgba(106, 166, 255, 0.18);
+}
+.permission-tag.matched   { color: var(--ok);   border-color: rgba(87, 201, 122, 0.35); background: rgba(87, 201, 122, 0.08); }
+.permission-tag.missing   {
+  color: var(--warn);
+  border-color: rgba(224, 163, 90, 0.40);
+  background: rgba(224, 163, 90, 0.08);
+  border-style: dashed;
+}
+.permission-tag .avail-dot {
+  display: inline-block;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.wildcards-prominent {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.wildcards-prominent.strict { background: rgba(106, 166, 255, 0.16); color: var(--accent); }
+.wildcards-prominent.open   { background: rgba(224, 163, 90, 0.16);  color: var(--warn); }
+
+.credential-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.credential-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.credential-card .name {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.credential-card .meta {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.credential-card .kind {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.profile-empty {
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* ---------- APIs tab ---------- */
+.apis-content {
+  padding: 14px 18px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.api-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.api-card .api-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.api-card .api-path {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.api-card .api-method-count {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.api-card .api-desc {
+  padding: 10px 14px 4px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.api-card .method-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px 14px;
+}
+.method-tag {
+  background: var(--panel-3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.method-tag:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- Protocol tabs (MCP / OpenAPI / GraphQL) ---------- */
+.protocol-tabs-host {
+  display: contents;
+}
+.protocol-pane {
+  padding: 14px 18px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.protocol-pane h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.protocol-pane .info {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.protocol-pane .fetch-btn {
+  align-self: flex-start;
+  background: var(--accent-2);
+  border: none;
+  color: white;
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.protocol-pane .fetch-btn:hover { background: var(--accent); }
+.protocol-pane .fetch-error {
+  font-size: 12px;
+  color: var(--err);
+  background: rgba(239, 90, 90, 0.08);
+  border: 1px solid rgba(239, 90, 90, 0.30);
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+.protocol-pane .stub-note {
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+.tool-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.tool-card .name {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.tool-card .desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.tool-card .params {
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}

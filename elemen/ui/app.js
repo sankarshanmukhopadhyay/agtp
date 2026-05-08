@@ -28,35 +28,34 @@ const els = {
   // navigation
   navBack:    $("#nav-back"),
   navFwd:     $("#nav-forward"),
-  // methods explorer
-  mTabBadge:  $("#methods-tab-badge"),
-  mEmpty:     $("#methods-empty"),
-  mError:     $("#methods-error"),
-  mContent:   $("#methods-content"),
-  actionsGrid:    $("#actions-grid"),
-  actionsSummary: $("#actions-summary"),
-  embeddedSection: $("#embedded-section"),
-  customSection:   $("#custom-section"),
-  embeddedList:    $("#embedded-list"),
-  customList:      $("#custom-list"),
-  embeddedCount:   $("#embedded-count"),
-  customCount:     $("#custom-count"),
-  // agent view
-  agentView:        $("#agent-view"),
-  migrationBanner:  $("#migration-banner"),
-  matchBadge:       $("#match-badge"),
-  matchDetail:      $("#match-detail"),
-  agentHeader:      $("#agent-header"),
-  agentSkills:      $("#agent-skills"),
-  agentRequires:    $("#agent-requires"),
-  agentFooter:      $("#agent-footer"),
-  // manifest view
-  manifestView:    $("#manifest-view"),
-  manifestHeader:  $("#manifest-header"),
-  manifestServer:  $("#manifest-server"),
+  // agent view (user profile)
+  agentView:          $("#agent-view"),
+  migrationBanner:    $("#migration-banner"),
+  matchBadge:         $("#match-badge"),
+  matchDetail:        $("#match-detail"),
+  agentHeader:        $("#agent-header"),
+  agentIdentity:      $("#agent-identity"),
+  agentGoals:         $("#agent-goals"),
+  agentSkills:        $("#agent-skills"),
+  agentPermissions:   $("#agent-permissions"),
+  agentCredentials:   $("#agent-credentials"),
+  agentFooter:        $("#agent-footer"),
+  // manifest view (workplace dashboard)
+  manifestView:           $("#manifest-view"),
+  manifestHeader:         $("#manifest-header"),
+  manifestServer:         $("#manifest-server"),
   manifestMethodsSection: $("#manifest-methods-section"),
-  manifestAgents:  $("#manifest-agents"),
-  manifestPolicy:  $("#manifest-policy"),
+  manifestApisPreview:    $("#manifest-apis-preview"),
+  manifestAgents:         $("#manifest-agents"),
+  manifestProtocols:      $("#manifest-protocols"),
+  manifestPolicy:         $("#manifest-policy"),
+  // APIs tab
+  apisTabBadge: $("#apis-tab-badge"),
+  apisEmpty:    $("#apis-empty"),
+  apisContent:  $("#apis-content"),
+  // dynamic protocol tabs
+  protocolTabsHost:  $("#protocol-tabs-host"),
+  protocolPanesHost: $("#protocol-panes-host"),
   // invocations
   invList:    $("#invocations-list"),
   invEmpty:   $("#invocations-empty"),
@@ -173,7 +172,7 @@ function loadTabIntoForm(tab) {
   els.insecure.checked = !!tab.insecure;
   els.skip.checked = !!tab.skip;
   renderResponse(tab);
-  renderMethods(tab);
+  applyTabVisibility(tab);
   setStatus(tab.status?.text ?? "Ready.", tab.status?.kind ?? "idle");
 }
 
@@ -371,14 +370,18 @@ function renderResponse(tab) {
   }
 }
 
-// response-tab switching
+// Response-tab switching. Hidden tabs (display:none via the .hidden
+// class) cannot fire clicks, so the visibility logic in
+// applyTabVisibility is sufficient. Disabled tabs (Cert) ignore.
 $$(".rtab").forEach((btn) => {
   btn.addEventListener("click", () => {
     if (btn.disabled || btn.classList.contains("disabled")) return;
+    if (btn.classList.contains("hidden")) return;
     $$(".rtab").forEach((b) => b.classList.remove("active"));
     $$(".pane").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
-    $(`#pane-${btn.dataset.tab}`).classList.add("active");
+    const target = $(`#pane-${btn.dataset.tab}`);
+    if (target) target.classList.add("active");
     state.respPane = btn.dataset.tab;
   });
 });
@@ -501,159 +504,52 @@ function shouldUseTextarea(paramName) {
     .test(paramName);
 }
 
-function setMethodsView(state) {
-  // state: "empty" | "error" | "content"
-  els.mEmpty.classList.toggle("hidden", state !== "empty");
-  els.mError.classList.toggle("hidden", state !== "error");
-  els.mContent.classList.toggle("hidden", state !== "content");
-}
-
-function clearMethodsBadge() {
-  els.mTabBadge.classList.add("hidden");
-  els.mTabBadge.textContent = "0";
-}
-
-function setMethodsBadge(n) {
-  if (n > 0) {
-    els.mTabBadge.textContent = String(n);
-    els.mTabBadge.classList.remove("hidden");
-  } else {
-    clearMethodsBadge();
-  }
-}
+// The legacy Methods tab is removed in this revision; methods are
+// now surfaced in the Server Overview (workplace) and as Permission
+// tags on the Agent Overview (user profile). The helpers below are
+// kept as safe no-ops so older callers do not break.
+function setMethodsView(_state) { /* no-op (methods tab removed) */ }
+function clearMethodsBadge() { /* no-op */ }
+function setMethodsBadge(_n) { /* no-op */ }
 
 function endpointKey(host, port) {
   return `${host}:${port}`;
 }
 
 async function doDiscoverMethods(tab) {
+  // Methods inventory now lives in the Server Overview (when the URI
+  // is a manifest) and as Permission tags on the Agent Overview. We
+  // keep this function for backward compatibility with older call
+  // sites, but it caches the agent's per-method DISCOVER for the
+  // matching handshake without painting a Methods tab.
   if (!tab || !tab.uri) return;
-
-  // Cache by host:port if we have it from a recent fetch.
   const r = tab.result;
   let cacheKey = null;
   if (r && r.ok && r.host && r.port) {
     cacheKey = endpointKey(r.host, r.port);
     if (methodsCacheByEndpoint.has(cacheKey)) {
       tab.methods = methodsCacheByEndpoint.get(cacheKey);
-      renderMethods(tab);
       return;
     }
   }
-
-  let result;
   try {
-    result = await window.pywebview.api.discover(
-      tab.uri,
-      tab.registry || "",
-      !!tab.insecure,
-      !!tab.skip,
+    const result = await window.pywebview.api.discover(
+      tab.uri, tab.registry || "", !!tab.insecure, !!tab.skip,
     );
+    tab.methods = result;
+    if (result.ok && cacheKey) {
+      methodsCacheByEndpoint.set(cacheKey, result);
+    }
   } catch (e) {
     tab.methods = { ok: false, error: `bridge error: ${e}` };
-    renderMethods(tab);
-    return;
   }
-
-  tab.methods = result;
-  if (result.ok && cacheKey) {
-    methodsCacheByEndpoint.set(cacheKey, result);
-  }
-  if (state.activeId === tab.id) renderMethods(tab);
 }
 
-function renderMethods(tab) {
-  const m = tab && tab.methods;
-  if (!tab || !m) {
-    setMethodsView("empty");
-    clearMethodsBadge();
-    return;
-  }
-
-  if (!m.ok) {
-    els.mError.textContent = m.error || "DISCOVER failed.";
-    setMethodsView("error");
-    clearMethodsBadge();
-    return;
-  }
-
-  setMethodsView("content");
-  const summary = m.summary || {};
-  const total = summary.total || 0;
-  setMethodsBadge(total);
-
-  // ---- Available Actions: agent.capabilities ∩ method universe.
-  const caps = capabilitiesForTab(tab);
-  const universe = new Map();
-  for (const e of m.embedded || []) universe.set(e.name, e);
-  for (const e of m.custom   || []) universe.set(e.name, e);
-
-  els.actionsGrid.innerHTML = "";
-  if (caps.length === 0) {
-    const note = document.createElement("div");
-    note.className = "section-sub";
-    note.textContent = "No capabilities reported by this agent.";
-    els.actionsGrid.appendChild(note);
-  } else {
-    // Use the matching handshake outcome (if available) to decide
-    // which actions are reachable on the server. Methods the agent
-    // needs but the server does not expose render as ghost buttons.
-    const matchedSet = tab.matchOutcome
-      ? new Set(tab.matchOutcome.matched)
-      : null;
-    for (const cap of caps) {
-      const spec = universe.get(cap);
-      const reachable = matchedSet ? matchedSet.has(cap) : !!spec;
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = `action-btn ${spec ? categoryClass(spec.category) : "cat-other"}`;
-      let badgeHtml = "";
-      if (!spec) {
-        btn.classList.add("unavailable");
-        btn.title = "Declared by the agent but not advertised by the server.";
-        badgeHtml = '<span class="badge muts">unavailable</span>';
-      } else if (matchedSet && !reachable) {
-        btn.classList.add("ghost");
-        btn.title = "Server does not expose this method.";
-        badgeHtml = '<span class="badge muts">missing</span>';
-      }
-      btn.innerHTML = `
-        <span class="action-name">${escapeHtml(cap)}</span>
-        ${badgeHtml}
-      `;
-      btn.addEventListener("click", () => {
-        if (spec) {
-          expandMethod(tab, cap);
-          return;
-        }
-        // No spec on the server: prompt the negotiation flow.
-        promptNegotiationForMissing(tab, cap);
-      });
-      els.actionsGrid.appendChild(btn);
-    }
-  }
-  els.actionsSummary.textContent =
-    `${caps.length} capabilities · ${total} methods`;
-
-  // ---- Standard Methods bucket
-  els.embeddedCount.textContent =
-    `${(m.embedded || []).length} method${(m.embedded || []).length === 1 ? "" : "s"}`;
-  els.embeddedList.innerHTML = "";
-  for (const spec of m.embedded || []) {
-    els.embeddedList.appendChild(renderMethodRow(tab, spec));
-  }
-
-  // ---- Custom Methods bucket (hidden when empty)
-  const customCount = (m.custom || []).length;
-  els.customSection.classList.toggle("hidden", customCount === 0);
-  els.customCount.textContent = `${customCount} method${customCount === 1 ? "" : "s"}`;
-  els.customList.innerHTML = "";
-  for (const spec of m.custom || []) {
-    els.customList.appendChild(renderMethodRow(tab, spec));
-  }
-
-  // Re-expand whichever method the user had open before re-render.
-  if (tab.openMethod) expandMethod(tab, tab.openMethod, { skipScroll: true });
+function renderMethods(_tab) {
+  // Methods tab is removed. The bucketed inventory now appears under
+  // the Server Overview's "Methods" section; the per-agent
+  // intersection (matched / missing) drives the Permission tags on
+  // the Agent Overview. This stub keeps older call sites safe.
 }
 
 function capabilitiesForTab(tab) {
@@ -1296,6 +1192,13 @@ function showPaneVariant(variant) {
   els.prettyIfr.classList.toggle("hidden", variant !== "iframe");
 }
 
+// ---------- agent view as user profile ----------
+//
+// Conceptual frame: agents are users, not APIs. The view treats the
+// Agent Document as a user profile (Identity / Goals / Skills /
+// Permissions / Credentials), not a method directory. Methods are a
+// server concept; agents only have permissions to invoke them.
+
 function renderAgentView(tab) {
   const r = tab.result;
   if (!r || !r.ok || r.status_code !== 200) return false;
@@ -1315,37 +1218,57 @@ function renderAgentView(tab) {
     doc.document_version !== "v1-migrated",
   );
 
-  // Header.
-  const status = (doc.status || "").toLowerCase();
+  // Hero header (name + principal + status badge).
+  const status = (doc.status || "active").toLowerCase();
   els.agentHeader.innerHTML =
     `<div>` +
     `<h1 class="name">${escapeHtml(doc.name || "")}</h1>` +
-    `<p class="principal">agent serving ${escapeHtml(doc.principal || "")}</p>` +
-    (doc.description
-      ? `<p class="description">${escapeHtml(doc.description)}</p>`
-      : "") +
+    `<p class="principal">acting on behalf of ${escapeHtml(doc.principal || "")}</p>` +
     `</div>` +
-    `<span class="status-badge status-${escapeHtml(status || "active")}">` +
-    `${escapeHtml(status || "active")}</span>`;
+    `<span class="status-badge status-${escapeHtml(status)}">` +
+    `${escapeHtml(status)}</span>`;
 
-  // Skills.
-  const skills = (doc.skills || []).map((s) =>
-    `<li>${escapeHtml(s)}</li>`,
-  ).join("");
+  // Identity section: provenance metadata in a compact key/value grid.
+  els.agentIdentity.innerHTML =
+    `<h3 class="profile-section-title"><span>Identity</span></h3>` +
+    `<dl class="identity-grid">` +
+    `<dt>Name</dt><dd>${escapeHtml(doc.name || "")}</dd>` +
+    `<dt>Principal</dt><dd>${escapeHtml(doc.principal || "")}</dd>` +
+    `<dt>Principal ID</dt><dd>${escapeHtml(doc.principal_id || "")}</dd>` +
+    `<dt>Issuer</dt><dd>${escapeHtml(doc.issuer || "")}</dd>` +
+    `<dt>Issued at</dt><dd>${escapeHtml(doc.issued_at || "")}</dd>` +
+    `<dt>Status</dt><dd>${escapeHtml(status)}</dd>` +
+    `</dl>`;
+
+  // Goals: derived from description until a structured goals field
+  // lands in v07. Single paragraph for now.
+  if (doc.description) {
+    els.agentGoals.innerHTML =
+      `<h3 class="profile-section-title"><span>Goals</span></h3>` +
+      `<div class="goals-text">${escapeHtml(doc.description)}</div>`;
+    els.agentGoals.classList.remove("hidden");
+  } else {
+    els.agentGoals.innerHTML = "";
+    els.agentGoals.classList.add("hidden");
+  }
+
+  // Skills section.
+  const skills = (doc.skills || [])
+    .map((s) => `<li>${escapeHtml(s)}</li>`)
+    .join("");
   els.agentSkills.innerHTML =
-    `<h3>Skills</h3>` +
+    `<h3 class="profile-section-title"><span>Skills</span></h3>` +
     (skills
       ? `<ul class="skill-card-list">${skills}</ul>`
-      : `<div class="agents-empty">No skills declared.</div>`);
+      : `<div class="profile-empty">No skills declared.</div>`);
 
-  // Requires section. Filled in below by renderRequiresSection so it
-  // can be re-rendered when match info arrives later.
-  renderRequiresSection(tab, doc);
+  // Permissions and Credentials are filled in by their own helpers
+  // so they can re-render when match-handshake info arrives later.
+  renderPermissionsSection(tab, doc);
+  renderCredentialsSection(doc);
 
-  // Footer.
+  // Footer (kept terse; full identity is in the Identity section).
   els.agentFooter.innerHTML =
-    `<dt>Issued by</dt><dd>${escapeHtml(doc.issuer || "")}</dd>` +
-    `<dt>Issued at</dt><dd>${escapeHtml(doc.issued_at || "")}</dd>` +
     `<dt>Document version</dt><dd>${escapeHtml(doc.document_version || "v2")}</dd>` +
     `<dt>AGTP version</dt><dd>${escapeHtml(doc.agtp_version || "")}</dd>` +
     `<dd class="agent-id-cell">${escapeHtml(doc.agent_id)}</dd>`;
@@ -1354,50 +1277,110 @@ function renderAgentView(tab) {
   return true;
 }
 
-function renderRequiresSection(tab, doc) {
+function renderPermissionsSection(tab, doc) {
   const req = doc.requires || {};
   const methods = req.methods || [];
-  const scopes = req.scopes || [];
   const wildcards = !!req.wildcards;
   const matchInfo = tab.matchOutcome || null;
   const matchedSet = matchInfo ? new Set(matchInfo.matched) : null;
 
-  function renderMethodsList() {
-    if (!methods.length) {
-      return `<div class="agents-empty">No methods declared.</div>`;
-    }
-    return `<ul class="requires-list">${
-      methods.map((m) => {
-        let avail = "";
-        if (matchedSet) {
-          avail = matchedSet.has(m)
-            ? `<span class="avail-mark matched">available</span>`
-            : `<span class="avail-mark missing">missing on server</span>`;
-        }
-        return `<li><span>${escapeHtml(m)}</span>${avail}</li>`;
-      }).join("")
-    }</ul>`;
-  }
-
-  function renderScopesList() {
-    if (!scopes.length) {
-      return `<div class="agents-empty">No scopes declared.</div>`;
-    }
-    return `<ul class="requires-list">${
-      scopes.map((s) => `<li><span>${escapeHtml(s)}</span></li>`).join("")
-    }</ul>`;
-  }
-
-  els.agentRequires.innerHTML =
-    `<h3>Requires</h3>` +
-    `<h4>Methods Needed (${methods.length})</h4>` +
-    renderMethodsList() +
-    `<h4>Scopes (${scopes.length})</h4>` +
-    renderScopesList() +
-    `<h4>Wildcards</h4>` +
-    `<span class="wildcards-badge ${wildcards ? "wildcard" : "strict"}">` +
-    `${wildcards ? "Wildcard (accepts any method)" : "Strict (declared methods only)"}` +
+  // Wildcards label moves to the section header so it's the first
+  // thing the operator sees on a profile.
+  const wildcardsBadge =
+    `<span class="wildcards-prominent ${wildcards ? "open" : "strict"}">` +
+    (wildcards
+      ? "Open (any method permitted)"
+      : "Strict (declared methods only)") +
     `</span>`;
+
+  let body;
+  if (!methods.length) {
+    body = wildcards
+      ? `<div class="profile-empty">No specific methods declared. ` +
+        `Wildcards is open, so any server-exposed method is permitted.</div>`
+      : `<div class="profile-empty">No permissions granted.</div>`;
+  } else {
+    const tags = methods.map((m) => {
+      let cls = "permission-tag";
+      let title = `Method: ${m}`;
+      if (matchedSet) {
+        if (matchedSet.has(m)) {
+          cls += " matched";
+          title = `${m} is available on this server.`;
+        } else {
+          cls += " missing";
+          title = `${m} is not advertised by this server.`;
+        }
+      }
+      return (
+        `<span class="${cls}" title="${escapeHtml(title)}" ` +
+        `data-method="${escapeHtml(m)}">` +
+        `<span class="avail-dot"></span>${escapeHtml(m)}` +
+        `</span>`
+      );
+    }).join("");
+    body = `<div class="permission-tags">${tags}</div>`;
+  }
+
+  els.agentPermissions.innerHTML =
+    `<h3 class="profile-section-title">` +
+    `<span>Permissions (${methods.length})</span>${wildcardsBadge}` +
+    `</h3>` +
+    body;
+
+  // Clicking a permission tag prompts negotiation when the method is
+  // missing; otherwise it's a no-op (info-only on the profile view).
+  els.agentPermissions.querySelectorAll(".permission-tag").forEach((tag) => {
+    tag.addEventListener("click", () => {
+      const m = tag.getAttribute("data-method");
+      if (!m) return;
+      if (tag.classList.contains("missing")) {
+        promptNegotiationForMissing(tab, m);
+      }
+    });
+  });
+}
+
+function renderCredentialsSection(doc) {
+  const req = doc.requires || {};
+  const reqScopes = req.scopes || [];
+  const acceptScopes = doc.scopes_accepted || [];
+
+  const cards = [];
+  for (const s of reqScopes) {
+    cards.push(makeCredentialCard(s, "scope (presents)", doc.issuer));
+  }
+  for (const s of acceptScopes) {
+    cards.push(makeCredentialCard(s, "scope (accepts)", doc.issuer));
+  }
+
+  let body;
+  if (!cards.length) {
+    body = `<div class="profile-empty">No credentials declared.</div>`;
+  } else {
+    body = `<div class="credential-cards">${cards.join("")}</div>`;
+  }
+  els.agentCredentials.innerHTML =
+    `<h3 class="profile-section-title"><span>Credentials</span></h3>` +
+    body;
+}
+
+function makeCredentialCard(name, kind, issuer) {
+  return (
+    `<div class="credential-card">` +
+    `<span class="kind">${escapeHtml(kind)}</span>` +
+    `<span class="name">${escapeHtml(name)}</span>` +
+    (issuer
+      ? `<span class="meta">issuer: ${escapeHtml(issuer)}</span>`
+      : "") +
+    `</div>`
+  );
+}
+
+// Backward compat for callers that still reference the old name.
+function renderRequiresSection(tab, doc) {
+  renderPermissionsSection(tab, doc);
+  renderCredentialsSection(doc);
 }
 
 function renderManifestView(tab) {
@@ -1447,10 +1430,43 @@ function renderManifestView(tab) {
     (custom.length ? renderManifestMethodsList(custom, "Custom Methods") : "") +
     `</div>`;
 
+  // APIs preview: when populated, hint that the dedicated tab has
+  // resource-level details. Empty manifests skip this section
+  // entirely so the dashboard stays terse.
+  const apis = m.apis || [];
+  if (apis.length) {
+    els.manifestApisPreview.innerHTML =
+      `<h3>APIs</h3>` +
+      `<div class="body">` +
+      `<div style="font-size:12px;color:var(--text-dim);margin-bottom:6px">` +
+      `${apis.length} endpoint${apis.length === 1 ? "" : "s"} declared. ` +
+      `See the APIs tab for resource-scoped details.` +
+      `</div>` +
+      `<ul style="list-style:none;padding:0;margin:0;` +
+      `display:flex;flex-direction:column;gap:4px">` +
+      apis.slice(0, 5).map((api) =>
+        `<li style="font-family:var(--mono);font-size:12px">` +
+        `<code style="color:var(--text)">${escapeHtml(api.path)}</code> ` +
+        `<span style="color:var(--text-dim)">` +
+        `(${(api.methods || []).join(", ")})` +
+        `</span>` +
+        `</li>`,
+      ).join("") +
+      (apis.length > 5
+        ? `<li style="color:var(--text-dim);font-size:11px;margin-top:4px">` +
+          `…and ${apis.length - 5} more</li>`
+        : "") +
+      `</ul></div>`;
+    els.manifestApisPreview.classList.remove("hidden");
+  } else {
+    els.manifestApisPreview.classList.add("hidden");
+    els.manifestApisPreview.innerHTML = "";
+  }
+
   // Agents section.
   const agents = m.agents || {};
   const list = agents.list || [];
-  let agentsHtml = `<h3>Agents (${list.length})</h3>`;
+  let agentsHtml = `<h3>Hosted agents (${list.length})</h3>`;
   if (agents.notice) {
     agentsHtml += `<div class="disclosure-notice">${escapeHtml(agents.notice)}</div>`;
   }
@@ -1462,6 +1478,27 @@ function renderManifestView(tab) {
     }</div>`;
   }
   els.manifestAgents.innerHTML = agentsHtml;
+
+  // Hosted protocols section.
+  const protocols = m.hosts_protocols || [];
+  if (protocols.length) {
+    els.manifestProtocols.innerHTML =
+      `<h3>Hosted protocols (${protocols.length})</h3>` +
+      `<div class="body" style="display:flex;flex-direction:column;gap:6px">` +
+      protocols.map((p) =>
+        `<div style="display:flex;justify-content:space-between;` +
+        `gap:10px;font-family:var(--mono);font-size:12px">` +
+        `<span><strong>${escapeHtml(p.protocol)}</strong> ` +
+        `<span style="color:var(--text-dim)">v${escapeHtml(p.version)}</span></span>` +
+        `<span style="color:var(--text-dim)">${escapeHtml(p.endpoint)}</span>` +
+        `</div>`,
+      ).join("") +
+      `</div>`;
+    els.manifestProtocols.classList.remove("hidden");
+  } else {
+    els.manifestProtocols.classList.add("hidden");
+    els.manifestProtocols.innerHTML = "";
+  }
 
   // Policy section.
   const pol = m.policy || {};
@@ -1486,8 +1523,266 @@ function renderManifestView(tab) {
     });
   });
 
+  // Render the APIs tab + protocol tabs from the same manifest.
+  renderApisTab(tab, apis);
+  renderProtocolTabs(tab, protocols);
+
   showPaneVariant("manifest");
   return true;
+}
+
+// ---------- APIs tab ----------
+
+function renderApisTab(tab, apis) {
+  apis = apis || [];
+  if (els.apisTabBadge) {
+    if (apis.length) {
+      els.apisTabBadge.textContent = String(apis.length);
+      els.apisTabBadge.classList.remove("hidden");
+    } else {
+      els.apisTabBadge.classList.add("hidden");
+    }
+  }
+
+  if (!apis.length) {
+    els.apisEmpty.classList.remove("hidden");
+    els.apisContent.classList.add("hidden");
+    els.apisContent.innerHTML = "";
+    return;
+  }
+
+  els.apisEmpty.classList.add("hidden");
+  els.apisContent.classList.remove("hidden");
+  els.apisContent.innerHTML = apis.map((api) => {
+    const tags = (api.methods || []).map((m) =>
+      `<button type="button" class="method-tag" data-path="${escapeHtml(api.path)}" ` +
+      `data-method="${escapeHtml(m)}">${escapeHtml(m)}</button>`,
+    ).join("");
+    return (
+      `<div class="api-card">` +
+      `<div class="api-head">` +
+      `<span class="api-path">${escapeHtml(api.path)}</span>` +
+      `<span class="api-method-count">${(api.methods || []).length} methods</span>` +
+      `</div>` +
+      (api.description
+        ? `<div class="api-desc">${escapeHtml(api.description)}</div>`
+        : "") +
+      `<div class="method-tags">${tags}</div>` +
+      `</div>`
+    );
+  }).join("");
+
+  // Wire method-tag clicks to a Try-It prompt scoped to the path.
+  els.apisContent.querySelectorAll(".method-tag").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const path = btn.getAttribute("data-path");
+      const method = btn.getAttribute("data-method");
+      promptApiTryIt(tab, path, method);
+    });
+  });
+}
+
+function promptApiTryIt(tab, path, method) {
+  // Minimal Try-It: confirm intent, then issue the method on the
+  // server's first agent (best-effort) with an empty body. The user
+  // can refine after seeing the response. Future polish: in-pane
+  // form scoped to the resource path's parameter schema.
+  const agents = tab?.result?.manifest?.agents?.list || [];
+  if (!agents.length) {
+    window.alert(
+      `${method} on ${path}: this server lists no public agents to ` +
+      `target. Open an agent URL first, then invoke from there.`,
+    );
+    return;
+  }
+  const targetAgent = agents[0];
+  const proceed = window.confirm(
+    `Try ${method} on ${path}\n\n` +
+    `Will be sent to agent: ${targetAgent.name} (${targetAgent.agent_id.slice(0, 16)}…)\n\n` +
+    `Continue?`,
+  );
+  if (!proceed) return;
+  const r = tab.result;
+  const targetUri = `agtp://${targetAgent.agent_id}@${r.host}:${r.port}`;
+  // Use the existing invoke API path. APIs Try-It is intentionally
+  // bare-bones; the rich form lives in the Methods explorer (kept
+  // for power users) but is not surfaced as a top-level tab.
+  window.pywebview.api.invoke(
+    targetUri, method, {}, tab.registry || "",
+    !!tab.insecure, !!tab.skip, "",
+  ).then((result) => {
+    const body = result && result.body ? result.body : "(no body)";
+    window.alert(
+      `${method} ${path} -> ${result?.status_code || "?"}\n\n${body}`,
+    );
+  }).catch((e) => {
+    window.alert(`Try-It error: ${e}`);
+  });
+}
+
+// ---------- Protocol tabs (MCP, OpenAPI, GraphQL stubs) ----------
+
+function renderProtocolTabs(tab, protocols) {
+  protocols = protocols || [];
+
+  // Tear down any previous protocol tabs first; they are
+  // server-specific and must not leak between fetches.
+  els.protocolTabsHost.innerHTML = "";
+  els.protocolPanesHost.innerHTML = "";
+
+  protocols.forEach((p, idx) => {
+    const tabId = `proto-${idx}`;
+    const label = capitalize(p.protocol || "protocol");
+
+    const btn = document.createElement("button");
+    btn.className = "rtab";
+    btn.dataset.tab = tabId;
+    btn.textContent = label;
+    btn.addEventListener("click", () => activateRtab(tabId));
+    els.protocolTabsHost.appendChild(btn);
+
+    const pane = document.createElement("div");
+    pane.id = `pane-${tabId}`;
+    pane.className = "pane protocol-pane";
+    pane.innerHTML = renderProtocolPane(p);
+    els.protocolPanesHost.appendChild(pane);
+
+    // Wire the Fetch-catalog button for MCP entries; other protocols
+    // surface a stub note and rely on future-work catalog fetchers.
+    if ((p.protocol || "").toLowerCase() === "mcp" && p.catalog) {
+      const fetchBtn = pane.querySelector(".fetch-btn");
+      if (fetchBtn) {
+        fetchBtn.addEventListener("click", () =>
+          fetchAndRenderMcpCatalog(pane, p.catalog, !!tab.skip),
+        );
+      }
+    }
+  });
+}
+
+function renderProtocolPane(p) {
+  const isMcp = (p.protocol || "").toLowerCase() === "mcp";
+  const head =
+    `<h2>${escapeHtml(capitalize(p.protocol || "protocol"))} bridge</h2>` +
+    `<div class="info">` +
+    `<div><strong>Protocol:</strong> ${escapeHtml(p.protocol)}</div>` +
+    `<div><strong>Version:</strong> ${escapeHtml(p.version)}</div>` +
+    `<div><strong>Endpoint:</strong> ${escapeHtml(p.endpoint)}</div>` +
+    (p.catalog
+      ? `<div><strong>Catalog:</strong> ${escapeHtml(p.catalog)}</div>`
+      : "") +
+    `</div>`;
+
+  if (isMcp && p.catalog) {
+    return (
+      head +
+      `<button class="fetch-btn" type="button">Fetch tool catalog</button>` +
+      `<div class="tool-catalog"></div>`
+    );
+  }
+  return (
+    head +
+    `<div class="stub-note">` +
+    `Catalog rendering for this protocol is future work; the manifest ` +
+    `entry is shown above so deployments can declare it today.` +
+    `</div>`
+  );
+}
+
+async function fetchAndRenderMcpCatalog(pane, catalogUrl, skipVerify) {
+  const target = pane.querySelector(".tool-catalog");
+  target.innerHTML =
+    `<div class="info" style="margin-top:6px">Fetching ${escapeHtml(catalogUrl)}…</div>`;
+
+  let result;
+  try {
+    result = await window.pywebview.api.fetch_mcp_catalog(
+      catalogUrl, !!skipVerify,
+    );
+  } catch (e) {
+    target.innerHTML = `<div class="fetch-error">bridge error: ${escapeHtml(String(e))}</div>`;
+    return;
+  }
+
+  if (!result || !result.ok) {
+    target.innerHTML =
+      `<div class="fetch-error">${escapeHtml(result?.error || "fetch failed")}</div>`;
+    return;
+  }
+
+  const tools = result.tools || [];
+  if (!tools.length) {
+    target.innerHTML =
+      `<div class="info">Catalog returned, but no tools were listed.</div>`;
+    return;
+  }
+
+  target.innerHTML =
+    `<div class="tool-cards">` +
+    tools.map((t) => {
+      const name = t.name || t.id || "(unnamed)";
+      const desc = t.description || t.summary || "";
+      const params = t.parameters || t.input_schema || t.inputSchema || null;
+      return (
+        `<div class="tool-card">` +
+        `<span class="name">${escapeHtml(name)}</span>` +
+        (desc ? `<div class="desc">${escapeHtml(desc)}</div>` : "") +
+        (params
+          ? `<div class="params">${escapeHtml(JSON.stringify(params))}</div>`
+          : "") +
+        `</div>`
+      );
+    }).join("") +
+    `</div>`;
+}
+
+function capitalize(s) {
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+// ---------- tab visibility by URI type ----------
+//
+// Servers expose APIs and (when populated) hosted-protocol tabs.
+// Agents are users; they have no Methods or APIs surface. Tabs are
+// fully removed from the bar (display: none) rather than disabled,
+// so the bar stays clean per URI type.
+
+function applyTabVisibility(tab) {
+  const isAgent = tab?.kind === "agent";
+  const isManifest = tab?.kind === "manifest";
+  const protocols = tab?.result?.manifest?.hosts_protocols || [];
+  const apis = tab?.result?.manifest?.apis || [];
+
+  const apisBtn = document.querySelector('.rtab[data-tab="apis"]');
+  if (apisBtn) {
+    apisBtn.classList.toggle("hidden", !(isManifest && apis.length));
+  }
+
+  // Per-protocol tabs are static-rendered by renderProtocolTabs;
+  // their visibility is handled there. Hide the host element when
+  // no protocols are available so the gap collapses.
+  els.protocolTabsHost.classList.toggle(
+    "hidden",
+    !(isManifest && protocols.length),
+  );
+
+  // If the currently active rtab has been hidden by the URI type
+  // change, fall back to "pretty".
+  const activeBtn = document.querySelector(".rtab.active");
+  if (activeBtn && activeBtn.classList.contains("hidden")) {
+    activateRtab("pretty");
+  }
+}
+
+function activateRtab(name) {
+  $$(".rtab").forEach((b) => b.classList.remove("active"));
+  $$(".pane").forEach((p) => p.classList.remove("active"));
+  const btn = document.querySelector(`.rtab[data-tab="${name}"]`);
+  const pane = document.querySelector(`#pane-${name}`);
+  if (btn) btn.classList.add("active");
+  if (pane) pane.classList.add("active");
+  state.respPane = name;
 }
 
 function renderManifestMethodsList(items, title) {
@@ -1787,7 +2082,6 @@ async function doFetch({ silentHistory = false } = {}) {
     }
   }
   renderTabStrip();
-  if (state.activeId === tab.id) renderMethods(tab);
 
   if (state.activeId === tab.id) {
     if (!result.ok) {
@@ -1800,6 +2094,7 @@ async function doFetch({ silentHistory = false } = {}) {
       );
     }
     renderResponse(tab);
+    applyTabVisibility(tab);
   }
 
   if (result.ok && !silentHistory) {

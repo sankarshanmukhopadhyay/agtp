@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agtp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Agent Transfer Protocol reference implementation"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -15,7 +15,6 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -25,15 +24,28 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://agtp.io"
-Repository = "https://github.com/nomotic-ai/agtp"
+Repository = "https://github.com/nomoticai/agtp"
 
+# The repo is a monorepo of products. Each top-level Python directory
+# (core, server, client, registry) is a standalone package; the AMG
+# validator is duplicated under server/amg and client/amg per the
+# SMTP-style client/server split (the same protocol, two distinct
+# user agents).
 [project.scripts]
-agtp = "agtp.client:main"
-agtp-server = "agtp.server:main"
-agtp-registry = "agtp.registry:main"
-agtp-curl = "agtp.curl:main"
-agtp-migrate = "agtp.migrate:main"
+agtp           = "client.main:main"
+agtp-server    = "server.main:main"
+agtp-registry  = "registry.main:main"
+agtp-curl      = "client.curl:main"
+agtp-migrate   = "client.migrate:main"
+agtp-amg       = "client.amg.cli:main"
+
+[project.optional-dependencies]
+# jsonschema enables AMG Pass 8 to use the Draft 7 metaschema
+# validator rather than the structural fallback. Optional; the
+# package degrades gracefully when absent.
+amg-schemas = ["jsonschema>=4"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agtp*"]
+include = ["core*", "server*", "client*", "registry*"]
+exclude = ["tests*", "elemen*", "ietf*", "docs*", "scripts*", "mcp-on-agtp*"]

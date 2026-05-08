@@ -72,8 +72,15 @@
 
   <main class="response">
     <nav class="resp-tabs">
-      <button class="rtab active" data-tab="pretty">Pretty</button>
-      <button class="rtab" data-tab="methods">Methods <span id="methods-tab-badge" class="rtab-badge hidden">0</span></button>
+      <!--
+        Tab visibility depends on URI type. JS toggles which buttons
+        render based on result.kind and (for servers) the manifest's
+        apis / hosts_protocols fields. Agents have no Methods or APIs
+        tab; servers have no Tools tab unless they bridge a protocol.
+      -->
+      <button class="rtab active" data-tab="pretty">Overview</button>
+      <button class="rtab hidden" data-tab="apis">APIs <span id="apis-tab-badge" class="rtab-badge hidden">0</span></button>
+      <span id="protocol-tabs-host" class="protocol-tabs-host"></span>
       <button class="rtab" data-tab="raw">Raw</button>
       <button class="rtab" data-tab="headers">Headers</button>
       <button class="rtab" data-tab="invocations">Invocations</button>
@@ -86,6 +93,11 @@
     </nav>
 
     <div id="pane-pretty" class="pane active">
+      <!--
+        Agent view renders as a user profile (Identity / Goals /
+        Skills / Permissions / Credentials). Methods are deliberately
+        absent: agents do not have methods, they have permissions.
+      -->
       <div id="agent-view" class="agent-view hidden">
         <div id="migration-banner" class="migration-banner hidden">
           This agent is using the legacy v1 schema. Skills are
@@ -95,16 +107,27 @@
         <div id="match-badge" class="match-badge hidden"></div>
         <div id="match-detail" class="match-detail hidden"></div>
         <header id="agent-header" class="agent-header"></header>
+        <section id="agent-identity" class="agent-section"></section>
+        <section id="agent-goals" class="agent-section"></section>
         <section id="agent-skills" class="agent-section"></section>
-        <section id="agent-requires" class="agent-section"></section>
+        <section id="agent-permissions" class="agent-section"></section>
+        <section id="agent-credentials" class="agent-section"></section>
         <footer id="agent-footer" class="agent-footer"></footer>
       </div>
 
+      <!--
+        Server view renders as a workplace dashboard: identity,
+        methods inventory, APIs preview, hosted agents, hosted
+        protocols, policies. The full APIs and Tools surfaces live in
+        their own tabs; this pane is the at-a-glance summary.
+      -->
       <div id="manifest-view" class="manifest-view hidden">
         <header id="manifest-header" class="manifest-header"></header>
         <section id="manifest-server" class="manifest-section"></section>
         <section id="manifest-methods-section" class="manifest-section"></section>
+        <section id="manifest-apis-preview" class="manifest-section hidden"></section>
         <section id="manifest-agents" class="manifest-section"></section>
+        <section id="manifest-protocols" class="manifest-section hidden"></section>
         <section id="manifest-policy" class="manifest-section"></section>
       </div>
 
@@ -117,39 +140,25 @@
       ></iframe>
     </div>
 
-    <div id="pane-methods" class="pane">
-      <div id="methods-empty" class="methods-empty">
-        Connect to an agent to discover available methods.
+    <!--
+      APIs tab (server view only). Lists the manifest's apis field;
+      each resource entry is an OpenAPI-equivalent surface with the
+      methods admissible against that path.
+    -->
+    <div id="pane-apis" class="pane">
+      <div id="apis-empty" class="methods-empty">
+        No APIs declared. Methods are listed in the Overview tab.
       </div>
-      <div id="methods-error" class="methods-error hidden"></div>
-      <div id="methods-content" class="methods-content hidden">
-        <section id="actions-section" class="methods-section actions">
-          <div class="section-head">
-            <span class="section-title">Available Actions</span>
-            <span id="actions-summary" class="section-sub"></span>
-          </div>
-          <div id="actions-grid" class="actions-grid"></div>
-        </section>
-
-        <section id="embedded-section" class="methods-section">
-          <button class="section-head expandable" data-section="embedded" type="button">
-            <span class="caret">▼</span>
-            <span class="section-title">Standard Methods</span>
-            <span id="embedded-count" class="section-sub"></span>
-          </button>
-          <div id="embedded-list" class="method-list"></div>
-        </section>
-
-        <section id="custom-section" class="methods-section hidden">
-          <button class="section-head expandable" data-section="custom" type="button">
-            <span class="caret">▼</span>
-            <span class="section-title">This Server's Methods</span>
-            <span id="custom-count" class="section-sub"></span>
-          </button>
-          <div id="custom-list" class="method-list"></div>
-        </section>
-      </div>
+      <div id="apis-content" class="apis-content hidden"></div>
     </div>
+
+    <!--
+      Per-protocol panes for hosts_protocols entries (MCP, OpenAPI,
+      etc.). Created dynamically in JS; the host element below acts
+      as the insertion point so the static raw/headers/invocations
+      tabs stay above and after.
+    -->
+    <div id="protocol-panes-host"></div>
 
     <div id="pane-raw" class="pane"><pre id="raw"></pre></div>
     <div id="pane-headers" class="pane"><pre id="headers"></pre></div>
