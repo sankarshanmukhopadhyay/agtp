@@ -106,6 +106,25 @@ class Api:
             insecure_skip_verify=insecure_skip_verify,
         )
 
+    def fetch_manifest(
+        self,
+        host: str,
+        port: int,
+        insecure: bool = False,
+        insecure_skip_verify: bool = False,
+    ) -> dict:
+        """
+        Fetch the Server Manifest for the given (host, port) without
+        invoking any agent-targeted method. Used by the matching
+        handshake when an agent URI was already loaded.
+        """
+        return client.fetch_manifest(
+            host,
+            int(port),
+            insecure=insecure,
+            insecure_skip_verify=insecure_skip_verify,
+        )
+
     def discover(
         self,
         uri: str,
@@ -130,8 +149,14 @@ class Api:
         registry: str = "",
         insecure: bool = False,
         insecure_skip_verify: bool = False,
+        synthesis_id: str = "",
     ) -> dict:
-        """Invoke a method on the URI's agent. body_dict may be None."""
+        """
+        Invoke a method on the URI's agent. ``body_dict`` may be None.
+        When ``synthesis_id`` is non-empty, the request carries a
+        ``Synthesis-Id`` header so the server rewrites it onto the
+        underlying method.
+        """
         registry_url = registry.strip() or client.DEFAULT_REGISTRY_URL
         return client.invoke_method(
             uri.strip(),
@@ -140,6 +165,7 @@ class Api:
             registry=registry_url,
             insecure=insecure,
             insecure_skip_verify=insecure_skip_verify,
+            synthesis_id=synthesis_id.strip() or None,
         )
 
     # ---- history ----

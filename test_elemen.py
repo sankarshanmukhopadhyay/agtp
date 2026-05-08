@@ -160,6 +160,72 @@ class ElemenBridgeTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["status_code"], 404)
 
+    # ---- Server-URI fetch (Form 2) ----
+
+    def test_form2_fetch_returns_manifest_kind(self):
+        result = elemen_client.fetch(
+            f"agtp://{self.server.host}:{self.server.port}",
+            insecure=True,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["kind"], "manifest")
+        self.assertIsInstance(result["manifest"], dict)
+        self.assertIn("server", result["manifest"])
+        self.assertIn("methods", result["manifest"])
+        self.assertIn("agents", result["manifest"])
+
+    def test_fetch_manifest_helper_returns_same_shape(self):
+        result = elemen_client.fetch_manifest(
+            self.server.host, self.server.port, insecure=True,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["kind"], "manifest")
+        self.assertEqual(result["manifest"]["agents"]["disclosure"], "public")
+
+    # ---- v2 agent fetch shape ----
+
+    def test_form1a_fetch_returns_agent_kind(self):
+        result = elemen_client.fetch(
+            self._uri(LAUREN_ID),
+            insecure=True,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["kind"], "agent")
+        body = json.loads(result["body"])
+        self.assertEqual(body["document_version"], "v2")
+        self.assertIn("skills", body)
+        self.assertIn("requires", body)
+
+    # ---- Synthesis-Id passthrough ----
+
+    def test_invoke_via_synthesis_id_passes_header(self):
+        # Establish a synthesis on the orchestrator.
+        propose = elemen_client.invoke_method(
+            self._uri(ORCH_ID),
+            "PROPOSE",
+            {
+                "name": "QUERY",
+                "parameters": {"intent": "string"},
+                "outcome": "results",
+            },
+            insecure=True,
+        )
+        self.assertEqual(propose["status_code"], 200)
+        synth_id = json.loads(propose["body"])["synthesis"]["synthesis_id"]
+
+        # Re-invoke under any method name with the synthesis_id; the
+        # server rewrites to the synthesis target (QUERY).
+        result = elemen_client.invoke_method(
+            self._uri(ORCH_ID),
+            "RESERVE",  # arbitrary; the server replaces it
+            {"intent": "follow up"},
+            insecure=True,
+            synthesis_id=synth_id,
+        )
+        self.assertEqual(result["status_code"], 200)
+        body = json.loads(result["body"])
+        self.assertEqual(body["method"], "QUERY")
+
 
 if __name__ == "__main__":
     unittest.main()

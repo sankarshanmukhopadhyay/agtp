@@ -25,6 +25,9 @@ const els = {
   histList:   $("#history-list"),
   histEmpty:  $("#history-empty"),
   histClose:  $("#hist-close"),
+  // navigation
+  navBack:    $("#nav-back"),
+  navFwd:     $("#nav-forward"),
   // methods explorer
   mTabBadge:  $("#methods-tab-badge"),
   mEmpty:     $("#methods-empty"),
@@ -38,6 +41,22 @@ const els = {
   customList:      $("#custom-list"),
   embeddedCount:   $("#embedded-count"),
   customCount:     $("#custom-count"),
+  // agent view
+  agentView:        $("#agent-view"),
+  migrationBanner:  $("#migration-banner"),
+  matchBadge:       $("#match-badge"),
+  matchDetail:      $("#match-detail"),
+  agentHeader:      $("#agent-header"),
+  agentSkills:      $("#agent-skills"),
+  agentRequires:    $("#agent-requires"),
+  agentFooter:      $("#agent-footer"),
+  // manifest view
+  manifestView:    $("#manifest-view"),
+  manifestHeader:  $("#manifest-header"),
+  manifestServer:  $("#manifest-server"),
+  manifestMethodsSection: $("#manifest-methods-section"),
+  manifestAgents:  $("#manifest-agents"),
+  manifestPolicy:  $("#manifest-policy"),
   // invocations
   invList:    $("#invocations-list"),
   invEmpty:   $("#invocations-empty"),
@@ -46,9 +65,17 @@ const els = {
 
 // Per-host:port DISCOVER cache, keyed across tabs in this session.
 const methodsCacheByEndpoint = new Map();
+// Per-host:port manifest cache (used by the matching handshake on
+// agent loads to avoid re-fetching).
+const manifestCacheByEndpoint = new Map();
+// Per-tab synthesis state: {methodName: synthesisId}
+// Stored on the tab itself so each tab keeps its own session.
 // localStorage key for invocation history.
 const INV_KEY = "elemen.invocations.v1";
 const INV_LIMIT = 100;
+// localStorage key for URI bar history.
+const URI_HISTORY_KEY = "elemen.uri_history.v1";
+const URI_HISTORY_LIMIT = 200;
 
 const state = {
   tabs: [],         // [{ id, uri, format, registry, insecure, skip, result, status }]
@@ -235,6 +262,17 @@ function clearResponsePanes() {
   els.prettyIfr.srcdoc = "";
   els.raw.textContent = "";
   els.headers.textContent = "";
+  // Remove any status banners left from a prior render.
+  document.querySelectorAll(".resp-banner").forEach((b) => {
+    if (!b.closest("#pane-pretty")) return;
+    b.remove();
+  });
+  document.querySelectorAll(".resp-banner-wrap").forEach((w) => w.remove());
+  if (els.agentView) els.agentView.classList.add("hidden");
+  if (els.manifestView) els.manifestView.classList.add("hidden");
+  if (els.matchBadge) els.matchBadge.classList.add("hidden");
+  if (els.matchDetail) els.matchDetail.classList.add("hidden");
+  if (els.migrationBanner) els.migrationBanner.classList.add("hidden");
   showPrettyAs("pre");
 }
 
@@ -261,14 +299,57 @@ function renderResponse(tab) {
   }
   hLines.push("");
   hLines.push(`# resolved: ${r.host}:${r.port}`);
-  hLines.push(`# agent_id: ${r.agent_id}`);
+  if (r.agent_id) {
+    hLines.push(`# agent_id: ${r.agent_id}`);
+  } else if (r.kind === "manifest") {
+    hLines.push(`# server: ${r.host}:${r.port}`);
+  }
   els.headers.textContent = hLines.join("\n");
 
-  // Pretty pane: rendered HTML for html, syntax-highlighted for json, plain for yaml
+  // Status-specific banner (451 / 452 / 460 / 461 / 462). Rendered
+  // in the Pretty pane above the structured/raw content. For 461
+  // the Accept Counter button is wired via the try-it pathway.
+  const banner = renderStatusBanner(r);
+
+  // Pretty pane variants:
+  //   * Manifest -> structured manifest view.
+  //   * Agent doc (status 200) -> structured agent view.
+  //   * HTML format -> iframe.
+  //   * Otherwise -> syntax-highlighted JSON or plain text.
+  if (r.kind === "manifest") {
+    if (renderManifestView(tab)) {
+      if (banner) {
+        els.manifestView.insertBefore(
+          banner,
+          els.manifestView.firstChild,
+        );
+      }
+      return;
+    }
+  }
+
+  if (r.kind === "agent" && r.format === "html") {
+    els.prettyIfr.srcdoc = r.body;
+    showPrettyAs("iframe");
+    return;
+  }
+
+  if (r.kind === "agent" && r.status_code === 200 && r.format === "json") {
+    if (renderAgentView(tab)) {
+      if (banner) {
+        els.agentView.insertBefore(banner, els.agentView.firstChild);
+      }
+      return;
+    }
+  }
+
   if (r.format === "html") {
     els.prettyIfr.srcdoc = r.body;
     showPrettyAs("iframe");
-  } else if (r.format === "json") {
+    return;
+  }
+
+  if (r.format === "json") {
     try {
       const obj = JSON.parse(r.body);
       els.prettyPre.innerHTML = highlightJson(JSON.stringify(obj, null, 2));
@@ -279,6 +360,14 @@ function renderResponse(tab) {
   } else {
     els.prettyPre.textContent = r.body;
     showPrettyAs("pre");
+  }
+
+  if (banner) {
+    // For non-structured renders, prepend the banner to the Pretty pane.
+    const wrap = document.createElement("div");
+    wrap.className = "resp-banner-wrap";
+    wrap.appendChild(banner);
+    els.prettyPre.parentNode.insertBefore(wrap, els.prettyPre);
   }
 }
 
@@ -506,21 +595,39 @@ function renderMethods(tab) {
     note.textContent = "No capabilities reported by this agent.";
     els.actionsGrid.appendChild(note);
   } else {
+    // Use the matching handshake outcome (if available) to decide
+    // which actions are reachable on the server. Methods the agent
+    // needs but the server does not expose render as ghost buttons.
+    const matchedSet = tab.matchOutcome
+      ? new Set(tab.matchOutcome.matched)
+      : null;
     for (const cap of caps) {
       const spec = universe.get(cap);
+      const reachable = matchedSet ? matchedSet.has(cap) : !!spec;
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = `action-btn ${spec ? categoryClass(spec.category) : "cat-other"}`;
+      let badgeHtml = "";
       if (!spec) {
         btn.classList.add("unavailable");
         btn.title = "Declared by the agent but not advertised by the server.";
+        badgeHtml = '<span class="badge muts">unavailable</span>';
+      } else if (matchedSet && !reachable) {
+        btn.classList.add("ghost");
+        btn.title = "Server does not expose this method.";
+        badgeHtml = '<span class="badge muts">missing</span>';
       }
       btn.innerHTML = `
         <span class="action-name">${escapeHtml(cap)}</span>
-        ${spec ? "" : '<span class="badge muts">unavailable</span>'}
+        ${badgeHtml}
       `;
       btn.addEventListener("click", () => {
-        if (spec) expandMethod(tab, cap);
+        if (spec) {
+          expandMethod(tab, cap);
+          return;
+        }
+        // No spec on the server: prompt the negotiation flow.
+        promptNegotiationForMissing(tab, cap);
       });
       els.actionsGrid.appendChild(btn);
     }
@@ -798,6 +905,10 @@ function buildTryItForm(tab, spec) {
     invokeBtn.textContent = "Invoking...";
     let result;
     try {
+      // If a prior PROPOSE established a synthesis for this method,
+      // reuse it so the server rewrites the request to the underlying
+      // verb instead of soft-denying.
+      const synthId = (tab.syntheses || {})[spec.name] || "";
       result = await window.pywebview.api.invoke(
         tab.uri,
         spec.name,
@@ -805,6 +916,7 @@ function buildTryItForm(tab, spec) {
         tab.registry || "",
         !!tab.insecure,
         !!tab.skip,
+        synthId,
       );
     } catch (e) {
       result = { ok: false, error: `bridge error: ${e}` };
@@ -872,6 +984,111 @@ function renderTryItResponse(area, result, methodName) {
     }
   }
   area.appendChild(pre);
+}
+
+// ---------- negotiation flow ----------
+
+async function promptNegotiationForMissing(tab, methodName) {
+  // Best-effort confirm; the prompt API is fine for pywebview's
+  // chromeless window. Future polish: render a dedicated modal.
+  const proceed = window.confirm(
+    `Server does not expose ${methodName}. Negotiate?\n\n` +
+    `OK runs PROPOSE for the missing method; Cancel returns to the page.`,
+  );
+  if (!proceed) return;
+
+  const proposal = {
+    name: methodName,
+    parameters: {},
+    outcome: "auto-generated proposal from elemen",
+    description: `client-driven proposal for ${methodName}`,
+  };
+
+  let result;
+  try {
+    result = await window.pywebview.api.invoke(
+      tab.uri,
+      "PROPOSE",
+      proposal,
+      tab.registry || "",
+      !!tab.insecure,
+      !!tab.skip,
+    );
+  } catch (e) {
+    setStatus(`negotiation bridge error: ${e}`, "err");
+    return;
+  }
+
+  if (!result || !result.ok) {
+    setStatus(`PROPOSE failed: ${result?.error || "(unknown)"}`, "err");
+    return;
+  }
+
+  // Reuse the renderResponse path by stuffing the response into the
+  // tab as the active result. This produces the right banner.
+  const renderable = {
+    ok: true,
+    kind: "agent",
+    agent_id: result.agent_id,
+    host: result.host,
+    port: result.port,
+    status_code: result.status_code,
+    status_text: result.status_text,
+    headers: result.headers,
+    body: result.body,
+    content_type: result.content_type,
+    format: "json",
+  };
+  tab.result = renderable;
+  renderResponse(tab);
+
+  // If accepted, store synthesis_id so subsequent Try-it invocations
+  // of the proposed method can use it.
+  if (result.status_code === 200) {
+    try {
+      const payload = JSON.parse(result.body);
+      const synth = payload.synthesis;
+      if (synth && synth.synthesis_id) {
+        tab.syntheses = tab.syntheses || {};
+        tab.syntheses[methodName] = synth.synthesis_id;
+        setStatus(
+          `synthesis ${synth.synthesis_id.slice(0, 16)}… established for ${methodName}`,
+          "ok",
+        );
+      }
+    } catch { /* fall through */ }
+  } else if (result.status_code === 461) {
+    // Wire the Accept Counter button (if the banner rendered).
+    const btn = document.querySelector(".resp-banner .accept-counter");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        try {
+          const payload = JSON.parse(result.body);
+          const counter = payload.counter_proposal || {};
+          if (counter.name) expandMethod(tab, counter.name);
+        } catch { /* ignore */ }
+      });
+    } else {
+      // Banner is rendered without the button by default; add one
+      // pointing to the counter method.
+      try {
+        const payload = JSON.parse(result.body);
+        const counter = payload.counter_proposal || {};
+        if (counter.name) {
+          const banner = document.querySelector(".resp-banner.counter-proposal");
+          if (banner) {
+            const accept = document.createElement("button");
+            accept.className = "accept-counter";
+            accept.textContent = `Accept counter and open ${counter.name}`;
+            accept.addEventListener("click", () => {
+              expandMethod(tab, counter.name);
+            });
+            banner.appendChild(accept);
+          }
+        }
+      } catch { /* ignore */ }
+    }
+  }
 }
 
 function expandMethod(tab, methodName, { skipScroll = false } = {}) {
@@ -973,8 +1190,547 @@ if (els.invClear) {
   });
 }
 
+// ---------- URI bar history ----------
+
+function loadUriHistory() {
+  try {
+    const raw = localStorage.getItem(URI_HISTORY_KEY);
+    if (!raw) return { entries: [], current_index: -1 };
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.entries)) {
+      return { entries: [], current_index: -1 };
+    }
+    return parsed;
+  } catch {
+    return { entries: [], current_index: -1 };
+  }
+}
+
+function saveUriHistory(h) {
+  try { localStorage.setItem(URI_HISTORY_KEY, JSON.stringify(h)); }
+  catch { /* quota or disabled */ }
+}
+
+function pushUriHistory(uri, title) {
+  if (!uri) return;
+  const h = loadUriHistory();
+  // If we're currently at an older entry, truncate the forward stack
+  // (matches browser back/forward semantics).
+  if (h.current_index >= 0 && h.current_index < h.entries.length - 1) {
+    h.entries.length = h.current_index + 1;
+  }
+  // Avoid pushing exact duplicates of the latest entry.
+  const last = h.entries[h.entries.length - 1];
+  if (last && last.uri === uri) {
+    last.timestamp = new Date().toISOString();
+    if (title) last.title = title;
+    h.current_index = h.entries.length - 1;
+  } else {
+    h.entries.push({
+      uri,
+      timestamp: new Date().toISOString(),
+      title: title || null,
+    });
+    if (h.entries.length > URI_HISTORY_LIMIT) {
+      h.entries.shift();
+    }
+    h.current_index = h.entries.length - 1;
+  }
+  saveUriHistory(h);
+  updateNavButtons();
+}
+
+function updateUriHistoryTitle(title) {
+  const h = loadUriHistory();
+  if (h.current_index < 0 || h.current_index >= h.entries.length) return;
+  h.entries[h.current_index].title = title;
+  saveUriHistory(h);
+}
+
+function updateNavButtons() {
+  const h = loadUriHistory();
+  els.navBack.disabled = h.current_index <= 0;
+  els.navFwd.disabled = h.current_index >= h.entries.length - 1;
+}
+
+function navigateHistory(delta) {
+  const h = loadUriHistory();
+  const newIndex = h.current_index + delta;
+  if (newIndex < 0 || newIndex >= h.entries.length) return;
+  h.current_index = newIndex;
+  saveUriHistory(h);
+  const entry = h.entries[newIndex];
+  const tab = getActive();
+  if (!tab) return;
+  tab.uri = entry.uri;
+  tab.format = tab.format || "json";
+  loadTabIntoForm(tab);
+  // Use the silent fetch path to avoid re-pushing onto history.
+  doFetch({ silentHistory: true });
+  updateNavButtons();
+}
+
+els.navBack.addEventListener("click", () => navigateHistory(-1));
+els.navFwd.addEventListener("click", () => navigateHistory(1));
+
+document.addEventListener("keydown", (e) => {
+  // Alt+Left / Alt+Right for back/forward navigation.
+  if (e.altKey && !e.ctrlKey && !e.metaKey) {
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      navigateHistory(-1);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      navigateHistory(1);
+    }
+  }
+});
+
+// ---------- agent / manifest view rendering ----------
+
+function showPaneVariant(variant) {
+  // variant: "agent" | "manifest" | "raw" | "iframe"
+  els.agentView.classList.toggle("hidden", variant !== "agent");
+  els.manifestView.classList.toggle("hidden", variant !== "manifest");
+  els.prettyPre.classList.toggle("hidden", variant !== "raw");
+  els.prettyIfr.classList.toggle("hidden", variant !== "iframe");
+}
+
+function renderAgentView(tab) {
+  const r = tab.result;
+  if (!r || !r.ok || r.status_code !== 200) return false;
+  let doc;
+  try {
+    doc = JSON.parse(r.body);
+  } catch {
+    return false;
+  }
+  if (!doc || !doc.agent_id || !Array.isArray(doc.skills)) {
+    return false;
+  }
+
+  // Migration banner.
+  els.migrationBanner.classList.toggle(
+    "hidden",
+    doc.document_version !== "v1-migrated",
+  );
+
+  // Header.
+  const status = (doc.status || "").toLowerCase();
+  els.agentHeader.innerHTML =
+    `<div>` +
+    `<h1 class="name">${escapeHtml(doc.name || "")}</h1>` +
+    `<p class="principal">agent serving ${escapeHtml(doc.principal || "")}</p>` +
+    (doc.description
+      ? `<p class="description">${escapeHtml(doc.description)}</p>`
+      : "") +
+    `</div>` +
+    `<span class="status-badge status-${escapeHtml(status || "active")}">` +
+    `${escapeHtml(status || "active")}</span>`;
+
+  // Skills.
+  const skills = (doc.skills || []).map((s) =>
+    `<li>${escapeHtml(s)}</li>`,
+  ).join("");
+  els.agentSkills.innerHTML =
+    `<h3>Skills</h3>` +
+    (skills
+      ? `<ul class="skill-card-list">${skills}</ul>`
+      : `<div class="agents-empty">No skills declared.</div>`);
+
+  // Requires section. Filled in below by renderRequiresSection so it
+  // can be re-rendered when match info arrives later.
+  renderRequiresSection(tab, doc);
+
+  // Footer.
+  els.agentFooter.innerHTML =
+    `<dt>Issued by</dt><dd>${escapeHtml(doc.issuer || "")}</dd>` +
+    `<dt>Issued at</dt><dd>${escapeHtml(doc.issued_at || "")}</dd>` +
+    `<dt>Document version</dt><dd>${escapeHtml(doc.document_version || "v2")}</dd>` +
+    `<dt>AGTP version</dt><dd>${escapeHtml(doc.agtp_version || "")}</dd>` +
+    `<dd class="agent-id-cell">${escapeHtml(doc.agent_id)}</dd>`;
+
+  showPaneVariant("agent");
+  return true;
+}
+
+function renderRequiresSection(tab, doc) {
+  const req = doc.requires || {};
+  const methods = req.methods || [];
+  const scopes = req.scopes || [];
+  const wildcards = !!req.wildcards;
+  const matchInfo = tab.matchOutcome || null;
+  const matchedSet = matchInfo ? new Set(matchInfo.matched) : null;
+
+  function renderMethodsList() {
+    if (!methods.length) {
+      return `<div class="agents-empty">No methods declared.</div>`;
+    }
+    return `<ul class="requires-list">${
+      methods.map((m) => {
+        let avail = "";
+        if (matchedSet) {
+          avail = matchedSet.has(m)
+            ? `<span class="avail-mark matched">available</span>`
+            : `<span class="avail-mark missing">missing on server</span>`;
+        }
+        return `<li><span>${escapeHtml(m)}</span>${avail}</li>`;
+      }).join("")
+    }</ul>`;
+  }
+
+  function renderScopesList() {
+    if (!scopes.length) {
+      return `<div class="agents-empty">No scopes declared.</div>`;
+    }
+    return `<ul class="requires-list">${
+      scopes.map((s) => `<li><span>${escapeHtml(s)}</span></li>`).join("")
+    }</ul>`;
+  }
+
+  els.agentRequires.innerHTML =
+    `<h3>Requires</h3>` +
+    `<h4>Methods Needed (${methods.length})</h4>` +
+    renderMethodsList() +
+    `<h4>Scopes (${scopes.length})</h4>` +
+    renderScopesList() +
+    `<h4>Wildcards</h4>` +
+    `<span class="wildcards-badge ${wildcards ? "wildcard" : "strict"}">` +
+    `${wildcards ? "Wildcard (accepts any method)" : "Strict (declared methods only)"}` +
+    `</span>`;
+}
+
+function renderManifestView(tab) {
+  const r = tab.result;
+  if (!r || !r.ok) return false;
+  const m = r.manifest;
+  if (!m) return false;
+
+  els.manifestHeader.innerHTML =
+    `<h2>${escapeHtml(m.server?.issuer || "(server)")}</h2>` +
+    `<span class="endpoint">agtp://${escapeHtml(r.host)}:${escapeHtml(String(r.port))}</span>`;
+
+  // Server section.
+  const sv = m.server || {};
+  const features = (sv.supported_features || [])
+    .map((f) => `<span class="feature-pill">${escapeHtml(f)}</span>`)
+    .join("");
+  els.manifestServer.innerHTML =
+    `<h3>Server</h3>` +
+    `<div class="body">` +
+    `<dl class="kv-grid">` +
+    `<dt>Operator</dt><dd>${escapeHtml(sv.operator || "")}</dd>` +
+    `<dt>Contact</dt><dd>${escapeHtml(sv.contact || "")}</dd>` +
+    `<dt>AGTP version</dt><dd>${escapeHtml(m.agtp_version || "")}</dd>` +
+    `<dt>AMG version</dt><dd>${escapeHtml(sv.amg_version || "")}</dd>` +
+    `<dt>Document version</dt><dd>${escapeHtml(m.document_version || "v2")}</dd>` +
+    `<dt>Issued at</dt><dd>${escapeHtml(m.issued_at || "")}</dd>` +
+    `</dl>` +
+    (features
+      ? `<div style="margin-top:10px">${features}</div>`
+      : "") +
+    `</div>`;
+
+  // Methods section.
+  const meth = m.methods || {};
+  const summary = meth.summary || {};
+  const embedded = meth.embedded || [];
+  const custom = meth.custom || [];
+  els.manifestMethodsSection.innerHTML =
+    `<h3>Methods (${summary.total ?? embedded.length + custom.length})</h3>` +
+    `<div class="body">` +
+    `<div style="font-size:11.5px;color:var(--text-dim);margin-bottom:8px">` +
+    `Embedded: ${summary.embedded_count ?? embedded.length} &nbsp;·&nbsp; ` +
+    `Custom: ${summary.custom_count ?? custom.length}` +
+    `</div>` +
+    renderManifestMethodsList(embedded, "Standard Methods") +
+    (custom.length ? renderManifestMethodsList(custom, "Custom Methods") : "") +
+    `</div>`;
+
+  // Agents section.
+  const agents = m.agents || {};
+  const list = agents.list || [];
+  let agentsHtml = `<h3>Agents (${list.length})</h3>`;
+  if (agents.notice) {
+    agentsHtml += `<div class="disclosure-notice">${escapeHtml(agents.notice)}</div>`;
+  }
+  if (list.length === 0) {
+    agentsHtml += `<div class="agents-empty">No agents disclosed at this server.</div>`;
+  } else {
+    agentsHtml += `<div class="agent-cards">${
+      list.map((a) => renderManifestAgentCard(a, r.host, r.port)).join("")
+    }</div>`;
+  }
+  els.manifestAgents.innerHTML = agentsHtml;
+
+  // Policy section.
+  const pol = m.policy || {};
+  els.manifestPolicy.innerHTML =
+    `<h3>Policy</h3>` +
+    `<div class="policy-row">` +
+    pillFor("Wildcards accepted", pol.wildcards_accepted) +
+    pillFor("Anonymous discovery", pol.anonymous_discovery) +
+    pillFor("Scope required for invocation", pol.scope_required_for_invocation) +
+    `</div>`;
+
+  // Wire up agent-card open buttons (delegated).
+  els.manifestAgents.querySelectorAll(".open-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = btn.getAttribute("data-target");
+      if (!target) return;
+      const tab = getActive();
+      if (!tab) return;
+      tab.uri = target;
+      loadTabIntoForm(tab);
+      doFetch();
+    });
+  });
+
+  showPaneVariant("manifest");
+  return true;
+}
+
+function renderManifestMethodsList(items, title) {
+  const rows = items.map((entry) =>
+    `<li><code>${escapeHtml(entry.name)}</code> ` +
+    `<span style="color:var(--text-dim);font-size:11px">` +
+    `${escapeHtml(entry.category || "")}` +
+    (entry.namespace ? ` · ${escapeHtml(entry.namespace)}` : "") +
+    `</span></li>`,
+  ).join("");
+  return (
+    `<div style="margin-top:6px"><strong style="font-size:11px;color:var(--text-dim)">` +
+    `${escapeHtml(title)}</strong></div>` +
+    `<ul style="list-style:none;margin:6px 0 0;padding:0;` +
+    `display:flex;flex-direction:column;gap:2px;font-family:var(--mono);font-size:12px">` +
+    rows +
+    `</ul>`
+  );
+}
+
+function renderManifestAgentCard(a, host, port) {
+  const target = `agtp://${a.agent_id}@${host}:${port}`;
+  return (
+    `<div class="agent-card">` +
+    `<span class="name">${escapeHtml(a.name || "")}</span>` +
+    (a.skills_summary
+      ? `<span class="skills-summary">${escapeHtml(a.skills_summary)}</span>`
+      : "") +
+    `<span class="meta">` +
+    `<span>${escapeHtml(a.agent_id.slice(0, 12))}…</span>` +
+    `<span>${a.methods_count} methods</span>` +
+    `</span>` +
+    `<button class="open-btn" data-target="${escapeHtml(target)}">Open</button>` +
+    `</div>`
+  );
+}
+
+function pillFor(label, value) {
+  const cls = value ? "on" : "off";
+  const symbol = value ? "✓" : "✗";
+  return `<span class="policy-pill ${cls}">${symbol} ${escapeHtml(label)}</span>`;
+}
+
+// ---------- match handshake ----------
+
+function endpointKeyFor(host, port) {
+  return `${host}:${port}`;
+}
+
+async function fetchManifestForHandshake(tab, { force = false } = {}) {
+  if (!tab.result || !tab.result.ok) return null;
+  const host = tab.result.host;
+  const port = tab.result.port;
+  const key = endpointKeyFor(host, port);
+  if (!force && manifestCacheByEndpoint.has(key)) {
+    return manifestCacheByEndpoint.get(key);
+  }
+  let result;
+  try {
+    result = await window.pywebview.api.fetch_manifest(
+      host, port, !!tab.insecure, !!tab.skip,
+    );
+  } catch (e) {
+    return null;
+  }
+  if (result && result.ok && result.manifest) {
+    manifestCacheByEndpoint.set(key, result.manifest);
+    return result.manifest;
+  }
+  return null;
+}
+
+function computeMatchOutcome(agentDoc, manifest) {
+  const requires = agentDoc.requires || {};
+  const needs = (requires.methods || []).slice();
+  const wildcards = !!requires.wildcards;
+  const m = manifest || {};
+  const meth = m.methods || {};
+  const policy = m.policy || {};
+  const universeSet = new Set();
+  for (const e of meth.embedded || []) universeSet.add(e.name);
+  for (const e of meth.custom || []) universeSet.add(e.name);
+  const universe = Array.from(universeSet).sort();
+  const serverWild = policy.wildcards_accepted !== false;
+
+  if (wildcards && serverWild) {
+    return {
+      kind: "full",
+      matched: universe.slice(),
+      missing: [],
+      universe,
+      agentWantsWildcards: true,
+      serverAcceptsWildcards: true,
+    };
+  }
+
+  const matched = needs.filter((n) => universeSet.has(n)).sort();
+  const missing = needs.filter((n) => !universeSet.has(n)).sort();
+  let kind;
+  if (!needs.length) {
+    kind = universe.length ? "full" : "none";
+  } else if (!missing.length) {
+    kind = "full";
+  } else if (matched.length === 0) {
+    kind = "none";
+  } else {
+    kind = "partial";
+  }
+  return {
+    kind, matched, missing, universe,
+    agentWantsWildcards: wildcards,
+    serverAcceptsWildcards: serverWild,
+  };
+}
+
+function renderMatchBadge(tab) {
+  const outcome = tab.matchOutcome;
+  const badge = els.matchBadge;
+  const detail = els.matchDetail;
+  badge.classList.remove("full", "partial", "none");
+  if (!outcome) {
+    badge.classList.add("hidden");
+    detail.classList.add("hidden");
+    return;
+  }
+  badge.classList.add(outcome.kind);
+  badge.classList.remove("hidden");
+
+  const totalNeed = outcome.matched.length + outcome.missing.length;
+  let desc;
+  if (outcome.kind === "full") {
+    desc = totalNeed
+      ? `All ${totalNeed} required methods are available on this server.`
+      : `Server exposes ${outcome.universe.length} methods.`;
+  } else if (outcome.kind === "partial") {
+    desc = `${outcome.matched.length} of ${totalNeed} required methods are available. ` +
+      `Missing: ${outcome.missing.join(", ")}.`;
+  } else {
+    desc = `${outcome.matched.length} of ${totalNeed} required methods are available.`;
+  }
+  badge.innerHTML =
+    `<span class="label">Match: ${outcome.kind}</span>` +
+    `<span class="desc">${escapeHtml(desc)}</span>` +
+    `<a class="refresh" data-action="refresh-manifest">↻ refresh manifest</a>`;
+  badge.querySelector(".refresh").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await refreshManifestAndMatch(tab);
+  });
+  badge.onclick = (e) => {
+    if (e.target && e.target.classList.contains("refresh")) return;
+    detail.classList.toggle("hidden");
+  };
+
+  detail.innerHTML =
+    `<div>Matched (${outcome.matched.length}): ${
+      outcome.matched.length ? escapeHtml(outcome.matched.join(", ")) : "(none)"
+    }</div>` +
+    `<div>Missing (${outcome.missing.length}): ${
+      outcome.missing.length ? escapeHtml(outcome.missing.join(", ")) : "(none)"
+    }</div>` +
+    `<div>Server has (${outcome.universe.length}): ${
+      escapeHtml(outcome.universe.join(", "))
+    }</div>` +
+    (outcome.agentWantsWildcards && !outcome.serverAcceptsWildcards
+      ? `<div style="color:var(--warn)">Note: agent declares wildcards but server policy refuses; ` +
+        `non-embedded calls will return 462.</div>`
+      : "");
+}
+
+async function refreshManifestAndMatch(tab) {
+  if (!tab || !tab.result || !tab.result.ok) return;
+  const manifest = await fetchManifestForHandshake(tab, { force: true });
+  if (!manifest) return;
+  const docText = tab.result.body;
+  let doc = null;
+  try { doc = JSON.parse(docText); } catch {}
+  if (!doc) return;
+  tab.matchOutcome = computeMatchOutcome(doc, manifest);
+  if (state.activeId === tab.id) {
+    renderMatchBadge(tab);
+    renderRequiresSection(tab, doc);
+    if (tab.methods) renderMethods(tab);
+  }
+}
+
+// ---------- response banners (45x / 46x) ----------
+
+const STATUS_BANNER_KINDS = {
+  451: { cls: "scope-violation",     head: "451 Scope Violation" },
+  452: { cls: "method-outside-need", head: "452 Method Outside Agent's Declared Need" },
+  460: { cls: "negotiation-refused", head: "460 Negotiation Refused" },
+  461: { cls: "counter-proposal",    head: "461 Counter-Proposal" },
+  462: { cls: "wildcards-refused",   head: "462 Wildcards Refused" },
+};
+
+function renderStatusBanner(result) {
+  if (!result || !result.ok) return null;
+  const meta = STATUS_BANNER_KINDS[result.status_code];
+  if (!meta) return null;
+
+  let payload;
+  try { payload = JSON.parse(result.body); }
+  catch { payload = {}; }
+
+  const div = document.createElement("div");
+  div.className = `resp-banner ${meta.cls}`;
+
+  const head = document.createElement("div");
+  head.className = "head";
+  head.textContent = meta.head;
+  div.appendChild(head);
+
+  const detail = document.createElement("div");
+  detail.className = "detail";
+  if (meta.cls === "counter-proposal") {
+    const counter = payload.counter_proposal || {};
+    detail.textContent =
+      `Server suggests ${counter.name || "(unknown)"}: ${counter.description || ""}`;
+    div.appendChild(detail);
+    const spec = document.createElement("div");
+    spec.className = "counter-spec";
+    spec.textContent = JSON.stringify(counter, null, 2);
+    div.appendChild(spec);
+  } else if (meta.cls === "negotiation-refused") {
+    const err = payload.error || {};
+    detail.textContent =
+      `${err.reason || "unknown"}: ${err.explanation || ""}`;
+    div.appendChild(detail);
+  } else {
+    const err = payload.error || {};
+    detail.textContent = err.explanation || result.status_text || "";
+    div.appendChild(detail);
+  }
+
+  const meta2 = document.createElement("div");
+  meta2.className = "meta";
+  meta2.textContent = `${result.host}:${result.port}`;
+  div.appendChild(meta2);
+  return div;
+}
+
 // ---------- main fetch ----------
-async function doFetch() {
+async function doFetch({ silentHistory = false } = {}) {
   const tab = getActive();
   if (!tab) return;
   snapshotFormToTab(tab);
@@ -986,6 +1742,9 @@ async function doFetch() {
   }
 
   tab.name = null;
+  // Reset per-load state.
+  tab.matchOutcome = null;
+  tab.serverManifest = null;
   els.go.disabled = true;
   setStatus(`Resolving ${uri} …`, "working");
 
@@ -1010,11 +1769,22 @@ async function doFetch() {
   // (We keyed by tab.id at the time of the call.)
   tab.result = result;
   tab.uri = uri;
+  tab.kind = result.kind || (result.ok ? (result.agent_id ? "agent" : "manifest") : null);
   // Reset the methods view; auto-DISCOVER will repopulate it on success.
   tab.methods = null;
   tab.openMethod = null;
   if (result.ok) {
-    tab.name = nameFromBody(result.body, result.format);
+    tab.name = nameFromBody(result.body, result.format) ||
+      (result.kind === "manifest" ? `server: ${result.host}` : null);
+    // Server-level manifest fetch: also seed the manifest cache and
+    // load it into tab.serverManifest so the Methods tab uses it.
+    if (result.kind === "manifest" && result.manifest) {
+      manifestCacheByEndpoint.set(
+        endpointKeyFor(result.host, result.port),
+        result.manifest,
+      );
+      tab.serverManifest = result.manifest;
+    }
   }
   renderTabStrip();
   if (state.activeId === tab.id) renderMethods(tab);
@@ -1032,6 +1802,12 @@ async function doFetch() {
     renderResponse(tab);
   }
 
+  if (result.ok && !silentHistory) {
+    pushUriHistory(uri, tab.name);
+  } else {
+    updateNavButtons();
+  }
+
   await pushHistory({
     uri,
     format: tab.format,
@@ -1043,11 +1819,29 @@ async function doFetch() {
     error: result.ok ? null : result.error,
   });
 
-  // Auto-DISCOVER /methods on a successful identity fetch. If the
-  // server doesn't support it, renderMethods shows the error state and
-  // the rest of the UI continues to function.
-  if (result.ok && result.status_code === 200) {
+  // Auto-DISCOVER /methods on a successful agent fetch. Manifest URIs
+  // already carry the methods inventory, so no follow-up is needed.
+  if (
+    result.ok
+    && result.status_code === 200
+    && result.kind === "agent"
+  ) {
     doDiscoverMethods(tab);
+    // Matching handshake: fetch (or reuse) the server manifest and
+    // compute the outcome. If anything fails we leave the badge empty.
+    fetchManifestForHandshake(tab).then((manifest) => {
+      if (!manifest) return;
+      tab.serverManifest = manifest;
+      let doc = null;
+      try { doc = JSON.parse(result.body); } catch {}
+      if (!doc) return;
+      tab.matchOutcome = computeMatchOutcome(doc, manifest);
+      if (state.activeId === tab.id) {
+        renderMatchBadge(tab);
+        renderRequiresSection(tab, doc);
+        if (tab.methods) renderMethods(tab);
+      }
+    });
   }
 }
 

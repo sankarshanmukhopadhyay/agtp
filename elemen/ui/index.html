@@ -9,6 +9,20 @@
   <header class="topbar">
     <div class="brand">elemen</div>
     <form id="address-form" class="address">
+      <button
+        id="nav-back"
+        type="button"
+        class="nav-btn"
+        title="Back (Alt+Left)"
+        disabled
+      >&larr;</button>
+      <button
+        id="nav-forward"
+        type="button"
+        class="nav-btn"
+        title="Forward (Alt+Right)"
+        disabled
+      >&rarr;</button>
       <select id="format" title="Response format">
         <option value="json">json</option>
         <option value="yaml">yaml</option>
@@ -17,7 +31,7 @@
       <input
         id="uri"
         type="text"
-        placeholder="agtp://&lt;agent-id&gt; or agtp://&lt;agent-id&gt;@host"
+        placeholder="agtp://&lt;agent-id&gt; or agtp://host:port"
         autocomplete="off"
         spellcheck="false"
       />
@@ -72,6 +86,28 @@
     </nav>
 
     <div id="pane-pretty" class="pane active">
+      <div id="agent-view" class="agent-view hidden">
+        <div id="migration-banner" class="migration-banner hidden">
+          This agent is using the legacy v1 schema. Skills are
+          auto-generated from the description; the deployment should
+          migrate to v2.
+        </div>
+        <div id="match-badge" class="match-badge hidden"></div>
+        <div id="match-detail" class="match-detail hidden"></div>
+        <header id="agent-header" class="agent-header"></header>
+        <section id="agent-skills" class="agent-section"></section>
+        <section id="agent-requires" class="agent-section"></section>
+        <footer id="agent-footer" class="agent-footer"></footer>
+      </div>
+
+      <div id="manifest-view" class="manifest-view hidden">
+        <header id="manifest-header" class="manifest-header"></header>
+        <section id="manifest-server" class="manifest-section"></section>
+        <section id="manifest-methods-section" class="manifest-section"></section>
+        <section id="manifest-agents" class="manifest-section"></section>
+        <section id="manifest-policy" class="manifest-section"></section>
+      </div>
+
       <pre id="pretty-pre"></pre>
       <iframe
         id="pretty-iframe"

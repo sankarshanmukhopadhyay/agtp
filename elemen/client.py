@@ -92,7 +92,7 @@ def resolve_target(parsed: ParsedURI, registry_url: str) -> tuple[str, int]:
 
 
 def send_method(
-    agent_id: str,
+    agent_id: Optional[str],
     host: str,
     port: int,
     method_name: str,
@@ -102,12 +102,16 @@ def send_method(
     body_content_type: Optional[str] = None,
     use_tls: bool = True,
     insecure_skip_verify: bool = False,
+    extra_headers: Optional[dict] = None,
 ) -> wire.AGTPResponse:
     """
     Generalized method send. DESCRIBE, DISCOVER, QUERY... all reuse this.
 
-    A non-empty body must come with a body_content_type. Headers always
-    carry Target-Agent, Accept, and Host.
+    ``agent_id`` is None for server-level requests (Form 2 URIs); the
+    Target-Agent header is then omitted. A non-empty body must come
+    with a body_content_type. ``extra_headers`` (e.g.,
+    ``Synthesis-Id``) merge into the request headers last so the
+    caller can override.
     """
     sock = socket.create_connection((host, port), timeout=10.0)
 
@@ -119,12 +123,16 @@ def send_method(
         sock = ctx.wrap_socket(sock, server_hostname=host)
 
     headers = {
-        "Target-Agent": agent_id,
         "Accept": accept,
         "Host": host,
     }
+    if agent_id is not None:
+        headers["Target-Agent"] = agent_id
     if body and body_content_type:
         headers["Content-Type"] = body_content_type
+    if extra_headers:
+        for k, v in extra_headers.items():
+            headers[str(k)] = str(v)
 
     try:
         request = wire.AGTPRequest(
@@ -176,15 +184,30 @@ def fetch(
     """
     Resolve an agtp:// URI and return a result dict for UI rendering.
 
-    Result shape:
-        ok=True:  {ok, agent_id, host, port, status_code, status_text,
-                   headers, body, content_type, format}
-        ok=False: {ok, error, stage}
+    URI form determines the wire call and the result shape:
+
+      * Form 1 / 1a  (agent_id present)
+        Sends DESCRIBE. Returns ``kind="agent"`` plus the standard
+        ``{agent_id, body, content_type, format, ...}`` shape.
+
+      * Form 2  (no agent_id)
+        Sends server-level DISCOVER. Returns ``kind="manifest"`` plus
+        a parsed ``manifest`` field for the UI to render directly.
+
+    Both kinds carry the same transport metadata (host, port,
+    status_code, status_text, headers).
     """
     try:
         parsed = parse_uri(uri)
     except AgentIDError as exc:
         return {"ok": False, "error": str(exc), "stage": "parse"}
+
+    if parsed.is_server_level:
+        return _fetch_manifest(
+            parsed,
+            insecure=insecure,
+            insecure_skip_verify=insecure_skip_verify,
+        )
 
     accept = FORMAT_TO_ACCEPT.get(fmt, CONTENT_TYPE_JSON)
 
@@ -221,6 +244,7 @@ def fetch(
 
     return {
         "ok": True,
+        "kind": "agent",
         "agent_id": parsed.agent_id,
         "host": host,
         "port": port,
@@ -231,6 +255,84 @@ def fetch(
         "content_type": response.headers.get("Content-Type", ""),
         "format": fmt,
     }
+
+
+def _fetch_manifest(
+    parsed,
+    *,
+    insecure: bool = False,
+    insecure_skip_verify: bool = False,
+) -> dict:
+    """
+    Server-level DISCOVER (no Target-Agent). Returns the Server
+    Manifest as both the raw text body and a parsed dict so the UI
+    can render structured views without re-parsing.
+    """
+    host = parsed.host
+    port = parsed.effective_port
+    try:
+        response = send_method(
+            agent_id=None,
+            host=host,
+            port=port,
+            method_name="DISCOVER",
+            accept="application/json",
+            use_tls=not insecure,
+            insecure_skip_verify=insecure_skip_verify,
+        )
+    except (OSError, wire.WireFormatError) as exc:
+        return {
+            "ok": False,
+            "error": f"connection failed: {exc}",
+            "stage": "fetch",
+            "host": host,
+            "port": port,
+        }
+
+    body_text = response.body_bytes.decode("utf-8", errors="replace")
+    manifest_obj: Optional[dict] = None
+    if response.status_code == 200:
+        try:
+            parsed_obj = json.loads(body_text)
+            if isinstance(parsed_obj, dict):
+                manifest_obj = parsed_obj
+        except json.JSONDecodeError:
+            pass
+
+    return {
+        "ok": True,
+        "kind": "manifest",
+        "host": host,
+        "port": port,
+        "status_code": response.status_code,
+        "status_text": response.status_text,
+        "headers": dict(response.headers),
+        "body": body_text,
+        "content_type": response.headers.get("Content-Type", ""),
+        "manifest": manifest_obj,
+        "format": "json",
+    }
+
+
+def fetch_manifest(
+    host: str,
+    port: int,
+    *,
+    insecure: bool = False,
+    insecure_skip_verify: bool = False,
+) -> dict:
+    """
+    Public helper for the UI to fetch the manifest by host:port (used
+    by the matching handshake when an agent URI is loaded). Returns
+    the same shape as ``fetch`` for a server-level URI.
+    """
+    from agtp.ids import ParsedURI
+    parsed = ParsedURI(agent_id=None, host=host, port=port)
+    return _fetch_manifest(
+        parsed,
+        insecure=insecure,
+        insecure_skip_verify=insecure_skip_verify,
+    )
 
 
 def discover_methods(
@@ -333,6 +435,7 @@ def invoke_method(
     registry: str = DEFAULT_REGISTRY_URL,
     insecure: bool = False,
     insecure_skip_verify: bool = False,
+    synthesis_id: Optional[str] = None,
 ) -> dict:
     """
     Send an arbitrary method with an optional JSON body. Used by the
@@ -362,6 +465,10 @@ def invoke_method(
         body_bytes = json.dumps(body_dict).encode("utf-8")
         body_content_type = "application/json"
 
+    extra_headers = {}
+    if synthesis_id:
+        extra_headers["Synthesis-Id"] = synthesis_id
+
     try:
         response = send_method(
             parsed.agent_id,
@@ -373,6 +480,7 @@ def invoke_method(
             body_content_type=body_content_type,
             use_tls=not insecure,
             insecure_skip_verify=insecure_skip_verify,
+            extra_headers=extra_headers or None,
         )
     except (OSError, wire.WireFormatError) as exc:
         return {
