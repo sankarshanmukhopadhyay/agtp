@@ -43,6 +43,9 @@ else
     echo "  Local:  $LOCAL"
     echo "  Remote: $REMOTE"
     git pull origin main
+    echo "▶ Reinstalling package..."
+    cd "$REPO_DIR"
+    pip install -e . --break-system-packages --quiet 2>/dev/null || pip install -e . --quiet
     NEED_RESTART=1
 fi
 

@@ -1,10 +1,10 @@
-"""``python -m client`` -> client.main.main()."""
+"""``python -m client`` -> client.cli.main.main()."""
 
 from __future__ import annotations
 
 import sys
 
-from client.main import main
+from client.cli.main import main
 
 
 if __name__ == "__main__":

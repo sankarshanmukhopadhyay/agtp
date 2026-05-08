@@ -19,30 +19,53 @@ import time
 import unittest
 from pathlib import Path
 
-import importlib.util as _importlib_util
-
-# Make ``core`` / ``server`` etc. importable from the repo root.
+# Make ``core`` / ``server`` / ``client`` etc. importable from
+# the repo root.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-# Load elemen/client.py explicitly under a non-shadowing module name.
-# We deliberately do NOT put elemen/ on sys.path because that would
-# shadow the top-level ``client`` package (also named client.py at
-# the elemen root) and break ``from client.main import ...`` in
-# sibling test modules.
-ELEMEN_DIR = REPO_ROOT / "elemen"
-
-
-def _load_elemen_client():
-    spec = _importlib_util.spec_from_file_location(
-        "elemen_client_module", str(ELEMEN_DIR / "client.py"),
-    )
-    mod = _importlib_util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-elemen_client = _load_elemen_client()  # the elemen Python bridge
+# The bridge now lives at client/elemen/bridge.py and exposes an Api
+# class. Tests instantiate Api() once per fixture and call its
+# methods directly; that exercises the same code path the JS UI
+# uses via window.pywebview.api.
+from client.elemen.bridge import Api as ElemenApi  # noqa: E402
 from server.main import AgentRegistry, handle_connection  # noqa: E402
+
+# Backwards-compat shim: the bulk of this file calls
+# ``elemen_client.fetch(...)`` etc. as module-level functions. The
+# old module had standalone helpers; the new bridge wraps them in an
+# Api class. Map the old names onto Api methods on a single shared
+# instance so the test bodies stay unchanged.
+_API = ElemenApi()
+
+
+class _ElemenClientShim:
+    """Adapter that makes the old standalone-function calls work
+    against the new Api class."""
+
+    def fetch(self, uri, *, fmt="json", insecure=False, insecure_skip_verify=False, **_):
+        return _API.fetch(uri, fmt, "", insecure, insecure_skip_verify)
+
+    def fetch_manifest(self, host, port, *, insecure=False, insecure_skip_verify=False, **_):
+        return _API.fetch_manifest(host, port, insecure, insecure_skip_verify)
+
+    def fetch_mcp_catalog(self, url, *, insecure_skip_verify=False, **_):
+        return _API.fetch_mcp_catalog(url, insecure_skip_verify)
+
+    def discover_methods(self, uri, *, insecure=False, insecure_skip_verify=False, **_):
+        return _API.discover(uri, "", insecure, insecure_skip_verify)
+
+    def invoke_method(
+        self, uri, method, body=None, *,
+        insecure=False, insecure_skip_verify=False, synthesis_id=None, **_,
+    ):
+        return _API.invoke(
+            uri, method, body, "",
+            insecure, insecure_skip_verify, synthesis_id or "",
+        )
+
+
+elemen_client = _ElemenClientShim()
 
 
 LAUREN_ID = "d8dc6f0df55d66c7b30100db3cffbe383c5f814e6e58a08521fb7636c3bcc230"

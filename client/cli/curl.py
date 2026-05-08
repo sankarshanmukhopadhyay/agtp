@@ -24,15 +24,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import socket
-import ssl
 import sys
 import urllib.error
 import urllib.request
 from typing import Dict, List, Optional, Tuple
 
-from core import wire
 from client import DEFAULT_REGISTRY_URL
+from client import core_client
+from core import wire
 from core.ids import (
     AGENT_ID_PATTERN,
     AgentIDError,
@@ -56,23 +55,15 @@ class CurlError(Exception):
 
 
 def _resolve_via_registry(agent_id: str, registry_url: str) -> Tuple[str, int]:
-    url = f"{registry_url.rstrip('/')}/registry/{agent_id}"
+    """
+    curl-flavored wrapper around ``core_client.lookup_registry`` that
+    surfaces the registry URL in error messages so users debugging a
+    failing curl invocation see what the tool tried.
+    """
     try:
-        with urllib.request.urlopen(url, timeout=5.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raise CurlError(
-            f"registry {registry_url} returned HTTP {exc.code}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise CurlError(
-            f"could not reach registry {registry_url}: {exc.reason}"
-        ) from exc
-    host = data.get("host")
-    port = data.get("port")
-    if not host or not port:
-        raise CurlError(f"registry response missing host/port: {data!r}")
-    return host, int(port)
+        return core_client.lookup_registry(agent_id, registry_url)
+    except core_client.ResolutionError as exc:
+        raise CurlError(str(exc)) from exc
 
 
 def _parse_target(
@@ -141,6 +132,14 @@ def _send(
     verify_tls: bool,
     verbose: bool,
 ) -> wire.AGTPResponse:
+    """
+    curl-flavored wrapper around ``core_client.send_method`` that
+    prints curl-style request lines (`*`, `>`) on stderr when
+    ``--verbose`` is set. The actual wire work delegates to
+    core_client; the request envelope is built from raw headers
+    rather than the high-level invoke helpers because curl wants to
+    let users override anything via -H.
+    """
     if verbose:
         scheme = "agtps" if use_tls else "agtp"
         print(f"* connecting: {scheme}://{host}:{port}", file=sys.stderr)
@@ -151,23 +150,30 @@ def _send(
             preview = body[:256].decode("utf-8", errors="replace")
             print(f"> body ({len(body)} bytes): {preview}", file=sys.stderr)
 
-    sock = socket.create_connection((host, port), timeout=10.0)
-    if use_tls:
-        ctx = ssl.create_default_context()
-        if not verify_tls:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-        sock = ctx.wrap_socket(sock, server_hostname=host)
-
-    request = wire.AGTPRequest(method=method, headers=headers, body_bytes=body)
-    try:
-        sock.sendall(request.serialize())
-        return wire.parse_response(sock.makefile("rb"))
-    finally:
-        try:
-            sock.close()
-        except OSError:
-            pass
+    # core_client.send_method derives Target-Agent / Accept / Host /
+    # Content-Type from its arguments and merges extra_headers last.
+    # curl already built a complete header dict, so we pass it
+    # wholesale via extra_headers and supply blank "intrinsic" values
+    # so the merge resolves to exactly what the user asked for.
+    accept = headers.get("Accept", "application/json")
+    target_agent = headers.get("Target-Agent")
+    body_content_type = headers.get("Content-Type")
+    return core_client.send_method(
+        target_agent,
+        host,
+        port,
+        method,
+        accept=accept,
+        body=body,
+        body_content_type=body_content_type,
+        use_tls=use_tls,
+        insecure_skip_verify=not verify_tls,
+        extra_headers={
+            k: v for k, v in headers.items()
+            if k not in ("Accept", "Target-Agent", "Host", "Content-Type")
+        } or None,
+        verbose=False,  # curl already printed its own verbose trace above
+    )
 
 
 def _format_response(response: wire.AGTPResponse, *, include_headers: bool) -> str:

@@ -1562,17 +1562,20 @@ function renderApisTab(tab, apis, bridgedServices) {
   apis = apis || [];
   bridgedServices = bridgedServices || [];
 
-  const total = apis.length + bridgedServices.length;
+  // Badge counts endpoints only. Bridged services are informational
+  // metadata, not endpoints the user can invoke against, so they
+  // shouldn't inflate the count. The tab itself is still shown when
+  // either section has content (see applyTabVisibility).
   if (els.apisTabBadge) {
-    if (total) {
-      els.apisTabBadge.textContent = String(total);
+    if (apis.length) {
+      els.apisTabBadge.textContent = String(apis.length);
       els.apisTabBadge.classList.remove("hidden");
     } else {
       els.apisTabBadge.classList.add("hidden");
     }
   }
 
-  if (!total) {
+  if (!apis.length && !bridgedServices.length) {
     els.apisEmpty.classList.remove("hidden");
     els.apisContent.classList.add("hidden");
     els.apisContent.innerHTML = "";

@@ -44,16 +44,22 @@ agtp/
 │   ├── agtp-server.toml    reference config
 │   └── run_demo.sh         end-to-end 19-scenario demo
 │
-├── client/               AGTP CLI client product
-│   ├── main.py             python -m client  /  agtp
-│   ├── curl.py             agtp-curl diagnostic shim
-│   ├── migrate.py          agtp-migrate (v1 -> v2 Agent Document)
+├── client/               AGTP client product (one package, two frontends)
+│   ├── core_client.py      shared protocol logic (URI resolution, connections,
+│   │                       FetchResult envelope)
+│   ├── cli/                terminal frontends
+│   │   ├── main.py           agtp                       (python -m client)
+│   │   ├── curl.py           agtp-curl diagnostic shim  (python -m client.cli.curl)
+│   │   └── migrate.py        agtp-migrate v1->v2 tool   (python -m client.cli.migrate)
+│   ├── elemen/             desktop GUI frontend
+│   │   ├── app.py            pywebview entry            (elemen / python -m client.elemen.app)
+│   │   ├── bridge.py         pywebview <-> Python adapter
+│   │   └── ui/               HTML / CSS / JS
 │   └── amg/                AMG validator (client-side; agtp-amg)
 │
 ├── registry/             AGTP registry product
 │   └── main.py             python -m registry  /  agtp-registry
 │
-├── elemen/               AGTP desktop browser (pywebview)
 ├── mcp-on-agtp/          MCP-on-AGTP bridge product (in development)
 ├── ietf/                 IETF Internet-Draft sources
 ├── docs/                 deployment + cross-platform notes
@@ -61,6 +67,36 @@ agtp/
 ├── tests/                cross-product test suite
 ├── pyproject.toml        installable: `pip install -e .`
 └── README.md
+```
+
+## Client products
+
+The AGTP client is a single Python package (`client/`) with two
+frontends:
+
+- **CLI** (`agtp`, `agtp-curl`, `agtp-migrate`) — for scripts,
+  automation, CI, and programmatic use. Lives in `client/cli/`.
+- **Elemen** (`elemen`) — graphical desktop browser for AGTP, built
+  on pywebview. Lives in `client/elemen/`.
+
+Both frontends call into the same `client.core_client` module for
+protocol work (URI resolution, connection handling, response parsing)
+and the same `client.amg` package for grammar validation. Updates to
+the wire protocol or to AMG land in both interfaces simultaneously.
+
+After `pip install -e .`:
+
+```bash
+agtp agtp://agents.agtp.io           # CLI manifest fetch
+elemen                               # launch the GUI browser
+agtp-amg path/to/method.json         # AMG validation tool
+```
+
+On Windows, launch the GUI without a console window via the
+windowed Python launcher:
+
+```powershell
+pyw -3.13 -m client.elemen.app
 ```
 
 ## What this repo demonstrates

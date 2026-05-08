@@ -167,7 +167,7 @@ class MigrateCLITests(unittest.TestCase):
             )
             before = target.read_text(encoding="utf-8")
             out = subprocess.run(
-                [sys.executable, "-m", "client.migrate", "--check", str(target)],
+                [sys.executable, "-m", "client.cli.migrate", "--check", str(target)],
                 cwd=str(REPO_ROOT),
                 capture_output=True,
                 text=True,
@@ -185,7 +185,7 @@ class MigrateCLITests(unittest.TestCase):
                 encoding="utf-8",
             )
             out = subprocess.run(
-                [sys.executable, "-m", "client.migrate", str(target)],
+                [sys.executable, "-m", "client.cli.migrate", str(target)],
                 cwd=str(REPO_ROOT),
                 capture_output=True,
                 text=True,
@@ -207,7 +207,7 @@ class MigrateCLITests(unittest.TestCase):
                 encoding="utf-8",
             )
             out = subprocess.run(
-                [sys.executable, "-m", "client.migrate", str(target)],
+                [sys.executable, "-m", "client.cli.migrate", str(target)],
                 cwd=str(REPO_ROOT),
                 capture_output=True,
                 text=True,

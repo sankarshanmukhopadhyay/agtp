@@ -188,7 +188,7 @@ class FullStackSubprocessTests(unittest.TestCase):
 
     def test_curl_discovers_methods(self) -> None:
         out = self._run(
-            "client.curl",
+            "client.cli.curl",
             "DISCOVER",
             f"agtp://{LAUREN_ID}@127.0.0.1:{self.srv_port}",
             "-d", '{"target":"methods"}',

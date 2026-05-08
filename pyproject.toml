@@ -32,12 +32,13 @@ Repository = "https://github.com/nomoticai/agtp"
 # SMTP-style client/server split (the same protocol, two distinct
 # user agents).
 [project.scripts]
-agtp           = "client.main:main"
+agtp           = "client.cli.main:main"
 agtp-server    = "server.main:main"
 agtp-registry  = "registry.main:main"
-agtp-curl      = "client.curl:main"
-agtp-migrate   = "client.migrate:main"
+agtp-curl      = "client.cli.curl:main"
+agtp-migrate   = "client.cli.migrate:main"
 agtp-amg       = "client.amg.cli:main"
+elemen         = "client.elemen.app:main"
 
 [project.optional-dependencies]
 # jsonschema enables AMG Pass 8 to use the Draft 7 metaschema

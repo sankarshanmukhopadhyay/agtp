@@ -27,9 +27,9 @@ from typing import List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import wire
-from client.main import build_parser as build_client_parser
-from client.curl import build_parser as build_curl_parser
-from client.curl import run as curl_run
+from client.cli.main import build_parser as build_client_parser
+from client.cli.curl import build_parser as build_curl_parser
+from client.cli.curl import run as curl_run
 from server.main import AgentRegistry, handle_connection
 
 
@@ -144,7 +144,7 @@ class ArgParsingTests(unittest.TestCase):
 
     def test_curl_help_has_curl_flags(self) -> None:
         out = subprocess.run(
-            [PYTHON, "-m", "client.curl", "--help"],
+            [PYTHON, "-m", "client.cli.curl", "--help"],
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
@@ -198,7 +198,7 @@ class CurlAgainstLiveServerTests(unittest.TestCase):
     def _curl(self, *args: str) -> Tuple[int, str, str]:
         """Run agtp-curl and capture (rc, stdout, stderr)."""
         out = subprocess.run(
-            [PYTHON, "-m", "client.curl", *args],
+            [PYTHON, "-m", "client.cli.curl", *args],
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,

@@ -5,9 +5,9 @@
 # scenarios produce stable, recognizable output.
 
 [server]
-issuer       = "demo.agtp.io"
+issuer       = "agents.agtp.io"
 operator     = "AGTP demo runner"
-contact      = "demo@agtp.io"
+contact      = "help@agtp.io"
 amg_version  = "1.0"
 
 [policy]
@@ -37,11 +37,11 @@ description = "Free-form notes; QUERY for retrieval, SUMMARIZE for digest."
 [[hosts_protocols]]
 protocol = "mcp"
 version  = "0.1"
-endpoint = "https://mcp.demo.agtp.io"
-catalog  = "https://mcp.demo.agtp.io/.well-known/mcp/tools.json"
+endpoint = "https://mcp.agtp.io"
+catalog  = "https://mcp.agtp.io/.well-known/mcp/tools.json"
 
 [[hosts_protocols]]
 protocol = "openapi"
 version  = "3.1"
-endpoint = "https://api.demo.agtp.io"
-catalog  = "https://api.demo.agtp.io/openapi.json"
+endpoint = "https://api.agtp.io"
+catalog  = "https://api.agtp.io/openapi.json"

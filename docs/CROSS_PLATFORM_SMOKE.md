@@ -19,7 +19,7 @@ no leftover state.
 - [ ] `agtp-server 4480` (the installed entry point) works identically.
 - [ ] `cd v1 && ./run_demo.sh` completes all 14 scenarios.
 - [ ] `python -m unittest discover` is green.
-- [ ] elemen launches via `python3 elemen/app.py` and renders Lauren's
+- [ ] elemen launches via `python3 -m client.elemen.app` (or `elemen` after install) and renders Lauren's
       identity card after navigation.
 
 ## Linux (Ubuntu LTS)
