@@ -1,0 +1,41 @@
+# Valid composition with a substitution hint pointing at BOOK
+# (the canonical equivalent in the calendar/booking equivalence class).
+
+name: RESERVE
+semantic:
+  intent: Reserves a resource for a specified time window
+  actor: agent
+  outcome: A reservation confirmation with an id and expiry is returned
+  capability: transaction
+  confidence_guidance: 0.90
+  impact_tier: reversible
+  is_idempotent: false
+
+description: >-
+  Hold a resource for the named time window. The caller receives a
+  reservation id which can be passed to a later confirm or cancel.
+
+category: transact
+required_params:
+  - name: resource
+    type: string
+    description: The resource identifier to reserve
+  - name: start_time
+    type: string
+    description: ISO 8601 reservation start time
+optional_params:
+  - name: duration_minutes
+    type: integer
+    description: Reservation length; defaults to 30 minutes
+  - name: notes
+    type: string
+    description: Free-form notes attached to the reservation
+
+error_codes: [400, 405, 409, 422, 451]
+
+source: amg/1.0
+namespace: acme-bookings
+
+substitutes_for:
+  - target: BOOK
+    conditions: when caller speaks the reservation vocabulary natively

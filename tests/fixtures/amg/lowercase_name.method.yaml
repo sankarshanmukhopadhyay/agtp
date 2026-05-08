@@ -1,0 +1,26 @@
+# Invalid: method name must be uppercase ASCII (Pass 1 lexical).
+# The composer surfaces a suggestion to try the uppercase form.
+
+name: evaluate
+semantic:
+  intent: Evaluates input against a ruleset
+  actor: agent
+  outcome: A structured assessment is returned
+  capability: analysis
+  is_idempotent: true
+
+category: transact
+required_params:
+  - name: input
+    type: object
+    description: data to evaluate
+    schema:
+      type: object
+  - name: ruleset
+    type: string
+    description: ruleset id
+
+error_codes: [400, 422]
+
+source: amg/1.0
+namespace: acme-quality

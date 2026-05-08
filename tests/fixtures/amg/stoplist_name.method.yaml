@@ -1,0 +1,21 @@
+# Invalid: AVAILABLE is on the stoplist (it's a state, not an action).
+# The composer suggests a real action verb in its place.
+
+name: AVAILABLE
+semantic:
+  intent: Reports availability of a resource
+  actor: agent
+  outcome: A boolean availability indicator is returned
+  capability: discovery
+  is_idempotent: true
+
+category: transact
+required_params:
+  - name: resource
+    type: string
+    description: the resource to check
+
+error_codes: [400, 422]
+
+source: amg/1.0
+namespace: acme-quality

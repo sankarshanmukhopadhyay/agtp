@@ -1,16 +1,33 @@
 """
-agtp-validate: command-line driver for the AMG validator.
+``agtp-amg`` — command-line driver for the AMG validator + composer.
 
-Usage:
+Two subcommands are supported. The first positional argument selects:
 
-  agtp-validate path/to/method.json
-  agtp-validate path/to/methods/                       # all *.method.json
-  agtp-validate --check-substitution METHOD_NAME
-  agtp-validate --known-methods extra-methods.json     # extend universe
+  * ``agtp-amg validate ...``   nine-pass validator (existing surface)
+  * ``agtp-amg compose  ...``   composer (new)
+
+The first positional argument is optional. When omitted, the tool
+falls through to ``validate`` so existing invocations such as
+``agtp-amg path/to/method.json`` keep working.
+
+Examples::
+
+  agtp-amg validate path/to/method.json
+  agtp-amg validate path/to/methods/                     # all *.method.json
+  agtp-amg --check-substitution METHOD_NAME              # validate-mode flag
+
+  agtp-amg compose --from path/to/evaluate.method.yaml
+  agtp-amg compose --name EVALUATE \\
+      --intent "Evaluates the input against a declared ruleset" \\
+      --actor agent \\
+      --outcome "A structured assessment is returned" \\
+      --capability analysis \\
+      --required-param "input:object:The data to evaluate" \\
+      --required-param "ruleset:string:Identifier of the ruleset"
 
 Exit codes:
-  0  every spec validated
-  1  at least one spec failed validation
+  0  validation / composition succeeded
+  1  validation / composition failed
   2  argument or I/O error
 """
 
@@ -20,9 +37,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional, Set
+from typing import Iterable, List, Optional, Set, Tuple
 
-from client.amg.grammar import AMGMethodSpec
+from client.amg.composer import (
+    CompositionError,
+    compose_from_dict,
+    compose_from_json,
+    compose_from_yaml,
+    compose_method,
+)
+from client.amg.grammar import AMGMethodSpec, ParamSpec
 from client.amg.reserved import EMBEDDED_METHODS
 from client.amg.substitution import find_substitutes
 from client.amg.validator import ValidationResult, validate
@@ -30,10 +54,6 @@ from client.amg.validator import ValidationResult, validate
 
 # ---------------------------------------------------------------------------
 # ANSI + glyph helpers.
-#
-# Colors fall back to plain text when stdout isn't a tty. Pass-mark
-# glyphs fall back to ASCII when stdout's encoding can't represent
-# Unicode (notably Windows cp1252 consoles).
 # ---------------------------------------------------------------------------
 
 
@@ -70,9 +90,9 @@ def _bold(text: str) -> str:
     return f"\033[1m{text}\033[0m" if _supports_color() else text
 
 
-# ---------------------------------------------------------------------------
-# Spec loading.
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Validate subcommand (existing behavior).
+# ===========================================================================
 
 
 def _gather_specs(path: Path) -> List[Path]:
@@ -97,11 +117,6 @@ def _load_spec(path: Path) -> AMGMethodSpec:
 
 
 def _load_known_methods(path: Optional[Path]) -> Set[str]:
-    """
-    Read additional method names from a JSON file. The file may be
-    either an array of names or an object whose top-level keys are
-    method names.
-    """
     if path is None:
         return set()
     with path.open("r", encoding="utf-8") as f:
@@ -113,11 +128,6 @@ def _load_known_methods(path: Optional[Path]) -> Set[str]:
     raise ValueError(
         f"{path}: --known-methods must be a list or object"
     )
-
-
-# ---------------------------------------------------------------------------
-# Output formatting.
-# ---------------------------------------------------------------------------
 
 
 def _print_header(spec: AMGMethodSpec) -> None:
@@ -158,14 +168,9 @@ def _print_substitutes(method_name: str, registry: Iterable[str]) -> None:
         print(f"  - {s}")
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point.
-# ---------------------------------------------------------------------------
-
-
-def build_parser() -> argparse.ArgumentParser:
+def _build_validate_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="agtp-validate",
+        prog="agtp-amg validate",
         description="Validate AMG method specifications.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -195,8 +200,8 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def run_validate(argv: List[str]) -> int:
+    args = _build_validate_parser().parse_args(argv)
 
     try:
         extra = _load_known_methods(args.known_methods)
@@ -244,6 +249,270 @@ def main() -> int:
             print()
 
     return 0 if overall_ok else 1
+
+
+# ===========================================================================
+# Compose subcommand (new).
+# ===========================================================================
+
+
+def _parse_param_triple(text: str) -> ParamSpec:
+    """
+    Parse a colon-delimited param spec from --required-param /
+    --optional-param: ``name:type:description``.
+    """
+    parts = text.split(":", 2)
+    if len(parts) < 3:
+        raise argparse.ArgumentTypeError(
+            f"--required/--optional-param expects 'name:type:description', "
+            f"got {text!r}"
+        )
+    name, type_, description = parts
+    return ParamSpec(
+        name=name.strip(),
+        type=type_.strip(),
+        description=description.strip(),
+    )
+
+
+def _build_compose_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="agtp-amg compose",
+        description="Compose well-formed AMG method specifications.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "--from",
+        dest="from_path",
+        type=Path,
+        metavar="PATH",
+        help="Load fields from a *.method.yaml or *.method.json file.",
+    )
+    p.add_argument(
+        "--output",
+        choices=("json", "yaml"),
+        default="json",
+        help="Output format for the composed spec (default: json).",
+    )
+
+    p.add_argument("--name", help="Method name (uppercase ASCII).")
+    p.add_argument("--intent", help="AGIS intent: agent-goal voice.")
+    p.add_argument(
+        "--actor",
+        choices=("agent", "user", "system"),
+        help="AGIS actor (agent | user | system).",
+    )
+    p.add_argument("--outcome", help="AGIS outcome: post-condition voice.")
+    p.add_argument(
+        "--capability",
+        choices=(
+            "discovery", "transaction", "modification",
+            "retrieval", "analysis", "notification",
+        ),
+        help="AGIS capability bucket.",
+    )
+    p.add_argument(
+        "--confidence-guidance",
+        type=float,
+        metavar="FLOAT",
+        help="AGIS confidence_guidance (0.0-1.0).",
+    )
+    p.add_argument(
+        "--impact-tier",
+        choices=("informational", "reversible", "irreversible"),
+        help="AGIS impact_tier.",
+    )
+    p.add_argument(
+        "--idempotent",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="AGIS is_idempotent flag (use --no-idempotent for false).",
+    )
+
+    p.add_argument(
+        "--description",
+        help="Validator-facing description (defaults to --intent).",
+    )
+    p.add_argument(
+        "--category",
+        default="transact",
+        help="Method category bucket (default: transact).",
+    )
+    p.add_argument(
+        "--namespace",
+        help="Namespace for source=amg/1.0 methods.",
+    )
+    p.add_argument(
+        "--source",
+        default="amg/1.0",
+        help="Method source (default: amg/1.0).",
+    )
+
+    p.add_argument(
+        "--required-param",
+        action="append",
+        type=_parse_param_triple,
+        metavar="name:type:description",
+        default=[],
+        help="Add a required parameter (repeatable).",
+    )
+    p.add_argument(
+        "--optional-param",
+        action="append",
+        type=_parse_param_triple,
+        metavar="name:type:description",
+        default=[],
+        help="Add an optional parameter (repeatable).",
+    )
+    p.add_argument(
+        "--error-code",
+        action="append",
+        type=int,
+        metavar="N",
+        default=[],
+        help="Add an error code (repeatable).",
+    )
+    p.add_argument(
+        "--substitutes-for",
+        action="append",
+        metavar="NAME",
+        default=[],
+        help="Declare a substitution target (repeatable).",
+    )
+    p.add_argument(
+        "--known-methods",
+        type=Path,
+        metavar="PATH",
+        help="JSON file of additional known method names for substitution checks.",
+    )
+    return p
+
+
+def _emit_spec(spec: AMGMethodSpec, fmt: str) -> None:
+    if fmt == "yaml":
+        try:
+            import yaml  # type: ignore[import-not-found]
+        except ImportError:
+            print(
+                "warning: PyYAML not installed; falling back to JSON output",
+                file=sys.stderr,
+            )
+            fmt = "json"
+    if fmt == "yaml":
+        import yaml  # type: ignore[import-not-found]
+        print(yaml.safe_dump(spec.to_dict(), sort_keys=False))
+    else:
+        print(json.dumps(spec.to_dict(), indent=2))
+
+
+def _print_composition_error(exc: CompositionError) -> None:
+    print(_red(_bold("COMPOSITION FAILED")), file=sys.stderr)
+    print(_red(f"  {exc}"), file=sys.stderr)
+    if exc.validation_result is not None:
+        result = exc.validation_result
+        for p in result.passes:
+            mark = _green(_glyph_ok()) if p.passed else _red(_glyph_fail())
+            label = p.name.ljust(16)
+            detail = p.detail or ""
+            print(f"  {mark} Pass ({label})  {detail}", file=sys.stderr)
+    if exc.suggestions:
+        print(file=sys.stderr)
+        print(_bold("Suggestions:"), file=sys.stderr)
+        for s in exc.suggestions:
+            print(_dim(f"  - {s}"), file=sys.stderr)
+
+
+def run_compose(argv: List[str]) -> int:
+    args = _build_compose_parser().parse_args(argv)
+
+    try:
+        known = (
+            _load_known_methods(args.known_methods)
+            if args.known_methods else set()
+        )
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: --known-methods: {exc}", file=sys.stderr)
+        return 2
+    full_known = set(EMBEDDED_METHODS) | known
+
+    if args.from_path:
+        try:
+            ext = args.from_path.suffix.lower()
+            if ext in (".yaml", ".yml"):
+                spec = compose_from_yaml(args.from_path, known_methods=full_known)
+            else:
+                spec = compose_from_json(args.from_path, known_methods=full_known)
+        except CompositionError as exc:
+            _print_composition_error(exc)
+            return 1
+        except ImportError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        _emit_spec(spec, args.output)
+        return 0
+
+    # Inline-arg composition.
+    if not args.name or not args.intent or not args.actor or not args.outcome:
+        print(
+            "error: composition requires either --from PATH or "
+            "(--name + --intent + --actor + --outcome).",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        spec = compose_method(
+            args.name,
+            intent=args.intent,
+            actor=args.actor,
+            outcome=args.outcome,
+            capability=args.capability,
+            confidence_guidance=args.confidence_guidance,
+            impact_tier=args.impact_tier,
+            is_idempotent=args.idempotent,
+            description=args.description,
+            category=args.category,
+            namespace=args.namespace,
+            source=args.source,
+            required_params=list(args.required_param),
+            optional_params=list(args.optional_param),
+            error_codes=(list(args.error_code) or None),
+            substitutes_for=[
+                {"target_method": s} for s in (args.substitutes_for or [])
+            ] or None,
+            known_methods=full_known,
+        )
+    except CompositionError as exc:
+        _print_composition_error(exc)
+        return 1
+
+    _emit_spec(spec, args.output)
+    return 0
+
+
+# ===========================================================================
+# Top-level dispatch.
+# ===========================================================================
+
+
+_KNOWN_SUBCOMMANDS = ("validate", "compose")
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    # Backward-compat: if the first arg is not one of our subcommands,
+    # fall through to validate. This keeps ``agtp-amg path/to/file.json``
+    # working unchanged.
+    if argv and argv[0] in _KNOWN_SUBCOMMANDS:
+        cmd = argv[0]
+        sub_argv = argv[1:]
+    else:
+        cmd = "validate"
+        sub_argv = argv
+
+    if cmd == "compose":
+        return run_compose(sub_argv)
+    return run_validate(sub_argv)
 
 
 if __name__ == "__main__":

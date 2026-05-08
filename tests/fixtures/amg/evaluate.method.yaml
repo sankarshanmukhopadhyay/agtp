@@ -1,0 +1,42 @@
+# Valid AMG composition example: an evaluator that scores input
+# against a declared ruleset and returns a structured assessment.
+# This is a documentation-grade fixture; the same file is loaded by
+# the composer test suite.
+
+name: EVALUATE
+semantic:
+  intent: Evaluates the input against a declared ruleset
+  actor: agent
+  outcome: A structured assessment with pass/fail per rule is returned
+  capability: analysis
+  confidence_guidance: 0.75
+  impact_tier: informational
+  is_idempotent: true
+
+description: >-
+  Run a ruleset against the supplied input and return an
+  assessment listing which rules passed and which failed.
+
+category: transact
+required_params:
+  - name: input
+    type: object
+    description: The data to evaluate
+    schema:
+      type: object
+  - name: ruleset
+    type: string
+    description: Identifier of the ruleset to apply
+optional_params:
+  - name: tolerance
+    type: number
+    description: Acceptable variance threshold for fuzzy matches
+
+error_codes: [400, 405, 422, 451]
+
+source: amg/1.0
+namespace: acme-quality
+
+substitutes_for:
+  - target: VALIDATE
+    conditions: when ruleset is JSON Schema

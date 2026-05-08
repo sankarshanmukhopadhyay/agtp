@@ -45,6 +45,9 @@ elemen         = "client.elemen.app:main"
 # validator rather than the structural fallback. Optional; the
 # package degrades gracefully when absent.
 amg-schemas = ["jsonschema>=4"]
+# pyyaml enables ``compose_from_yaml`` and the agtp-amg compose CLI's
+# YAML output. Without it, JSON-only round-trips still work.
+yaml = ["pyyaml>=6"]
 
 [tool.setuptools.packages.find]
 where = ["."]
