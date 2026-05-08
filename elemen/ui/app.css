@@ -1440,6 +1440,37 @@ button.section-head:hover { background: var(--panel-3); }
   flex-direction: column;
   gap: 12px;
 }
+.apis-section-title {
+  margin: 4px 0 -2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.apis-section-title:first-child {
+  margin-top: 0;
+}
+.api-card.bridge-card .api-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.api-card.bridge-card .api-desc code {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text);
+  background: var(--panel-3);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.api-card.bridge-card .bridge-note {
+  padding: 8px 14px 12px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-style: italic;
+}
 .api-card {
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -1495,9 +1526,18 @@ button.section-head:hover { background: var(--panel-3); }
 }
 .protocol-pane {
   padding: 14px 18px 24px;
+  gap: 12px;
+}
+/*
+ * Protocol panes inherit the .pane visibility contract: hidden by
+ * default, shown only when .active is set. The previous version of
+ * this rule unconditionally set display:flex, which overrode
+ * .pane { display: none } and leaked protocol-pane content into
+ * every other tab.
+ */
+.pane.active.protocol-pane {
   display: flex;
   flex-direction: column;
-  gap: 12px;
 }
 .protocol-pane h2 {
   margin: 0;

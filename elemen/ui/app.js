@@ -1524,27 +1524,55 @@ function renderManifestView(tab) {
   });
 
   // Render the APIs tab + protocol tabs from the same manifest.
-  renderApisTab(tab, apis);
-  renderProtocolTabs(tab, protocols);
+  // The split is product-shaped: MCP gets its own tab (because we
+  // render its tool catalog interactively); every other bridged
+  // protocol (OpenAPI, GraphQL, ...) is informational and folds into
+  // the APIs tab as a "Bridged services" section above the resource
+  // endpoints.
+  const mcpProtocols = protocols.filter(
+    (p) => (p.protocol || "").toLowerCase() === "mcp",
+  );
+  const otherProtocols = protocols.filter(
+    (p) => (p.protocol || "").toLowerCase() !== "mcp",
+  );
+  renderApisTab(tab, apis, otherProtocols);
+  renderProtocolTabs(tab, mcpProtocols);
 
   showPaneVariant("manifest");
   return true;
 }
 
 // ---------- APIs tab ----------
+//
+// Layout (top-to-bottom):
+//
+//   Bridged services    non-MCP hosts_protocols entries (OpenAPI,
+//                       GraphQL, ...). Read-only metadata cards.
+//                       Catalog rendering for these protocols is
+//                       future work; the manifest entry is shown
+//                       so deployments can declare them today.
+//
+//   Endpoints           the manifest's apis[] resource paths with
+//                       per-method Try-It tags.
+//
+// Either section can be empty; the tab is shown when at least one
+// section has content. The tab badge counts the total.
 
-function renderApisTab(tab, apis) {
+function renderApisTab(tab, apis, bridgedServices) {
   apis = apis || [];
+  bridgedServices = bridgedServices || [];
+
+  const total = apis.length + bridgedServices.length;
   if (els.apisTabBadge) {
-    if (apis.length) {
-      els.apisTabBadge.textContent = String(apis.length);
+    if (total) {
+      els.apisTabBadge.textContent = String(total);
       els.apisTabBadge.classList.remove("hidden");
     } else {
       els.apisTabBadge.classList.add("hidden");
     }
   }
 
-  if (!apis.length) {
+  if (!total) {
     els.apisEmpty.classList.remove("hidden");
     els.apisContent.classList.add("hidden");
     els.apisContent.innerHTML = "";
@@ -1553,24 +1581,61 @@ function renderApisTab(tab, apis) {
 
   els.apisEmpty.classList.add("hidden");
   els.apisContent.classList.remove("hidden");
-  els.apisContent.innerHTML = apis.map((api) => {
-    const tags = (api.methods || []).map((m) =>
-      `<button type="button" class="method-tag" data-path="${escapeHtml(api.path)}" ` +
-      `data-method="${escapeHtml(m)}">${escapeHtml(m)}</button>`,
-    ).join("");
-    return (
-      `<div class="api-card">` +
-      `<div class="api-head">` +
-      `<span class="api-path">${escapeHtml(api.path)}</span>` +
-      `<span class="api-method-count">${(api.methods || []).length} methods</span>` +
-      `</div>` +
-      (api.description
-        ? `<div class="api-desc">${escapeHtml(api.description)}</div>`
-        : "") +
-      `<div class="method-tags">${tags}</div>` +
-      `</div>`
-    );
-  }).join("");
+
+  // ---- Bridged services (top section) ----------------------------
+  let html = "";
+  if (bridgedServices.length) {
+    html += `<h3 class="apis-section-title">Bridged services</h3>`;
+    html += bridgedServices.map((p) => {
+      const proto = (p.protocol || "").toLowerCase();
+      const label = proto === "openapi" ? "OpenAPI"
+                  : proto === "graphql" ? "GraphQL"
+                  : capitalize(p.protocol || "service");
+      return (
+        `<div class="api-card bridge-card">` +
+        `<div class="api-head">` +
+        `<span class="api-path">${escapeHtml(label)}</span>` +
+        `<span class="api-method-count">v${escapeHtml(p.version || "?")}</span>` +
+        `</div>` +
+        `<div class="api-desc">` +
+        `<div><strong>Endpoint:</strong> <code>${escapeHtml(p.endpoint || "")}</code></div>` +
+        (p.catalog
+          ? `<div><strong>Catalog:</strong> <code>${escapeHtml(p.catalog)}</code></div>`
+          : "") +
+        `</div>` +
+        `<div class="bridge-note">` +
+        `Catalog rendering for this protocol is future work; the manifest ` +
+        `entry is shown so deployments can declare it today.` +
+        `</div>` +
+        `</div>`
+      );
+    }).join("");
+  }
+
+  // ---- Resource endpoints (bottom section) -----------------------
+  if (apis.length) {
+    html += `<h3 class="apis-section-title">Endpoints</h3>`;
+    html += apis.map((api) => {
+      const tags = (api.methods || []).map((m) =>
+        `<button type="button" class="method-tag" data-path="${escapeHtml(api.path)}" ` +
+        `data-method="${escapeHtml(m)}">${escapeHtml(m)}</button>`,
+      ).join("");
+      return (
+        `<div class="api-card">` +
+        `<div class="api-head">` +
+        `<span class="api-path">${escapeHtml(api.path)}</span>` +
+        `<span class="api-method-count">${(api.methods || []).length} methods</span>` +
+        `</div>` +
+        (api.description
+          ? `<div class="api-desc">${escapeHtml(api.description)}</div>`
+          : "") +
+        `<div class="method-tags">${tags}</div>` +
+        `</div>`
+      );
+    }).join("");
+  }
+
+  els.apisContent.innerHTML = html;
 
   // Wire method-tag clicks to a Try-It prompt scoped to the path.
   els.apisContent.querySelectorAll(".method-tag").forEach((btn) => {
@@ -1620,19 +1685,26 @@ function promptApiTryIt(tab, path, method) {
   });
 }
 
-// ---------- Protocol tabs (MCP, OpenAPI, GraphQL stubs) ----------
+// ---------- Protocol tabs (MCP only) ----------
+//
+// We dedicate a tab per MCP entry so its tool catalog can be fetched
+// and rendered interactively. Other bridged protocols (OpenAPI,
+// GraphQL, ...) live in the APIs tab as informational cards because
+// catalog rendering for those is future work and they have no
+// interactive surface today.
 
-function renderProtocolTabs(tab, protocols) {
-  protocols = protocols || [];
+function renderProtocolTabs(tab, mcpEntries) {
+  mcpEntries = mcpEntries || [];
 
-  // Tear down any previous protocol tabs first; they are
-  // server-specific and must not leak between fetches.
+  // Tear down any previous MCP tabs first; they are server-specific
+  // and must not leak between fetches.
   els.protocolTabsHost.innerHTML = "";
   els.protocolPanesHost.innerHTML = "";
 
-  protocols.forEach((p, idx) => {
+  mcpEntries.forEach((p, idx) => {
     const tabId = `proto-${idx}`;
-    const label = capitalize(p.protocol || "protocol");
+    // Multiple MCP bridges on one server label as "MCP", "MCP 2", ...
+    const label = idx === 0 ? "MCP" : `MCP ${idx + 1}`;
 
     const btn = document.createElement("button");
     btn.className = "rtab";
@@ -1644,12 +1716,10 @@ function renderProtocolTabs(tab, protocols) {
     const pane = document.createElement("div");
     pane.id = `pane-${tabId}`;
     pane.className = "pane protocol-pane";
-    pane.innerHTML = renderProtocolPane(p);
+    pane.innerHTML = renderMcpPane(p);
     els.protocolPanesHost.appendChild(pane);
 
-    // Wire the Fetch-catalog button for MCP entries; other protocols
-    // surface a stub note and rely on future-work catalog fetchers.
-    if ((p.protocol || "").toLowerCase() === "mcp" && p.catalog) {
+    if (p.catalog) {
       const fetchBtn = pane.querySelector(".fetch-btn");
       if (fetchBtn) {
         fetchBtn.addEventListener("click", () =>
@@ -1660,10 +1730,12 @@ function renderProtocolTabs(tab, protocols) {
   });
 }
 
-function renderProtocolPane(p) {
-  const isMcp = (p.protocol || "").toLowerCase() === "mcp";
+function renderMcpPane(p) {
+  // Section 1 (server info) -> Section 2 (exposed connectors / tools).
+  // Mirrors the APIs tab: server-level metadata up top, the
+  // interactive surface (tool catalog) below.
   const head =
-    `<h2>${escapeHtml(capitalize(p.protocol || "protocol"))} bridge</h2>` +
+    `<h3 class="apis-section-title">MCP server</h3>` +
     `<div class="info">` +
     `<div><strong>Protocol:</strong> ${escapeHtml(p.protocol)}</div>` +
     `<div><strong>Version:</strong> ${escapeHtml(p.version)}</div>` +
@@ -1673,19 +1745,22 @@ function renderProtocolPane(p) {
       : "") +
     `</div>`;
 
-  if (isMcp && p.catalog) {
+  if (!p.catalog) {
     return (
       head +
-      `<button class="fetch-btn" type="button">Fetch tool catalog</button>` +
-      `<div class="tool-catalog"></div>`
+      `<h3 class="apis-section-title">Tools</h3>` +
+      `<div class="stub-note">` +
+      `This MCP entry has no catalog URL declared; tool listing ` +
+      `requires a <code>catalog</code> field on the manifest entry.` +
+      `</div>`
     );
   }
+
   return (
     head +
-    `<div class="stub-note">` +
-    `Catalog rendering for this protocol is future work; the manifest ` +
-    `entry is shown above so deployments can declare it today.` +
-    `</div>`
+    `<h3 class="apis-section-title">Tools</h3>` +
+    `<button class="fetch-btn" type="button">Fetch tool catalog</button>` +
+    `<div class="tool-catalog"></div>`
   );
 }
 
@@ -1754,17 +1829,30 @@ function applyTabVisibility(tab) {
   const protocols = tab?.result?.manifest?.hosts_protocols || [];
   const apis = tab?.result?.manifest?.apis || [];
 
+  // The APIs tab now subsumes non-MCP bridged protocols (OpenAPI,
+  // GraphQL, ...). Show it whenever the manifest carries either
+  // apis[] or any non-MCP protocol entry.
+  const nonMcp = protocols.filter(
+    (p) => (p.protocol || "").toLowerCase() !== "mcp",
+  );
+  const mcp = protocols.filter(
+    (p) => (p.protocol || "").toLowerCase() === "mcp",
+  );
+
   const apisBtn = document.querySelector('.rtab[data-tab="apis"]');
   if (apisBtn) {
-    apisBtn.classList.toggle("hidden", !(isManifest && apis.length));
+    apisBtn.classList.toggle(
+      "hidden",
+      !(isManifest && (apis.length || nonMcp.length)),
+    );
   }
 
-  // Per-protocol tabs are static-rendered by renderProtocolTabs;
-  // their visibility is handled there. Hide the host element when
-  // no protocols are available so the gap collapses.
+  // MCP entries get dedicated tabs (rendered by renderProtocolTabs).
+  // Hide the host element when no MCP entry is present so the gap
+  // collapses cleanly.
   els.protocolTabsHost.classList.toggle(
     "hidden",
-    !(isManifest && protocols.length),
+    !(isManifest && mcp.length),
   );
 
   // If the currently active rtab has been hidden by the URI type
