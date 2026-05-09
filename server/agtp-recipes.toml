@@ -1,0 +1,106 @@
+# Synthesis recipes for the AGTP demo server.
+#
+# Each [[recipe]] block is matched against incoming PROPOSE requests
+# in declaration order. The first recipe whose pattern matches AND
+# whose underlying methods are all available on this server wins;
+# the runtime instantiates the plan and hands the agent a
+# synthesis_id.
+#
+# All three starter recipes here demonstrate a different shape:
+#
+#   * EVALUATE — sequential plan with output threading: ANALYZE
+#     captures its result, VALIDATE reads it via previous_step.
+#     Output aggregation = "last" (the validation outcome).
+#
+#   * AUDIT — sequential plan with merge aggregation: QUERY then
+#     SUMMARIZE, the runtime returns both step outputs merged into
+#     a single object.
+#
+#   * INSPECT — parallel-shaped plan with list aggregation: DESCRIBE
+#     and DISCOVER both run, results returned as an ordered list.
+#
+# Plans use three ParameterSource kinds:
+#   * proposal       — value comes from the caller's request body
+#   * constant       — value is a literal supplied here
+#   * previous_step  — value is the captured output of an earlier step
+
+[[recipe]]
+name = "evaluate-via-analyze-and-validate"
+description = "EVALUATE = ANALYZE then VALIDATE; the canonical AMG composition example."
+
+[recipe.pattern]
+name_exact = "EVALUATE"
+has_parameters = ["input", "ruleset"]
+
+[[recipe.steps]]
+method = "QUERY"   # standing in for ANALYZE — the demo server has QUERY
+capture_as = "analysis"
+
+  [recipe.steps.parameters.intent]
+  kind = "proposal"
+  value = "input"
+
+[[recipe.steps]]
+method = "SUMMARIZE"  # standing in for VALIDATE — the demo server has SUMMARIZE
+
+  [recipe.steps.parameters.source]
+  kind = "previous_step"
+  value = "analysis"
+
+  [recipe.steps.parameters.length]
+  kind = "constant"
+  value = "short"
+
+[recipe.aggregation]
+mode = "last"
+
+
+[[recipe]]
+name = "audit-via-query-and-summarize"
+description = "AUDIT = QUERY then SUMMARIZE; returns both step outputs merged."
+
+[recipe.pattern]
+name_exact = "AUDIT"
+
+[[recipe.steps]]
+method = "QUERY"
+capture_as = "facts"
+
+  [recipe.steps.parameters.intent]
+  kind = "proposal"
+  value = "subject"
+
+[[recipe.steps]]
+method = "SUMMARIZE"
+
+  [recipe.steps.parameters.source]
+  kind = "previous_step"
+  value = "facts"
+
+  [recipe.steps.parameters.length]
+  kind = "proposal"
+  value = "length"
+
+[recipe.aggregation]
+mode = "merge"
+
+
+[[recipe]]
+name = "inspect-via-describe-and-discover"
+description = "INSPECT = DESCRIBE plus DISCOVER, returned as an ordered list."
+
+[recipe.pattern]
+name_exact = "INSPECT"
+
+[[recipe.steps]]
+method = "DISCOVER"
+
+  [recipe.steps.parameters.target]
+  kind = "constant"
+  value = "methods"
+
+[[recipe.steps]]
+method = "DESCRIBE"
+
+[recipe.aggregation]
+mode = "list"

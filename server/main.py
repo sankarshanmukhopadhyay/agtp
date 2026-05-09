@@ -38,8 +38,15 @@ from core.identity import (
     from_dict,
 )
 from server.manifest import generate as generate_manifest
-from server.methods import REGISTRY, dispatch, error_response
+from server.methods import REGISTRY, dispatch, error_response, spec_to_amg_spec
 from server.negotiation import SYNTHESES
+from server.synthesis import (
+    PassthroughPolicy,
+    RecipeBasedPolicy,
+    RecipeFileError,
+    SynthesisRuntime,
+    load_recipes,
+)
 
 
 # Methods exempt from soft-deny / wildcards refusal. These are protocol
@@ -56,40 +63,55 @@ def _maybe_redirect_via_synthesis(
     request: wire.AGTPRequest,
 ) -> tuple[wire.AGTPRequest, bool]:
     """
-    If the request carries a ``Synthesis-Id`` header naming a known
-    synthesis, rewrite it as the synthesis's target method with
-    parameter names remapped per ``synthesis.parameter_mapping``.
+    Synthesis-Id requests are now routed by :class:`SynthesisRuntime`
+    inside :func:`server.methods.dispatch`. The handler walks the
+    associated :class:`SynthesisPlan` and dispatches each step
+    individually, preserving the v1 accept-on-exact-match wire shape
+    via the runtime's :class:`PassthroughPolicy` and adding multi-step
+    plan support.
 
-    Returns the (possibly rewritten) request and a flag indicating
-    whether a redirect happened. Synthesis-driven requests bypass the
-    soft-deny gate because PROPOSE has already validated the mapping.
+    This shim is preserved as a no-op so callers that imported it
+    directly keep linking; the soft-deny gate continues to skip
+    synthesis-driven requests by checking
+    :data:`SYNTHESES` membership separately.
     """
     syn_id = wire.header(request, "Synthesis-Id")
-    if not syn_id:
-        return request, False
-    synth = SYNTHESES.get(syn_id)
-    if synth is None:
-        return request, False  # Let normal flow surface a 404-ish error.
+    via_synthesis = bool(syn_id and SYNTHESES.get(syn_id) is not None)
+    return request, via_synthesis
 
-    new_method = synth.target_method
-    new_body = request.body_bytes
-    if request.body_bytes and synth.parameter_mapping:
-        try:
-            params = _json.loads(request.body_bytes.decode("utf-8"))
-            if isinstance(params, dict):
-                remapped = {
-                    synth.parameter_mapping.get(k, k): v
-                    for k, v in params.items()
-                }
-                new_body = _json.dumps(remapped).encode("utf-8")
-        except _json.JSONDecodeError:
-            pass
 
-    return wire.AGTPRequest(
-        method=new_method,
-        headers=dict(request.headers),
-        body_bytes=new_body,
-    ), True
+def _load_recipe_policy(config: ServerConfig) -> Optional[RecipeBasedPolicy]:
+    """
+    Resolve and load the recipes file relative to the config's source
+    path (or current directory if defaults). Logs failures to stderr
+    and returns None so the server can keep starting under
+    passthrough-only synthesis.
+    """
+    from server.synthesis import RecipeBasedPolicy as _RBP
+
+    rel = config.synthesis.recipes_file
+    base = (
+        config.source_path.parent if config.source_path is not None else Path.cwd()
+    )
+    candidate = Path(rel)
+    if not candidate.is_absolute():
+        candidate = (base / rel).resolve()
+    if not candidate.exists():
+        print(
+            f"[server] recipes file not found: {candidate}",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        recipes = load_recipes(candidate)
+    except RecipeFileError as exc:
+        print(f"[server] {exc}", file=sys.stderr)
+        return None
+    print(
+        f"[server] loaded {len(recipes)} synthesis recipe(s) from {candidate}",
+        file=sys.stderr,
+    )
+    return _RBP(recipes)
 
 
 def soft_deny_check(
@@ -170,12 +192,68 @@ def _is_loopback(host: str) -> bool:
 
 
 class AgentRegistry:
-    """In-memory map of agent_id -> AgentDocument, loaded from disk."""
+    """In-memory map of agent_id -> AgentDocument, loaded from disk.
+
+    Also serves as the ``ServerState`` passed into method handlers and
+    the synthesis runtime; the latter attaches itself via the
+    ``synthesis_runtime`` attribute so PROPOSE handling and
+    Synthesis-Id execution can reach it from inside ``dispatch``.
+    """
 
     def __init__(self, agents_dir: Path):
         self.agents_dir = Path(agents_dir)
         self.agents: Dict[str, AgentDocument] = {}
+        self.synthesis_runtime: Optional[SynthesisRuntime] = (
+            self._make_default_runtime()
+        )
         self._load()
+
+    def _make_default_runtime(self) -> SynthesisRuntime:
+        """
+        Build a runtime with the v1-compatible passthrough policy
+        only. Production servers extend this via
+        :meth:`configure_synthesis` once the config is loaded; the
+        default is enough for tests and for the
+        accept-on-exact-match path that v1 PROPOSE relied on.
+        """
+
+        def _step_dispatch(req, state, agent_doc):
+            return dispatch(req, state, agent_doc)
+
+        return SynthesisRuntime(step_dispatcher=_step_dispatch)
+
+    def configure_synthesis(self, config: ServerConfig) -> None:
+        """
+        Reconfigure the synthesis runtime per the supplied server
+        config. Loads recipes from disk, builds the policy chain in
+        the configured order, and replaces the default runtime.
+        Errors loading recipes are surfaced to stderr but do not
+        crash startup — the server falls back to passthrough-only.
+        """
+        if self.synthesis_runtime is None:
+            return
+        policies: list = []
+        for name in (config.synthesis.policies or []):
+            if name == "recipes":
+                policies.append(_load_recipe_policy(config))
+            elif name == "passthrough":
+                policies.append(PassthroughPolicy())
+            else:
+                print(
+                    f"[server] unknown synthesis policy {name!r} — skipped",
+                    file=sys.stderr,
+                )
+        # The runtime appends PassthroughPolicy automatically when it
+        # isn't already in the chain, so a config of just ["recipes"]
+        # still preserves v1 accept-on-exact-match behavior.
+        self.synthesis_runtime.policies = [p for p in policies if p is not None]
+        # Re-run the auto-append shim by going through __init__-style
+        # logic: ensure passthrough is last unless explicitly present.
+        if not any(
+            getattr(p, "name", "") == "passthrough"
+            for p in self.synthesis_runtime.policies
+        ):
+            self.synthesis_runtime.policies.append(PassthroughPolicy())
 
     def _load(self) -> None:
         if not self.agents_dir.exists():
@@ -352,6 +430,9 @@ def run(
             f"[server] manifest identity: {config.server.issuer} "
             f"(operator: {config.server.operator})"
         )
+
+    # Configure the synthesis runtime per [synthesis] in the config.
+    registry.configure_synthesis(config)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

@@ -18,6 +18,16 @@ scope_required_for_invocation  = true
 [agents]
 disclosure = "public"
 
+# Synthesis runtime: composition policies tried in declaration order
+# when PROPOSE arrives. The runtime always appends a final
+# "passthrough" fallback so a proposal naming an existing method
+# automatically becomes a one-step identity plan. Custom policies
+# (graph, llm, etc.) can be registered by deployments that need
+# smarter composition.
+[synthesis]
+policies     = ["recipes"]
+recipes_file = "agtp-recipes.toml"
+
 # APIs: resource-scoped endpoints the workplace exposes. Servers with
 # multi-resource architectures populate this. Each entry lists the
 # methods admissible against that resource.

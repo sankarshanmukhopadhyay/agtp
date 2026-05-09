@@ -17,7 +17,7 @@ import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from core._paths import normalize
 
@@ -75,6 +75,25 @@ class ServerPolicy:
 
 
 @dataclass
+class SynthesisConfig:
+    """
+    PROPOSE-time composition policy configuration.
+
+    ``policies`` lists composition strategies in evaluation order.
+    Today only ``"recipes"`` is shipping; future deployments may add
+    ``"graph"`` or ``"llm"`` once those policies land. The runtime
+    always appends a final ``"passthrough"`` fallback so the v1
+    accept-on-exact-match behavior is preserved.
+
+    ``recipes_file`` resolves relative to the server's working
+    directory if the path is not absolute.
+    """
+
+    policies: List[str] = field(default_factory=lambda: ["recipes"])
+    recipes_file: str = "agtp-recipes.toml"
+
+
+@dataclass
 class AgentsConfig:
     """How openly the server lists the agents it hosts."""
 
@@ -95,6 +114,7 @@ class ServerConfig:
     server: ServerInfo
     policy: ServerPolicy = field(default_factory=ServerPolicy)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
+    synthesis: SynthesisConfig = field(default_factory=SynthesisConfig)
     apis: list = field(default_factory=list)
     hosts_protocols: list = field(default_factory=list)
     source_path: Optional[Path] = None
@@ -176,12 +196,19 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         disclosure=agents_block.get("disclosure", "public"),
     )
 
+    synthesis_block = data.get("synthesis", {})
+    synthesis = SynthesisConfig(
+        policies=list(synthesis_block.get("policies") or ["recipes"]),
+        recipes_file=str(synthesis_block.get("recipes_file") or "agtp-recipes.toml"),
+    )
+
     apis = _load_apis(data.get("apis", []) or [])
     hosts_protocols = _load_hosts_protocols(data.get("hosts_protocols", []) or [])
 
     return ServerConfig(
         server=server,
         policy=policy,
+        synthesis=synthesis,
         agents=agents,
         apis=apis,
         hosts_protocols=hosts_protocols,
@@ -195,6 +222,7 @@ __all__ = [
     "ServerConfig",
     "ServerInfo",
     "ServerPolicy",
+    "SynthesisConfig",
     "default_config",
     "load",
     "CONFIG_FILENAME",

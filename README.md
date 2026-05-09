@@ -36,13 +36,15 @@ agtp/
 │   ├── methods.py          12-method registry + dispatch
 │   ├── manifest.py         Server Manifest generation
 │   ├── config.py           agtp-server.toml loader
-│   ├── negotiation.py      PROPOSE policy
-│   ├── synthesis_runtime.py  Synthesis registry (in-memory)
+│   ├── negotiation.py      PROPOSE counter/refuse fallback (vestigial)
+│   ├── synthesis/          composition runtime (policies, recipes, plan exec)
+│   ├── synthesis_runtime.py  back-compat shim (re-exports from server.synthesis)
 │   ├── amg/                AMG validator (server-side)
 │   ├── examples/           opt-in custom-method modules
 │   ├── agents/             reference agent docs (Lauren, Orchestrator, legacy/)
 │   ├── agtp-server.toml    reference config
-│   └── run_demo.sh         end-to-end 21-scenario demo
+│   ├── agtp-recipes.toml   starter synthesis recipes
+│   └── run_demo.sh         end-to-end 26-scenario demo
 │
 ├── client/               AGTP client product (one package, two frontends)
 │   ├── core_client.py      shared protocol logic (URI resolution, connections,
@@ -439,6 +441,42 @@ AMG/1.0"` header advising clients to upgrade.
 
 PROPOSE is still the path that *instantiates* a method; Method-Grammar
 is the path that *probes* whether a method could be instantiated.
+
+### Synthesis runtime
+
+PROPOSE acceptance flows through the
+[synthesis runtime](server/synthesis/) — a pluggable composition
+layer that builds a [`SynthesisPlan`](server/synthesis/plan.py) from
+the proposal and registers it under a `synthesis_id`. Subsequent
+calls carrying `Synthesis-Id` execute the plan: each
+[`CompositionStep`](server/synthesis/plan.py) is dispatched through
+the same machinery as a direct external invocation, so capability
+checks, scope assertions, and authority enforcement fire per step.
+A synthesis cannot launder authority.
+
+Two composition policies ship today:
+
+  * **Recipe-based** — hand-authored TOML recipes
+    ([`server/agtp-recipes.toml`](server/agtp-recipes.toml)) match
+    against the proposal and template a multi-step plan. Three
+    starter recipes (`EVALUATE`, `AUDIT`, `INSPECT`) demonstrate
+    output-threaded, merged, and listed aggregation modes.
+  * **Passthrough** — appended automatically as the final fallback;
+    a proposal whose name matches an existing method becomes a
+    one-step identity plan. This preserves the v1 accept-on-exact-
+    match wire shape.
+
+Configure policies in `agtp-server.toml`:
+
+```toml
+[synthesis]
+policies     = ["recipes"]
+recipes_file = "agtp-recipes.toml"
+```
+
+Future policies (capability-graph, LLM-driven) plug in via the
+[`CompositionPolicy`](server/synthesis/policies.py) protocol without
+disturbing the runtime.
 
 Synthesis lifecycle: process-scoped, in-memory, cleared by
 `SUSPEND --param synthesis_id=<id>` or by server restart. Future

@@ -400,6 +400,48 @@ def spec_to_dict(spec: MethodSpec) -> Dict[str, Any]:
     return payload
 
 
+def spec_to_amg_spec(spec: MethodSpec) -> "AMGMethodSpec":
+    """
+    Convert a server-side ``MethodSpec`` (handler + protocol metadata)
+    into an ``AMGMethodSpec`` suitable for the synthesis runtime to
+    inspect. ``required_params`` / ``optional_params`` here are
+    string lists; the AMG spec expects ``ParamSpec`` objects, so each
+    name is promoted to a default ``ParamSpec`` with type=string and
+    a generic description.
+    """
+    from server.amg.grammar import (
+        AMGMethodSpec,
+        ParamSpec,
+        SEMANTIC_ACTION_INTENT,
+        SOURCE_AGTP,
+        SOURCE_AMG,
+    )
+
+    def _promote(name: str) -> ParamSpec:
+        return ParamSpec(
+            name=name,
+            type="string",
+            description=f"parameter '{name}' from server method spec",
+        )
+
+    error_codes = list(spec.error_codes) if spec.error_codes else [400, 422]
+    if 422 not in error_codes:
+        error_codes.append(422)
+    return AMGMethodSpec(
+        name=spec.name,
+        semantic_class=spec.semantic_class or SEMANTIC_ACTION_INTENT,
+        category=spec.category or "custom",
+        description=spec.description or f"server method {spec.name}",
+        idempotent=bool(spec.idempotent),
+        state_modifying=bool(spec.state_modifying),
+        required_params=[_promote(p) for p in spec.required_params],
+        optional_params=[_promote(p) for p in spec.optional_params],
+        error_codes=error_codes,
+        source=spec.source or SOURCE_AGTP,
+        namespace=spec.namespace,
+    )
+
+
 def check_capability(
     spec: MethodSpec, agent_doc: AgentDocument
 ) -> Optional[wire.AGTPResponse]:
@@ -955,10 +997,18 @@ def handle_suspend(
     cleared_synthesis: Optional[str] = None
     syn_id = params.get("synthesis_id")
     if syn_id:
-        # Local import avoids the negotiation -> methods import cycle.
-        from server.negotiation import SYNTHESES
-        if SYNTHESES.remove(str(syn_id)):
-            cleared_synthesis = str(syn_id)
+        # Prefer the runtime's expire() so both the active-plans
+        # dict and the legacy SYNTHESES registry are cleared in one
+        # atomic move. Fall back to the legacy registry directly if
+        # no runtime is attached (older test fixtures).
+        runtime = getattr(server_state, "synthesis_runtime", None)
+        if runtime is not None:
+            if runtime.expire(str(syn_id)):
+                cleared_synthesis = str(syn_id)
+        else:
+            from server.negotiation import SYNTHESES
+            if SYNTHESES.remove(str(syn_id)):
+                cleared_synthesis = str(syn_id)
 
     return json_response(
         200,
@@ -1041,10 +1091,60 @@ def handle_propose(
                 extra={"agent_id": agent_doc.agent_id, "amg_code": err_obj.code},
             )
 
+    # Try the synthesis runtime first. The runtime walks its policy
+    # chain (recipes, then passthrough) and returns a SynthesisPlan
+    # when a policy can fulfill the proposal. The accept response
+    # body preserves the v1 ``synthesis: {synthesis_id, target_method,
+    # parameter_mapping, ...}`` shape so existing clients keep
+    # working; multi-step plans add a ``plan`` field with the full
+    # composition recipe for clients that want it.
+    runtime = getattr(server_state, "synthesis_runtime", None)
+    if runtime is not None:
+        available = [spec_to_amg_spec(s) for s in REGISTRY.values()]
+        plan = runtime.attempt_synthesis(amg_spec, available)
+        if plan is not None:
+            synthesis_id = runtime.instantiate(plan)
+            first_step = plan.steps[0]
+            param_mapping = {
+                src.value: target
+                for target, src in first_step.parameter_source.items()
+                if src.kind == "proposal" and isinstance(src.value, str)
+            }
+            synthesis_block: Dict[str, Any] = {
+                "synthesis_id": synthesis_id,
+                "target_method": first_step.method_name,
+                "parameter_mapping": param_mapping,
+                "description": plan.description or "",
+                "proposal_name": amg_spec.name,
+            }
+            if len(plan.steps) > 1 or (plan.policy_name and plan.policy_name != "passthrough"):
+                synthesis_block["plan"] = plan.to_dict()
+            return json_response(
+                200,
+                "OK",
+                {
+                    "method": "PROPOSE",
+                    "agent_id": agent_doc.agent_id,
+                    "outcome": "accept",
+                    "synthesis": synthesis_block,
+                    "issued_at": _utc_now_iso(),
+                },
+                method_name="PROPOSE",
+            )
+
+    # Runtime declined or wasn't attached. Fall back to the legacy
+    # ``BasicNegotiationPolicy`` for the counter-proposal /
+    # refusal pathways. ``BasicNegotiationPolicy`` is now vestigial
+    # for the accept case (the runtime owns it) and is slated for
+    # removal once the counter-proposal logic lifts to a standalone
+    # ``find_counter_proposal()`` function.
     policy = BasicNegotiationPolicy()
     decision = policy.evaluate(params, REGISTRY)
 
     if decision.outcome == "accept":
+        # Runtime should have produced this above; only here when the
+        # runtime is missing entirely (back-compat for tests that
+        # construct AgentRegistry without our default runtime).
         assert decision.synthesis is not None
         SYNTHESES.add(decision.synthesis)
         return json_response(
@@ -1147,6 +1247,28 @@ def dispatch(
     without a server-config in hand.
     """
     method_name = request.method.upper()
+
+    # Synthesis-Id execution pathway. Runs ahead of the registry
+    # lookup so a synthesis_id whose plan executes a method that
+    # wouldn't otherwise be admissible (e.g. soft-denied) still
+    # works — the original PROPOSE was the authorization. Inner
+    # steps still go through dispatch() and fire capability /
+    # scope checks.
+    syn_id = wire.header(request, "Synthesis-Id")
+    if syn_id:
+        runtime = getattr(server_state, "synthesis_runtime", None)
+        if runtime is not None and runtime.get(syn_id) is not None:
+            return runtime.execute(syn_id, request, server_state, agent_doc)
+        # Fall through: an unrecognized Synthesis-Id with no runtime
+        # match returns the same not-found shape as a registry miss.
+        if runtime is not None:
+            return error_response(
+                404, "Not Found",
+                "synthesis-not-found",
+                f"synthesis {syn_id!r} is not active on this server",
+                extra={"synthesis_id": syn_id},
+            )
+
     spec = REGISTRY.get(method_name)
     if spec is None:
         grammar_header = wire.header(request, "Method-Grammar") or ""
@@ -1320,5 +1442,6 @@ __all__ = [
     "error_response",
     "require_params",
     "check_capability",
+    "spec_to_amg_spec",
     "spec_to_dict",
 ]

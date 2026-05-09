@@ -7,7 +7,7 @@
 #
 # Starts the registry (HTTP, dev mode), starts the agent server
 # (plaintext, dev mode), registers both agents, then walks through
-# twenty-one scenarios covering every method plus the 405 and 501 error
+# twenty-six scenarios covering every method plus the 405 and 501 error
 # paths.
 #
 # Output goes to server/transcripts/methods-demo.txt and a few sidecar
@@ -250,6 +250,51 @@ run_scenario 21 "Method-Grammar pathway: STATUS on Orchestrator (459 stoplist vi
     $CURL -X STATUS "agtp://$ORCH_ID" \
     -H "Method-Grammar: AMG/1.0" \
     "${CURL_ARGS[@]}"
+
+# Synthesis runtime: PROPOSE matches a recipe in agtp-recipes.toml
+# (AUDIT = QUERY + SUMMARIZE), the runtime instantiates a multi-step
+# plan and returns a synthesis_id. A subsequent invocation with
+# Synthesis-Id walks the plan; SUSPEND clears it.
+PROPOSE_AUDIT_OUT="$($CLIENT "agtp://$ORCH_ID" PROPOSE \
+    -d '{"name":"AUDIT","parameters":{"subject":"string","length":"string"},"outcome":"summary","description":"audit subject by querying then summarizing"}' \
+    "${CLIENT_ARGS[@]}" 2>/dev/null || true)"
+SYN_ID=$(printf '%s' "$PROPOSE_AUDIT_OUT" | "$PY" -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('synthesis',{}).get('synthesis_id',''))" 2>/dev/null || true)
+
+run_scenario 22 "PROPOSE AUDIT (recipe-based composition; 200 with multi-step plan)" \
+    $CLIENT "agtp://$ORCH_ID" PROPOSE \
+    -d '{"name":"AUDIT","parameters":{"subject":"string","length":"string"},"outcome":"summary","description":"audit subject via QUERY + SUMMARIZE"}' \
+    "${CLIENT_ARGS[@]}"
+
+if [ -n "$SYN_ID" ]; then
+    run_scenario 23 "Invoke AUDIT via Synthesis-Id (runtime walks the plan)" \
+        $CURL -X AUDIT "agtp://$ORCH_ID" \
+        -H "Synthesis-Id: $SYN_ID" \
+        -d '{"subject":"lauren","length":"short"}' \
+        "${CURL_ARGS[@]}"
+else
+    echo "[runner] skipping scenario 23: no synthesis_id captured" | tee -a "$TRANSCRIPT"
+fi
+
+run_scenario 24 "PROPOSE TELEPORT (no recipe, no exact match; 422 negotiation-refused)" \
+    $CLIENT "agtp://$ORCH_ID" PROPOSE \
+    -d '{"name":"TELEPORT","parameters":{},"outcome":"object","description":"verb the demo server does not host or compose"}' \
+    "${CLIENT_ARGS[@]}"
+
+if [ -n "$SYN_ID" ]; then
+    run_scenario 25 "SUSPEND with synthesis_id clears the synthesis (200)" \
+        $CLIENT "agtp://$ORCH_ID" SUSPEND \
+        --param "synthesis_id=$SYN_ID" \
+        --param reason=demo-cleanup \
+        "${CLIENT_ARGS[@]}"
+
+    run_scenario 26 "Invoke AUDIT after SUSPEND (404 synthesis-not-found)" \
+        $CURL -X AUDIT "agtp://$ORCH_ID" \
+        -H "Synthesis-Id: $SYN_ID" \
+        -d '{"subject":"lauren","length":"short"}' \
+        "${CURL_ARGS[@]}"
+else
+    echo "[runner] skipping scenarios 25-26: no synthesis_id captured" | tee -a "$TRANSCRIPT"
+fi
 
 {
     echo
