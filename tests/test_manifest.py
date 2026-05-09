@@ -429,25 +429,27 @@ class APIsAndProtocolsTests(unittest.TestCase):
         self.assertIn("mcp", protocols)
 
 
-class FourFiveTwoVocabTests(unittest.TestCase):
-    """The 452 status text must read 'Method Not Permitted for Agent'."""
+class MethodNotPermittedVocabTests(unittest.TestCase):
+    """
+    The soft-deny refusal now rides 403 Forbidden but carries the
+    ``method-not-permitted-for-agent`` error code so existing
+    framing — "the principal has not authorized this method" —
+    survives the spec migration.
+    """
 
-    def test_status_constant_text(self):
+    def test_method_not_permitted_for_agent_returns_403(self):
         from core.status import (
-            METHOD_NOT_PERMITTED_FOR_AGENT,
-            METHOD_OUTSIDE_NEED,
+            FORBIDDEN,
             method_not_permitted_for_agent,
+            method_outside_need,
         )
-        self.assertEqual(
-            METHOD_NOT_PERMITTED_FOR_AGENT,
-            (452, "Method Not Permitted for Agent"),
-        )
-        # Backward-compat alias resolves to the same tuple.
-        self.assertEqual(METHOD_OUTSIDE_NEED, METHOD_NOT_PERMITTED_FOR_AGENT)
+        self.assertEqual(FORBIDDEN, (403, "Forbidden"))
+        # Backward-compat alias resolves to the same callable.
+        self.assertIs(method_outside_need, method_not_permitted_for_agent)
 
         resp = method_not_permitted_for_agent("EXECUTE", "abc123")
-        self.assertEqual(resp.status_code, 452)
-        self.assertEqual(resp.status_text, "Method Not Permitted for Agent")
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_text, "Forbidden")
         body = json.loads(resp.body_bytes.decode("utf-8"))
         self.assertEqual(
             body["error"]["code"], "method-not-permitted-for-agent"

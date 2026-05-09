@@ -60,7 +60,7 @@ def _good_compose_kwargs(**overrides) -> Dict[str, Any]:
             ParamSpec(name="period", type="string",
                       description="time window like 2026-Q1"),
         ],
-        error_codes=[400, 422, 451],
+        error_codes=[400, 422, 455],
     )
     base.update(overrides)
     return base
@@ -242,7 +242,7 @@ class MethodBuilderTests(unittest.TestCase):
              .with_namespace("acme-finance")
              .with_required_param("account_id", "string", "the ledger account")
              .with_required_param("period", "string", "time window")
-             .with_error_code(400).with_error_code(422).with_error_code(451))
+             .with_error_code(400).with_error_code(422).with_error_code(455))
         spec = b.build()
         self.assertEqual(spec.name, "RECONCILE")
         self.assertEqual(len(spec.required_params), 2)

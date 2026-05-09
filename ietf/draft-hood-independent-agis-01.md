@@ -1035,7 +1035,8 @@ conforms or does not.
 
 When an AGTP request carries the `Method-Grammar: AGIS/1.0` header, the
 AGTP transport layer runs Pass 2 and Pass 3 against the method identifier
-in the request. Failure returns status 454 Grammar Violation per {{AGTP}}.
+in the request. Failure returns status 422 Unprocessable with
+`error.code='grammar-violation'` per {{AGTP}}.
 Full document validation is performed by the service endpoint upon
 receiving a complete AGIS document at the AGTP root address.
 
@@ -1489,7 +1490,8 @@ Grammar Validation at Transport Layer:
 : The `Method-Grammar: AGIS/1.0` header instructs AGTP infrastructure to
   perform Pass 2 and Pass 3 validation at the transport layer. Transport-
   layer validators MUST reject requests with method identifiers that fail
-  AGIS grammar rules with status 454 Grammar Violation per {{AGTP}}.
+  AGIS grammar rules with status 422 Unprocessable
+  (`error.code='grammar-violation'`) per {{AGTP}}.
   This prevents non-conformant method identifiers from reaching application
   code.
 

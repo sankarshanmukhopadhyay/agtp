@@ -87,6 +87,7 @@ from client.amg.validator import (
     ValidationError,
     ValidationResult,
     validate,
+    validate_name_only,
 )
 from client.amg.composer import (
     CompositionError,
@@ -163,6 +164,7 @@ __all__ = [
     "stoplist_suggestion",
     "suggest_fix",
     "validate",
+    "validate_name_only",
     "validate_partial",
     "validate_synthesis",
 ]

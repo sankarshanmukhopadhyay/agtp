@@ -27,6 +27,7 @@ from client.amg.grammar import (
     PARAM_TYPES,
     PARAM_TYPES_REQUIRING_SCHEMA,
     ParamSpec,
+    SEMANTIC_ACTION_INTENT,
     SEMANTIC_PROTOCOL_MECHANIC,
     SOURCE_AGTP,
     SOURCE_AMG,
@@ -552,9 +553,48 @@ def _pass_detail_ok(name: str, spec: AMGMethodSpec) -> str:
     return "ok"
 
 
+def validate_name_only(name: str) -> Optional[ValidationError]:
+    """
+    Run only the name-targeted AMG passes (lexical, reserved, stoplist).
+
+    The Method-Grammar header pathway in the server dispatcher needs
+    to decide whether a method name is AMG-conformant *before* a full
+    spec exists — the inbound request carries only the verb. This
+    helper constructs a minimal stub spec, runs Pass 1 (lexical),
+    Pass 2 (reserved), and Pass 4 (stoplist), and returns ``None``
+    when all three accept the name. The first failure is returned as
+    a :class:`ValidationError` so callers can map it onto a 459
+    Grammar Violation response.
+
+    Pass 3 (semantic-class) is skipped because it requires a
+    declared ``semantic_class`` field that the wire request cannot
+    carry. Passes 5-9 are skipped because they target body / schema
+    / substitution shape that does not apply pre-dispatch.
+    """
+    stub = AMGMethodSpec(
+        name=name,
+        semantic_class=SEMANTIC_ACTION_INTENT,
+        category="custom",
+        description="Method-Grammar runtime validation stub",
+        idempotent=False,
+        state_modifying=False,
+        required_params=[],
+        optional_params=[],
+        error_codes=[400, 422],
+        source=SOURCE_AMG,
+        namespace="method-grammar-stub",
+    )
+    for pass_fn in (_pass_lexical, _pass_reserved, _pass_stoplist):
+        err = pass_fn(stub)
+        if err is not None:
+            return err
+    return None
+
+
 __all__ = [
     "PassResult",
     "ValidationError",
     "ValidationResult",
     "validate",
+    "validate_name_only",
 ]

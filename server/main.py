@@ -103,14 +103,16 @@ def soft_deny_check(
     Precedence (documented; do not reorder without updating the design
     note and the tests in test_methods.py):
 
-      1. 462 Wildcards Refused  -- agent declares wildcards: true and
+      1. 403 Wildcards Refused  -- agent declares wildcards: true and
          the server policy says wildcards_accepted: false. Applies to
          non-embedded methods only; embedded methods (including the
          four cognitive primitives that are otherwise subject to
-         soft-deny) flow through.
-      2. 452 Method Outside Need -- the method is not in the agent's
-         requires.methods and wildcards is false.
-      3. 451 Scope Violation    -- handler-local check, runs after
+         soft-deny) flow through. Body carries
+         error.code="wildcards-refused".
+      2. 403 Method Not Permitted -- the method is not in the agent's
+         requires.methods and wildcards is false. Body carries
+         error.code="method-not-permitted-for-agent".
+      3. 455 Scope Violation    -- handler-local check, runs after
          soft-deny passes.
 
     Methods in SOFT_DENY_EXEMPT_METHODS bypass this gate entirely.
@@ -299,7 +301,7 @@ def handle_connection(
                 conn.sendall(denial.serialize())
                 return
 
-        response = dispatch(request, registry, agent_doc)
+        response = dispatch(request, registry, agent_doc, config=config)
         conn.sendall(response.serialize())
     except wire.WireFormatError as exc:
         try:

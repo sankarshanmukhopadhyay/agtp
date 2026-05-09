@@ -102,7 +102,7 @@ verified. These include the PURCHASE method handshake, the DISCOVER
 method result surface, and the Attribution-Record. This document also
 defines the Intent-Assertion header for portable, detached principal-
 authorized intent, the Cart-Digest mechanism for multi-line-item
-transactions, and the 455 Counterparty Unverified status code. Together
+transactions, and the 458 Counterparty Unverified status code. Together
 these mechanisms close the verification loop between agent and merchant
 within AGTP's governance model.
 
@@ -190,7 +190,7 @@ cryptographic machinery.
 **Verification at PURCHASE.** Merchant identity is verified by the
 requesting agent immediately before executing PURCHASE. The
 verification result is recorded in the Attribution-Record. A
-verification failure is a 455 Counterparty Unverified response, not
+verification failure is a 458 Counterparty Unverified response, not
 a protocol error.
 
 **Discovery surfaces both sides.** The DISCOVER method defined in
@@ -425,7 +425,7 @@ lifecycle states in {{AGTP}} Section 5.8:
 
 A merchant in any state other than Active **MUST NOT** be treated as
 a valid counterparty by a requesting agent. The expected response to
-a PURCHASE targeting a non-Active merchant is 455 Counterparty
+a PURCHASE targeting a non-Active merchant is 458 Counterparty
 Unverified.
 
 Governance platforms **MUST** update the merchant's Merchant Manifest
@@ -540,7 +540,7 @@ A receiving AGTP server that accepts PURCHASE invocations **MUST**:
    present and to match the fingerprint of the server's current
    Merchant Manifest Document.
 
-3. Return 455 Counterparty Unverified if either header is absent,
+3. Return 458 Counterparty Unverified if either header is absent,
    if the Merchant-ID does not match the server's canonical ID, or
    if the fingerprint does not match.
 
@@ -833,11 +833,11 @@ Mixed result sets include a `result_class` field on each entry with
 value `"agent"` or `"merchant"`, enabling the requesting agent to
 route each result to the appropriate downstream handling.
 
-# 455 Counterparty Unverified
+# 458 Counterparty Unverified
 
 ## Definition
 
-This document registers AGTP status code 455 Counterparty Unverified.
+This document registers AGTP status code 458 Counterparty Unverified.
 The status is returned in any of the following conditions:
 
 - The `Merchant-ID` request header is absent on a PURCHASE
@@ -863,22 +863,22 @@ code. The requesting agent **MUST NOT** retry the PURCHASE without
 re-running counterparty verification against a fresh Merchant
 Manifest Document.
 
-Status code 455 is a governance signal, not a protocol error, and
+Status code 458 is a governance signal, not a protocol error, and
 **MUST** be logged by both parties. It parallels the role of 451
-Scope Violation and 453 Zone Violation in the AGTP status code
+Scope Violation and 457 Zone Violation in the AGTP status code
 space: the system caught a governance condition at the protocol
 layer, before any state-modifying side effect.
 
 ## Retry Semantics
 
-A 455 response in the following categories is non-retryable without
+A 458 response in the following categories is non-retryable without
 remediation:
 
 - Merchant in Revoked or Deprecated lifecycle state.
 - Invalid Merchant Manifest signature.
 - Merchant-ID mismatch.
 
-A 455 response in the following categories is retryable after a
+A 458 response in the following categories is retryable after a
 governance-defined interval:
 
 - Merchant in Suspended state (retry after state transitions to
@@ -925,7 +925,7 @@ PURCHASE is received by an endpoint serving Merchant Manifest B.
 
 Mitigation: The `Merchant-Manifest-Fingerprint` header binds the
 manifest the agent verified to the manifest the receiving server
-presents. A mismatch produces 455 Counterparty Unverified. This
+presents. A mismatch produces 458 Counterparty Unverified. This
 check is cryptographic and cannot be bypassed without compromising
 the governance platform's signing key.
 
@@ -1007,8 +1007,8 @@ by {{AGTP}} Section 8.3:
 
 | Code | Name | Definition | Reference |
 |------|------|------------|-----------|
-| 455 | Counterparty Unverified | The merchant counterparty in a PURCHASE invocation failed identity verification: the Merchant-ID or Merchant-Manifest-Fingerprint is absent, does not match, or the merchant is in a non-Active lifecycle state. Governance signal; **MUST** be logged. | This document, Section 7 |
-{: title="Status Code 455 Registration"}
+| 458 | Counterparty Unverified | The merchant counterparty in a PURCHASE invocation failed identity verification: the Merchant-ID or Merchant-Manifest-Fingerprint is absent, does not match, or the merchant is in a non-Active lifecycle state. Governance signal; **MUST** be logged. | This document, Section 7 |
+{: title="Status Code 458 Registration"}
 
 ## Header Field Registration
 
@@ -1107,7 +1107,7 @@ Substantive changes:
    to a future revision.
 
 Version 01 does not change the wire format of the PURCHASE handshake,
-the Intent-Assertion header, the Cart-Digest mechanism, or the 455
+the Intent-Assertion header, the Cart-Digest mechanism, or the 458
 status code semantics. Implementations built against v00 require
 changes only in the registration and identity-verification paths, not
 in the transaction flow.

@@ -7,7 +7,7 @@
 #
 # Starts the registry (HTTP, dev mode), starts the agent server
 # (plaintext, dev mode), registers both agents, then walks through
-# fourteen scenarios covering every method plus the 405 and 501 error
+# twenty-one scenarios covering every method plus the 405 and 501 error
 # paths.
 #
 # Output goes to server/transcripts/methods-demo.txt and a few sidecar
@@ -197,7 +197,7 @@ run_scenario 11 "SUSPEND on Orchestrator (returns resumption nonce)" \
     --param ttl_seconds=600 \
     "${CLIENT_ARGS[@]}"
 
-run_scenario 12 "PROPOSE to Orchestrator (out-of-scope name, returns 460)" \
+run_scenario 12 "PROPOSE to Orchestrator (out-of-scope name, returns 422 negotiation-refused)" \
     $CLIENT "agtp://$ORCH_ID" PROPOSE \
     -d '{"name":"ZBLARGON","parameters":{"input":"string"},"outcome":"object","description":"verb unrelated to anything this server hosts; expected refusal"}' \
     "${CLIENT_ARGS[@]}"
@@ -216,13 +216,13 @@ run_scenario 14 "FAKEMETHOD on Lauren (unknown method, returns 501)" \
 run_scenario 15 "Server-level DISCOVER (Form 2 URI returns Server Manifest)" \
     $CLIENT "agtp://127.0.0.1:4480" "${CLIENT_ARGS[@]}"
 
-run_scenario 16 "Soft-deny: RECONCILE on Lauren (custom method, returns 452)" \
+run_scenario 16 "Soft-deny: RECONCILE on Lauren (custom method, returns 403 method-not-permitted-for-agent)" \
     $CLIENT "agtp://$LAUREN_ID" RECONCILE \
     --param account_id=acct-001 \
     --param period=Q1 \
     "${CLIENT_ARGS[@]}"
 
-run_scenario 17 "PROPOSE counter-proposal (PROPOSEX -> 461 counters with PROPOSE)" \
+run_scenario 17 "PROPOSE counter-proposal (PROPOSEX -> 422 with counter_proposal body)" \
     $CLIENT "agtp://$ORCH_ID" PROPOSE \
     -d '{"name":"PROPOSEX","parameters":{"x":"string"},"outcome":"object","description":"variant of PROPOSE that the policy should counter against"}' \
     "${CLIENT_ARGS[@]}"
@@ -234,6 +234,22 @@ run_scenario 18 "PROPOSE accept (QUERY -> 200 with synthesis_id)" \
 
 run_scenario 19 "--match-check on Lauren (full match against demo server)" \
     $CLIENT "agtp://$LAUREN_ID" --match-check "${CLIENT_ARGS[@]}"
+
+# Method-Grammar header runtime pathway: lighter-weight than PROPOSE,
+# validates the method name against AMG and returns either an
+# invitation-to-PROPOSE (200) or a 459 Grammar Violation.
+CURL="$PY -m client.cli.curl"
+CURL_ARGS=(--insecure --insecure-skip-verify)
+
+run_scenario 20 "Method-Grammar pathway: RECONCILE on Orchestrator (200 invitation-to-PROPOSE)" \
+    $CURL -X RECONCILE "agtp://$ORCH_ID" \
+    -H "Method-Grammar: AMG/1.0" \
+    "${CURL_ARGS[@]}"
+
+run_scenario 21 "Method-Grammar pathway: STATUS on Orchestrator (459 stoplist violation)" \
+    $CURL -X STATUS "agtp://$ORCH_ID" \
+    -H "Method-Grammar: AMG/1.0" \
+    "${CURL_ARGS[@]}"
 
 {
     echo

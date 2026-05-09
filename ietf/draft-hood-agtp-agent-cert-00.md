@@ -296,7 +296,7 @@ Scope at O(1) cost per request:
    after session setup.)
 
 3. If any header token is not covered by the commitment, the SEP
-   returns 451 Scope Violation without forwarding the request to the
+   returns 455 Scope Violation without forwarding the request to the
    application layer.
 
 This enables governance enforcement at line rate without application-

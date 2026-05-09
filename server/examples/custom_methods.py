@@ -77,7 +77,7 @@ def install() -> None:
         state_modifying=True,
         required_params=["account_id", "period"],
         optional_params=["tolerance"],
-        error_codes=[400, 404, 405, 422, 451],
+        error_codes=[400, 404, 405, 422, 455],
         description=(
             "Reconcile transactions for a given account and period."
         ),

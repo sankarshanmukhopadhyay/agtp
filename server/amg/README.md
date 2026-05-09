@@ -26,11 +26,12 @@ points, all in `server/methods.py`:
   before the method enters the dispatch registry.
 - **`handle_propose()`** — gate for incoming PROPOSE bodies.
   Malformed proposals (lexical / reserved / stoplist / semantic
-  class failures) are turned into 460 Negotiation Refused with
-  `reason="ambiguous"` before the negotiation policy ever sees them.
-- **Counter-proposal composition (461 responses)** — when the
-  policy chooses to suggest an alternative, the server uses
-  `compose_method` (or the `MethodBuilder`) to construct the
+  class failures) are turned into 422 Unprocessable with
+  `error.code='negotiation-refused'` and `error.reason='ambiguous'`
+  before the negotiation policy ever sees them.
+- **Counter-proposal composition (422 + `counter_proposal` body)** —
+  when the policy chooses to suggest an alternative, the server
+  uses `compose_method` (or the `MethodBuilder`) to construct the
   alternative spec it returns to the client.
 
 ## When the client side is invoked

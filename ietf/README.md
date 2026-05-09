@@ -181,7 +181,7 @@ Method-Grammar: AGIS/1.0
 
 Requests carrying this header are validated against AGIS grammar
 rules at the transport layer. Non-conformant methods return
-`454 Grammar Violation`.
+`422 Unprocessable` with `error.code='grammar-violation'`.
 
 ### Dynamic Endpoint Negotiation (PROPOSE)
 
@@ -199,7 +199,9 @@ Step 4: Agent calls the newly instantiated endpoint
 
 New status codes: `261 Negotiation In Progress`, `262 Authorization
 Required for Negotiation`, `263 Endpoint Instantiated`,
-`460 Proposal Rejected`.
+and PROPOSE refusals delivered as `422 Unprocessable` with
+`error.code='negotiation-refused'` (counter-proposals carry a
+`counter_proposal` body on the same status).
 
 ### AGIS-Version Header
 

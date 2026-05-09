@@ -229,7 +229,11 @@ def _do_match_check(args, parsed: ParsedURI) -> int:
 
 
 # ---------------------------------------------------------------------------
-# --negotiate (PROPOSE fallback when 452 / 462 returns).
+# --negotiate (PROPOSE fallback when the server soft-denies via 403).
+#
+# The historical 452 / 462 codes have been folded into 403 with a
+# structured error.code field; we trigger negotiation on the same
+# soft-deny semantics under the new wire numbers.
 # ---------------------------------------------------------------------------
 
 
@@ -303,17 +307,12 @@ def _handle_negotiate(
         print(_format_body(retry))
         return 0 if retry.status_code == 200 else 1
 
-    if propose.status_code == 460:
-        err = (propose.parsed or {}).get("error", {})
-        print(
-            f"PROPOSE refused: {err.get('reason', 'unknown')} - "
-            f"{err.get('explanation', '')}",
-            file=sys.stderr,
-        )
-        return 1
+    payload = propose.parsed if isinstance(propose.parsed, dict) else {}
+    err_code = (payload.get("error") or {}).get("code")
 
-    if propose.status_code == 461:
-        counter = (propose.parsed or {}).get("counter_proposal", {})
+    # 422 with counter_proposal body → counter-proposal flow.
+    if propose.status_code == 422 and isinstance(payload.get("counter_proposal"), dict):
+        counter = payload["counter_proposal"]
         suggested = counter.get("name")
         print(
             f"Server suggests {suggested}: {counter.get('description', '')}",
@@ -342,7 +341,17 @@ def _handle_negotiate(
         print(_format_body(propose))
         return 1
 
-    return None  # fall through; caller renders the original 452/462
+    # 422 with negotiation-refused body → plain refusal.
+    if propose.status_code == 422 and err_code == "negotiation-refused":
+        err = payload.get("error", {}) or {}
+        print(
+            f"PROPOSE refused: {err.get('reason', 'unknown')} - "
+            f"{err.get('explanation', '')}",
+            file=sys.stderr,
+        )
+        return 1
+
+    return None  # fall through; caller renders the original soft-deny
 
 
 # ---------------------------------------------------------------------------
@@ -453,12 +462,20 @@ def run(args) -> int:
         return 1
 
     # --negotiate fallback: triggers when the original method was
-    # refused via the v2 inbound gate (452 / 462). The PROPOSE flow
-    # may return its own exit code; if it returns None, we fall
-    # through and surface the original refusal body.
+    # refused via the v2 inbound gate. Soft-deny refusals
+    # (method-not-permitted-for-agent, wildcards-refused) now ride
+    # 403 with a structured error.code; the dispatcher's "method not
+    # implemented" path stays at 501. The PROPOSE flow may return
+    # its own exit code; if it returns None, we fall through and
+    # surface the original refusal body.
+    err_code = None
+    if isinstance(result.parsed, dict):
+        err_code = (result.parsed.get("error") or {}).get("code")
+    softdeny_codes = {"method-not-permitted-for-agent", "wildcards-refused"}
     if (
         args.negotiate
-        and result.status_code in (452, 462)
+        and result.status_code == 403
+        and err_code in softdeny_codes
         and method_name != "PROPOSE"
     ):
         rc = _handle_negotiate(args, method_name, body)
@@ -592,17 +609,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--negotiate",
         action="store_true",
         help=(
-            "When the requested method is refused (452 / 462), "
-            "automatically issue a PROPOSE for it. The PROPOSE "
-            "outcome is then surfaced as a 200 (synthesis), 460 "
-            "(refusal), or 461 (counter-proposal)."
+            "When the requested method is soft-denied (403 with "
+            "error.code='method-not-permitted-for-agent' or "
+            "'wildcards-refused'), automatically issue a PROPOSE for it. "
+            "The PROPOSE outcome is then surfaced as a 200 (synthesis), "
+            "422 negotiation-refused, or 422 with a counter_proposal body."
         ),
     )
     parser.add_argument(
         "--auto-accept-counter",
         action="store_true",
         help=(
-            "With --negotiate: accept a 461 counter-proposal "
+            "With --negotiate: accept a 422 counter-proposal "
             "automatically by re-invoking with the proposed method."
         ),
     )

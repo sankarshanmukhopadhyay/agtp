@@ -279,21 +279,27 @@ class ProposeEndToEndTests(unittest.TestCase):
         self.assertEqual(suspend_payload["synthesis_cleared"], synth_id)
         self.assertIsNone(SYNTHESES.get(synth_id))
 
-    def test_propose_refuse_460(self):
+    def test_propose_refuse_returns_422(self):
+        # PROPOSE refusal is now wired to 422 Unprocessable; the
+        # error.code='negotiation-refused' tag preserves the AGTP
+        # framing without occupying a dedicated status number.
         resp = _send(
             self.server, ORCH_ID, "PROPOSE",
             body={"name": "ZBLARGON", "parameters": {}, "outcome": "x"},
         )
-        self.assertEqual(resp.status_code, 460)
+        self.assertEqual(resp.status_code, 422)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
+        self.assertEqual(payload["error"]["code"], "negotiation-refused")
         self.assertEqual(payload["error"]["reason"], "out_of_scope")
 
-    def test_propose_counter_461(self):
+    def test_propose_counter_returns_422(self):
+        # Counter-proposal also rides 422; clients disambiguate by
+        # checking for the counter_proposal field in the body.
         resp = _send(
             self.server, ORCH_ID, "PROPOSE",
             body={"name": "PROPOSEX", "parameters": {}, "outcome": "x"},
         )
-        self.assertEqual(resp.status_code, 461)
+        self.assertEqual(resp.status_code, 422)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
         self.assertIn("counter_proposal", payload)
         self.assertEqual(payload["counter_proposal"]["name"], "PROPOSE")
@@ -360,7 +366,8 @@ class NegotiateClientFlowTests(unittest.TestCase):
     def test_negotiate_recovers_via_synthesis_when_method_missing(self):
         # DELEGATE on Lauren is a mechanic, exempt from soft-deny;
         # it returns 405 (handler-level capability check). Negotiation
-        # only triggers on 452 / 462. So pick a soft-deny case:
+        # only triggers on 403 soft-deny / wildcards-refused. So pick
+        # a soft-deny case:
         # invoke a custom method name that triggers soft-deny.
         out = self._client(
             f"agtp://{LAUREN_ID}@127.0.0.1:{self.port}",
@@ -370,11 +377,11 @@ class NegotiateClientFlowTests(unittest.TestCase):
         # EXECUTE is in Lauren's requires; the call should just succeed.
         self.assertEqual(out.returncode, 0, out.stderr)
 
-    def test_negotiate_handles_460_refusal_with_exit_1(self):
+    def test_negotiate_handles_422_refusal_with_exit_1(self):
         # SUMMARIZE is in Lauren's requires; pick something that's not.
         # Construct a request the server soft-denies, then --negotiate,
         # which issues PROPOSE; the proposal lacks parameters/outcome
-        # so the policy refuses with 460/insufficient.
+        # so the policy refuses with 422/negotiation-refused/insufficient.
         # Easiest path: hit a method that's not declared on Lauren.
         # Lauren has 8 methods; DELEGATE is not one of them but DELEGATE
         # is exempt (mechanic). Use a custom-method name instead by
@@ -387,7 +394,7 @@ class NegotiateClientFlowTests(unittest.TestCase):
             "--negotiate",
         )
         # Server doesn't have RECONCILE registered (we didn't pass
-        # --load-module), so the dispatcher returns 501 (not 452).
+        # --load-module), so the dispatcher returns 501 (not 403).
         # PROPOSE then runs but the policy refuses out_of_scope.
         # Either path produces a non-zero exit.
         self.assertNotEqual(out.returncode, 0)

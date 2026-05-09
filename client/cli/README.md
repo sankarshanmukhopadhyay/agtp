@@ -96,10 +96,12 @@ The CLI renders the three PROPOSE outcomes individually:
 
   * **200** Synthesis accepted — prints the synthesis ID,
     underlying target method, and a one-shot retry command.
-  * **460** Refused — prints the reason and explanation, plus a
-    pointer to ``--negotiate`` for automated alternatives.
-  * **461** Counter-proposal — prints the suggestion and prompts
-    "Accept counter-proposal and re-invoke as ``<NAME>``? (y/N)".
+  * **422** ``negotiation-refused`` — prints the reason and
+    explanation, plus a pointer to ``--negotiate`` for automated
+    alternatives.
+  * **422** with ``counter_proposal`` body — prints the suggestion
+    and prompts "Accept counter-proposal and re-invoke as
+    ``<NAME>``? (y/N)".
     On ``y`` the CLI re-invokes against the suggested method with
     the original parameter shape.
 
@@ -136,7 +138,7 @@ When ``--params-file *.yaml`` is supplied, ``pyyaml`` is required
 ### Exit codes
 
   * **0** — successful flow (200, save, or accepted counter).
-  * **1** — server refusal (460), declined counter, local validator
+  * **1** — server refusal (422 ``negotiation-refused``), declined counter, local validator
     refusal, or invocation error.
   * **2** — argparse / mutex error, malformed body, missing
     ``--params-file``, missing dependency.
@@ -144,7 +146,8 @@ When ``--params-file *.yaml`` is supplied, ``pyyaml`` is required
 ## `--negotiate` (legacy fallback)
 
 The pre-existing ``--negotiate`` flag is the *recovery* path: when an
-ordinary method invocation returns 452 / 462, the CLI auto-issues a
+ordinary method invocation returns 403 with a soft-deny error code
+(``method-not-permitted-for-agent`` or ``wildcards-refused``), the CLI auto-issues a
 PROPOSE and continues with the synthesis ID. ``--propose`` is the
 *proactive* path: the user already knows they need a new method.
 The two flags are not exclusive, but ``--negotiate`` is invisible to

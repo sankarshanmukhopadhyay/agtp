@@ -73,7 +73,7 @@ spec = (MethodBuilder("RECONCILE")
         .with_required_param("account_id", "string", "the ledger account")
         .with_required_param("period",     "string", "time window like 2026-Q1")
         .with_optional_param("tolerance", "number", "rounding tolerance")
-        .with_error_code(400).with_error_code(422).with_error_code(451)
+        .with_error_code(400).with_error_code(422).with_error_code(455)
         .build())
 ```
 
@@ -117,7 +117,7 @@ required_params:
   - { name: ruleset, type: string, description: Identifier of the ruleset to apply }
 optional_params:
   - { name: tolerance, type: number, description: Acceptable variance threshold }
-error_codes: [400, 405, 422, 451]
+error_codes: [400, 405, 422, 455]
 source: amg/1.0
 namespace: acme-quality
 substitutes_for:

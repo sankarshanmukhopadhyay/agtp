@@ -250,9 +250,10 @@ inline:
 - **200** — proposal accepted; the synthesis ID, target method,
   and parameter mapping appear in a green banner. The library entry
   flips to `accepted`.
-- **460** — server refused; reason and detail appear in a red
-  banner. The library entry flips to `refused`.
-- **461** — counter-proposal offered; an amber banner shows the
+- **422 `negotiation-refused`** — server refused; reason and
+  detail appear in a red banner. The library entry flips to `refused`.
+- **422 with `counter_proposal` body** — counter-proposal offered;
+  an amber banner shows the
   suggested name plus a Differences card. Three buttons: accept and
   re-submit, modify, or decline. The library entry flips to
   `countered` and stores the counter spec.

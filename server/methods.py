@@ -1125,18 +1125,41 @@ def dispatch(
     request: wire.AGTPRequest,
     server_state: ServerState,
     agent_doc: AgentDocument,
+    *,
+    config: Optional[Any] = None,
 ) -> wire.AGTPResponse:
     """
     Look up the requested method in REGISTRY and invoke its handler.
 
-    Returns 501 for unknown methods. Returns 405 when the method exists
+    Returns 501 for unknown methods *unless* the request carries a
+    ``Method-Grammar: AMG/1.0`` header asserting AMG conformance, in
+    which case the request is routed through
+    :func:`_handle_method_grammar`. Returns 405 when the method exists
     but the target agent does not declare it. DESCRIBE has no required
     parameters and no body, so the capability check runs unconditionally
     for every method, including DESCRIBE.
+
+    ``config`` is optional. When provided, it gates the Method-Grammar
+    pathway (server policy participates in the wildcards / negotiable
+    decision). When omitted, the Method-Grammar pathway is disabled and
+    unknown methods always return 501 — this preserves backward
+    compatibility for tests and embedded callers that invoke ``dispatch``
+    without a server-config in hand.
     """
     method_name = request.method.upper()
     spec = REGISTRY.get(method_name)
     if spec is None:
+        grammar_header = wire.header(request, "Method-Grammar") or ""
+        normalized = grammar_header.strip().lower()
+        if config is not None and normalized in ("amg/1.0", "agis/1.0"):
+            return _handle_method_grammar(
+                request,
+                method_name,
+                server_state,
+                agent_doc,
+                config=config,
+                deprecated_header=(normalized == "agis/1.0"),
+            )
         return error_response(
             501,
             "Not Implemented",
@@ -1157,6 +1180,130 @@ def dispatch(
             f"{method_name} is registered without a handler",
         )
     return spec.handler(request, server_state, agent_doc)
+
+
+# ---------------------------------------------------------------------------
+# Method-Grammar header runtime pathway.
+#
+# When an unrecognized method name arrives carrying ``Method-Grammar:
+# AMG/1.0``, the server validates the name against AMG's three
+# name-targeted passes, checks that the agent and server policies admit
+# wildcard verbs, and returns either:
+#
+#   * 200 OK with a structured "amg-conformant; PROPOSE this method to
+#     instantiate" body that the client can act on, OR
+#   * 459 Grammar Violation (name failed AMG), OR
+#   * 403 Wildcards Refused (agent or server declined the open
+#     vocabulary path), per the existing soft-deny semantics.
+#
+# This is the "third row" runtime path: lighter-weight than PROPOSE,
+# validated against AMG, and requires no prior negotiation.
+# ---------------------------------------------------------------------------
+
+
+def _handle_method_grammar(
+    request: wire.AGTPRequest,
+    method_name: str,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+    *,
+    config: Any,
+    deprecated_header: bool = False,
+) -> wire.AGTPResponse:
+    from core import status as status_codes
+    from server.amg.validator import validate_name_only
+
+    # 1. Name must pass the three AMG name-targeted passes.
+    err = validate_name_only(method_name)
+    if err is not None:
+        resp = status_codes.grammar_violation(
+            amg_code=err.code,
+            message=err.message,
+            method=method_name,
+            pass_name=err.pass_name,
+            suggestion=err.suggestion,
+        )
+        if deprecated_header:
+            resp.headers["Warning"] = (
+                '299 - "Method-Grammar value AGIS/1.0 is deprecated; '
+                'use AMG/1.0"'
+            )
+        return resp
+
+    # 2. Agent must opt into wildcard invocations.
+    if (
+        agent_doc is not None
+        and agent_doc.requires is not None
+        and not agent_doc.requires.wildcards
+    ):
+        resp = status_codes.wildcards_refused(
+            agent_doc.agent_id,
+            explanation=(
+                f"Method-Grammar invocation of {method_name!r} requires "
+                f"requires.wildcards=true on the agent document; the "
+                f"principal has not authorized ad-hoc method invocations."
+            ),
+        )
+        if deprecated_header:
+            resp.headers["Warning"] = (
+                '299 - "Method-Grammar value AGIS/1.0 is deprecated; '
+                'use AMG/1.0"'
+            )
+        return resp
+
+    # 3. Server policy must accept wildcard invocations.
+    if (
+        config is not None
+        and getattr(config, "policy", None) is not None
+        and not config.policy.wildcards_accepted
+    ):
+        resp = status_codes.wildcards_refused(
+            (agent_doc.agent_id if agent_doc is not None else "(unknown)"),
+            explanation=(
+                "this server's policy.wildcards_accepted is false; "
+                "Method-Grammar invocations are not admitted. Use "
+                "PROPOSE to negotiate method instantiation."
+            ),
+        )
+        if deprecated_header:
+            resp.headers["Warning"] = (
+                '299 - "Method-Grammar value AGIS/1.0 is deprecated; '
+                'use AMG/1.0"'
+            )
+        return resp
+
+    # 4. All checks pass: invite a PROPOSE.
+    negotiable = bool(
+        config is not None
+        and getattr(config, "policy", None) is not None
+        and getattr(config.policy, "negotiable", True)
+    )
+    body: Dict[str, Any] = {
+        "method": method_name,
+        "status": "amg-conformant",
+        "executable": False,
+        "next_action": "PROPOSE" if negotiable else "no_negotiation_available",
+        "negotiable": negotiable,
+        "explanation": (
+            f"Method name {method_name!r} is AMG-conformant but no "
+            f"handler is registered on this server. "
+            + (
+                "Issue a PROPOSE to negotiate instantiation, or check "
+                "the server manifest for similar registered methods."
+                if negotiable
+                else "This server does not accept PROPOSE; consult its "
+                "manifest for registered methods or try a different "
+                "server."
+            )
+        ),
+    }
+    response = json_response(200, "OK", body)
+    if deprecated_header:
+        response.headers["Warning"] = (
+            '299 - "Method-Grammar value AGIS/1.0 is deprecated; '
+            'use AMG/1.0"'
+        )
+    return response
 
 
 __all__ = [

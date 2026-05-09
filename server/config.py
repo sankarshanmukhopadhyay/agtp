@@ -71,6 +71,7 @@ class ServerPolicy:
     wildcards_accepted: bool = True
     anonymous_discovery: bool = True
     scope_required_for_invocation: bool = True
+    negotiable: bool = True
 
 
 @dataclass
@@ -167,6 +168,7 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         scope_required_for_invocation=bool(
             policy_block.get("scope_required_for_invocation", True)
         ),
+        negotiable=bool(policy_block.get("negotiable", True)),
     )
 
     agents_block = data.get("agents", {})

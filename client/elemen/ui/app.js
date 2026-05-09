@@ -305,9 +305,10 @@ function renderResponse(tab) {
   }
   els.headers.textContent = hLines.join("\n");
 
-  // Status-specific banner (451 / 452 / 460 / 461 / 462). Rendered
-  // in the Pretty pane above the structured/raw content. For 461
-  // the Accept Counter button is wired via the try-it pathway.
+  // Status-specific banner (455 / 403 soft-deny / 422 negotiation). Rendered
+  // in the Pretty pane above the structured/raw content. For 422
+  // counter-proposal responses the Accept Counter button is wired
+  // via the try-it pathway.
   const banner = renderStatusBanner(r);
 
   // Pretty pane variants:
@@ -953,7 +954,9 @@ async function promptNegotiationForMissing(tab, methodName) {
         );
       }
     } catch { /* fall through */ }
-  } else if (result.status_code === 461) {
+  } else if (result.status_code === 422 && result.body
+             && result.body.includes("counter_proposal")) {
+    // Counter-proposal landed at 422 with a counter_proposal body.
     // Wire the Accept Counter button (if the banner rendered).
     const btn = document.querySelector(".resp-banner .accept-counter");
     if (btn) {
@@ -2039,7 +2042,7 @@ function renderMatchBadge(tab) {
     }</div>` +
     (outcome.agentWantsWildcards && !outcome.serverAcceptsWildcards
       ? `<div style="color:var(--warn)">Note: agent declares wildcards but server policy refuses; ` +
-        `non-embedded calls will return 462.</div>`
+        `non-embedded calls will return 403 wildcards-refused.</div>`
       : "");
 }
 
@@ -2059,24 +2062,48 @@ async function refreshManifestAndMatch(tab) {
   }
 }
 
-// ---------- response banners (45x / 46x) ----------
+// ---------- response banners ----------
+//
+// AGTP refusals now ride existing HTTP-style status codes:
+//   * 455                          → Scope Violation
+//   * 403 method-not-permitted-..  → soft-deny banner
+//   * 403 wildcards-refused        → wildcards-refused banner
+//   * 422 + counter_proposal       → counter-proposal banner
+//   * 422 negotiation-refused      → negotiation-refused banner
+// We branch on (status_code, body shape) since the wire codes are
+// re-used across multiple AGTP semantics.
 
-const STATUS_BANNER_KINDS = {
-  451: { cls: "scope-violation",     head: "451 Scope Violation" },
-  452: { cls: "method-outside-need", head: "452 Method Outside Agent's Declared Need" },
-  460: { cls: "negotiation-refused", head: "460 Negotiation Refused" },
-  461: { cls: "counter-proposal",    head: "461 Counter-Proposal" },
-  462: { cls: "wildcards-refused",   head: "462 Wildcards Refused" },
-};
+function _statusBannerMeta(result, payload) {
+  const code = result.status_code;
+  const errCode = (payload.error && payload.error.code) || "";
+  if (code === 455) {
+    return { cls: "scope-violation", head: "455 Scope Violation" };
+  }
+  if (code === 403 && errCode === "method-not-permitted-for-agent") {
+    return { cls: "method-outside-need",
+             head: "403 Method Not Permitted for Agent" };
+  }
+  if (code === 403 && errCode === "wildcards-refused") {
+    return { cls: "wildcards-refused", head: "403 Wildcards Refused" };
+  }
+  if (code === 422 && payload.counter_proposal) {
+    return { cls: "counter-proposal", head: "422 Counter-Proposal" };
+  }
+  if (code === 422 && errCode === "negotiation-refused") {
+    return { cls: "negotiation-refused", head: "422 Negotiation Refused" };
+  }
+  return null;
+}
 
 function renderStatusBanner(result) {
   if (!result || !result.ok) return null;
-  const meta = STATUS_BANNER_KINDS[result.status_code];
-  if (!meta) return null;
 
   let payload;
   try { payload = JSON.parse(result.body); }
   catch { payload = {}; }
+
+  const meta = _statusBannerMeta(result, payload);
+  if (!meta) return null;
 
   const div = document.createElement("div");
   div.className = `resp-banner ${meta.cls}`;
@@ -2992,19 +3019,9 @@ els.form.addEventListener("submit", (e) => {
         closeDrawer();
       });
       markLibraryStatus("accepted", { synthesis_id: id });
-    } else if (code === 460) {
-      const err = (payload && payload.error) || {};
-      D.response.classList.add("refused");
-      D.response.innerHTML =
-        `<div class="compose-response-title">✗ Server refused negotiation.</div>` +
-        `<dl>` +
-          `<dt>Reason</dt><dd>${escapeHtml(err.reason || "(unknown)")}</dd>` +
-          (err.explanation ? `<dt>Detail</dt><dd>${escapeHtml(err.explanation)}</dd>` : "") +
-        `</dl>` +
-        `<div>Try a different server, or modify and re-submit.</div>`;
-      markLibraryStatus("refused");
-    } else if (code === 461) {
-      const counter = (payload && payload.counter_proposal) || {};
+    } else if (code === 422 && payload && payload.counter_proposal) {
+      // PROPOSE counter-proposal: 422 with a counter_proposal body.
+      const counter = payload.counter_proposal || {};
       D.response.classList.add("countered");
       const sName = counter.name || "(unknown)";
       D.response.innerHTML =
@@ -3031,6 +3048,20 @@ els.form.addEventListener("submit", (e) => {
         D.response.classList.add("hidden");
       });
       markLibraryStatus("countered", { counter_proposal: counter });
+    } else if (code === 422
+               && payload && payload.error
+               && payload.error.code === "negotiation-refused") {
+      // PROPOSE refusal: 422 with structured negotiation-refused body.
+      const err = payload.error || {};
+      D.response.classList.add("refused");
+      D.response.innerHTML =
+        `<div class="compose-response-title">✗ Server refused negotiation.</div>` +
+        `<dl>` +
+          `<dt>Reason</dt><dd>${escapeHtml(err.reason || "(unknown)")}</dd>` +
+          (err.explanation ? `<dt>Detail</dt><dd>${escapeHtml(err.explanation)}</dd>` : "") +
+        `</dl>` +
+        `<div>Try a different server, or modify and re-submit.</div>`;
+      markLibraryStatus("refused");
     } else {
       D.response.classList.add("refused");
       D.response.innerHTML =

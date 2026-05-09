@@ -26,7 +26,7 @@ agtp/
 │   ├── ids.py              URI + agent-ID parsing (Forms 1, 1a, 2)
 │   ├── identity.py         Agent Document v2 schema
 │   ├── manifest.py         Server Manifest dataclasses
-│   ├── status.py           451/452/460/461/462 helpers
+│   ├── status.py           AGTP status code helpers (455/456/457/458/550/551 + HTTP)
 │   ├── handshake.py        client-side matching outcome
 │   ├── render.py           HTML identity-card renderer
 │   └── _paths.py           cross-platform path normalization
@@ -42,7 +42,7 @@ agtp/
 │   ├── examples/           opt-in custom-method modules
 │   ├── agents/             reference agent docs (Lauren, Orchestrator, legacy/)
 │   ├── agtp-server.toml    reference config
-│   └── run_demo.sh         end-to-end 19-scenario demo
+│   └── run_demo.sh         end-to-end 21-scenario demo
 │
 ├── client/               AGTP client product (one package, two frontends)
 │   ├── core_client.py      shared protocol logic (URI resolution, connections,
@@ -142,10 +142,10 @@ methods. Agents have permissions to invoke methods at servers.**
 That distinction shows up everywhere:
 
 - An agent's `requires.methods` is the set of method names the
-  principal has authorized that agent to invoke. The 452 status code
-  reads "Method Not Permitted for Agent" for that reason; the body
-  explanation says the principal has not authorized the method, not
-  that the agent "lacks" anything.
+  principal has authorized that agent to invoke. Soft-deny refusals
+  return **403 Forbidden** with `error.code='method-not-permitted-for-agent'`;
+  the body explanation says the principal has not authorized the
+  method, not that the agent "lacks" anything.
 - The elemen browser renders agents as user profiles
   (Identity, Goals, Skills, Permissions, Credentials). It does not
   show a Methods tab on agent URIs because the concept does not
@@ -230,7 +230,7 @@ spec = AMGMethodSpec(
         ParamSpec(name="period",     type="string", description="time window"),
     ],
     optional_params=[],
-    error_codes=[400, 422, 451],
+    error_codes=[400, 422, 455],
     source="amg/1.0",
     namespace="acme-finance",
 )
@@ -264,7 +264,8 @@ human-readable suggestion.
   `except ValueError` keep catching refusals).
 - **`handle_propose`** filters proposals through AMG before the
   negotiation policy. Lexical / reserved / stoplist / semantic-class
-  failures return **460 Negotiation Refused** with `reason="ambiguous"`
+  failures return **422 Unprocessable** with
+  `error.code='negotiation-refused'`, `error.reason="ambiguous"`,
   and the AMG error code in the body's `amg_code` field. The benign
   case where a proposal names an embedded method (the
   accept-with-synthesis path) is allowed through.
@@ -300,20 +301,71 @@ instead of the structural fallback.
 
 ## Status codes
 
-In addition to the standard 4xx / 5xx codes, AGTP defines:
+AGTP mixes standard HTTP status codes with a small set of
+AGTP-specific codes drawn from ranges unassigned in the IANA HTTP
+Status Code Registry, so AGTP-specific numbers cannot collide with
+HTTP codes carried in payloads.
 
-| Code | Phrase | When |
-|---|---|---|
-| 451 | Scope Violation | Caller's scope set is missing what the method requires |
-| 452 | Method Not Permitted for Agent | Permission refusal: method absent from agent's `requires.methods` and wildcards is false |
-| 460 | Negotiation Refused | PROPOSE refused (`out_of_scope` / `ambiguous` / `insufficient` / `policy_refused`) |
-| 461 | Counter-Proposal | Server suggests a near-match method; body carries a MethodSpec |
-| 462 | Wildcards Refused | Agent declares wildcards but server policy refuses them |
+### Active codes
 
-Precedence at the inbound gate: **462 > 452 > 451**. Embedded mechanics
-plus DISCOVER/DESCRIBE bypass soft-deny because they are protocol
-primitives. The server flag `--no-soft-deny` disables 452/462 for
-legacy testing.
+| Code | Name | Meaning |
+|------|------|---------|
+| 200 | OK | Method executed successfully |
+| 202 | Accepted | Method accepted; execution is asynchronous |
+| 204 | No Content | Method executed; no response body |
+| 400 | Bad Request | Malformed AGTP request |
+| 401 | Unauthorized | Agent-ID not recognized or not authenticated |
+| 403 | Forbidden | Agent lacks authority for the requested action; carries soft-deny refusals via `error.code` (e.g. `method-not-permitted-for-agent`, `wildcards-refused`) |
+| 404 | Not Found | Target resource or agent not found |
+| 408 | Timeout | TTL exceeded before method could execute |
+| 409 | Conflict | Method conflicts with current state |
+| 410 | Gone | Agent has been Revoked or Deprecated; canonical Agent-ID is permanently retired |
+| 422 | Unprocessable | Request well-formed but semantically invalid; PROPOSE refusal (`error.code='negotiation-refused'`) and counter-proposal responses (body carries `counter_proposal`) ride this code |
+| 429 | Rate Limited | Agent is exceeding permitted request frequency |
+| 455 | Scope Violation | Requested action is outside declared Authority-Scope. *AGTP-specific.* |
+| 456 | Budget Exceeded | Method execution would exceed the Budget-Limit declared in the request. *AGTP-specific.* |
+| 457 | Zone Violation | Request would route outside the AGTP-Zone-ID boundary; SEP-enforced. *AGTP-specific.* |
+| 458 | Counterparty Unverified | PURCHASE counterparty failed merchant identity verification (Merchant-ID absent, Merchant-Manifest-Fingerprint mismatch, or merchant in non-Active lifecycle state). *AGTP-specific.* |
+| 459 | Grammar Violation | Method-Grammar header pathway: an unrecognized method name accompanied by `Method-Grammar: AMG/1.0` failed AMG's lexical / reserved / stoplist check. *AGTP-specific.* |
+| 500 | Server Error | Internal failure in the responding system |
+| 503 | Unavailable | Responding agent or system temporarily unavailable or Suspended |
+| 550 | Delegation Failure | A delegated sub-agent failed to complete the requested action. *AGTP-specific.* |
+| 551 | Authority Chain Broken | Delegation chain contains an unverifiable or broken identity link. *AGTP-specific.* |
+
+### Reserved for AGTP expansion
+
+These codes are present in the AGTP-specific ranges but are not yet
+assigned. They are reserved in the IANA AGTP Status Code Registry
+and **MUST NOT** be returned by current implementations.
+
+| Code | Status |
+|------|--------|
+| 460 | Reserved |
+| 552 | Reserved |
+| 553 | Reserved |
+| 554 | Reserved |
+| 555 | Reserved |
+
+### Migration from earlier drafts
+
+Earlier AGTP drafts used codes that the current registry no longer
+admits. Their semantics now ride existing codes, with the body's
+`error.code` field preserving the prior framing:
+
+| Old | New | Notes |
+|-----|-----|-------|
+| 451 Scope Violation | **455** Scope Violation | Renumbered |
+| 452 Method Not Permitted for Agent | **403** + `error.code='method-not-permitted-for-agent'` | Folded into Forbidden |
+| 453 Zone Violation | **457** Zone Violation | Renumbered |
+| 454 Grammar Violation | **459** Grammar Violation | Method-Grammar header pathway (pre-dispatch). Application-layer grammar checks may still use 422 + `error.code='grammar-violation'`. |
+| 460 Negotiation Refused | **422** + `error.code='negotiation-refused'` | Folded into Unprocessable |
+| 461 Counter-Proposal | **422** with `counter_proposal` body | Folded into Unprocessable |
+| 462 Wildcards Refused | **403** + `error.code='wildcards-refused'` | Folded into Forbidden |
+
+Precedence at the inbound gate: **wildcards-refused > method-not-permitted-for-agent > 455**.
+Embedded mechanics plus DISCOVER/DESCRIBE bypass soft-deny because
+they are protocol primitives. The server flag `--no-soft-deny`
+disables soft-deny refusals for legacy testing.
 
 ## Matching handshake
 
@@ -328,7 +380,8 @@ agtp agtp://{agent-id} --match-check
 ```
 
 `MatchOutcome.kind` is one of `full` / `partial` / `none`. The match
-also notes wildcard policy mismatches so callers can predict 462s.
+also notes wildcard policy mismatches so callers can predict 403
+`wildcards-refused` responses.
 
 ## Negotiation (PROPOSE)
 
@@ -337,13 +390,55 @@ PROPOSE has three documented outcomes:
 - **Accept (200)** - server returns a `Synthesis` mapping the proposal
   onto an existing method. Subsequent calls quote the
   `Synthesis-Id` header to invoke through the synthesis.
-- **Refuse (460)** - body carries `reason` and `explanation`.
-- **Counter (461)** - body carries a `counter_proposal` with the
-  MethodSpec the server is willing to admit instead.
+- **Refuse (422 `negotiation-refused`)** - body carries
+  `error.reason` and `error.explanation`.
+- **Counter (422 with `counter_proposal` body)** - body carries a
+  `counter_proposal` with the MethodSpec the server is willing to
+  admit instead.
 
-The client gains `--negotiate` (auto-issue PROPOSE on 452/462) and
-`--auto-accept-counter` (re-invoke under a 461 counter-proposal
+The client gains `--negotiate` (auto-issue PROPOSE on a 403 soft-deny)
+and `--auto-accept-counter` (re-invoke under a 422 counter-proposal
 without prompting).
+
+### Method-Grammar header pathway
+
+Lighter-weight than PROPOSE: a client that wants to invoke an
+AMG-conformant method against a server *without* prior negotiation
+includes the `Method-Grammar: AMG/1.0` header on the request. When
+the dispatcher sees an unrecognized method name plus this header, it:
+
+1. Runs AMG's name-targeted passes (lexical, reserved, stoplist) on
+   the method name. Failure returns **459 Grammar Violation** with
+   the failed pass and AMG error code in the body.
+2. Verifies `requires.wildcards: true` on the agent document.
+   Failure returns **403 wildcards-refused**.
+3. Verifies `policy.wildcards_accepted: true` on the server.
+   Failure returns **403 wildcards-refused**.
+
+If all three checks pass, the server returns **200** with a
+structured invitation:
+
+```json
+{
+  "method": "RECONCILE",
+  "status": "amg-conformant",
+  "executable": false,
+  "next_action": "PROPOSE",
+  "negotiable": true,
+  "explanation": "Method name 'RECONCILE' is AMG-conformant but no handler is registered on this server. Issue a PROPOSE to negotiate instantiation, or check the server manifest for similar registered methods."
+}
+```
+
+`next_action` becomes `"no_negotiation_available"` and `negotiable`
+becomes `false` when the server's `policy.negotiable` is `false`.
+
+The `Method-Grammar: AGIS/1.0` header value is also accepted during
+the AGIS → AMG transition; the response carries an HTTP-style
+`Warning: 299 - "Method-Grammar value AGIS/1.0 is deprecated; use
+AMG/1.0"` header advising clients to upgrade.
+
+PROPOSE is still the path that *instantiates* a method; Method-Grammar
+is the path that *probes* whether a method could be instantiated.
 
 Synthesis lifecycle: process-scoped, in-memory, cleared by
 `SUSPEND --param synthesis_id=<id>` or by server restart. Future

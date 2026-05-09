@@ -358,7 +358,7 @@ An ANS server is an AGTP endpoint that:
 3. Signs all DISCOVER responses with the ANS's governance key.
 
 4. Acts as a SEP for discovery traffic: agents without `discovery:query`
-   scope **MUST** be rejected with 451 Scope Violation.
+   scope **MUST** be rejected with 455 Scope Violation.
 
 ANS servers are themselves AGTP agents: they have canonical Agent-IDs,
 Birth Certificates, and Agent Manifest Documents. Their capabilities

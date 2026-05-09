@@ -88,7 +88,7 @@ agent-API interaction:
   layer, and transport-layer cryptographic verification
 - Three equivalent verification paths for Trust Tier 1: DNS-anchored,
   log-anchored via transparency log, and hybrid
-- Status codes for governance failures, including 451 Scope Violation
+- Status codes for governance failures, including 455 Scope Violation
   and 551 Authority Chain Broken
 - Attribution Records signed on every method invocation
 - Delegation Chain semantics with strict-subset scope enforcement

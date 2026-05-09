@@ -227,7 +227,7 @@ class SoftDenyEnforcementTests(unittest.TestCase):
         cls.server.stop()
         cls.tmp.cleanup()
 
-    def test_soft_deny_452_for_undeclared_cognitive_method(self):
+    def test_soft_deny_403_for_undeclared_cognitive_method(self):
         # Lauren does not declare RECONCILE (it's a custom method) and
         # has wildcards=false; soft-deny fires before the dispatcher.
         # Load RECONCILE so it's a known method on the server.
@@ -238,7 +238,7 @@ class SoftDenyEnforcementTests(unittest.TestCase):
                 self.server, LAUREN_ID, "RECONCILE",
                 body={"account_id": "x", "period": "Q1"},
             )
-            self.assertEqual(resp.status_code, 452)
+            self.assertEqual(resp.status_code, 403)
             payload = json.loads(resp.body_bytes.decode("utf-8"))
             self.assertEqual(
                 payload["error"]["code"], "method-not-permitted-for-agent"
@@ -264,7 +264,7 @@ class SoftDenyEnforcementTests(unittest.TestCase):
         resp = _send(self.server, LAUREN_ID, "FAKEMETHOD", body={"x": 1})
         self.assertEqual(resp.status_code, 501)
 
-    def test_no_soft_deny_flag_disables_452(self):
+    def test_no_soft_deny_flag_disables_403(self):
         cfg = self.config_default
         srv = _Server(self.registry, cfg, soft_deny=False)
         srv.start()
@@ -320,7 +320,7 @@ class WildcardsEnforcementTests(unittest.TestCase):
         finally:
             srv.stop()
 
-    def test_462_when_wildcard_agent_invokes_custom_method_without_accept(self):
+    def test_403_when_wildcard_agent_invokes_custom_method_without_accept(self):
         from server.examples import custom_methods
         custom_methods.install()
         srv = self._server(wildcards_accepted=False)
@@ -329,7 +329,7 @@ class WildcardsEnforcementTests(unittest.TestCase):
                 srv, ORCH_ID, "RECONCILE",
                 body={"account_id": "x", "period": "Q1"},
             )
-            self.assertEqual(resp.status_code, 462)
+            self.assertEqual(resp.status_code, 403)
             payload = json.loads(resp.body_bytes.decode("utf-8"))
             self.assertEqual(payload["error"]["code"], "wildcards-refused")
         finally:
@@ -339,7 +339,7 @@ class WildcardsEnforcementTests(unittest.TestCase):
 
     def test_embedded_method_proceeds_under_wildcards_refused(self):
         # When wildcards_accepted=False, embedded methods still flow:
-        # they only fall under 462 when non-embedded.
+        # they only fall under wildcards-refused when non-embedded.
         srv = self._server(wildcards_accepted=False)
         try:
             resp = _send(srv, ORCH_ID, "QUERY", body={"intent": "ok"})

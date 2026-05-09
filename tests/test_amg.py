@@ -70,7 +70,7 @@ def _good_spec(**overrides) -> AMGMethodSpec:
             ParamSpec(name="tolerance", type="number",
                       description="rounding tolerance for matching"),
         ],
-        error_codes=[400, 422, 451],
+        error_codes=[400, 422, 455],
         source=SOURCE_AMG,
         namespace="acme-finance",
     )
@@ -252,7 +252,7 @@ class Pass5RequiredFieldsTests(unittest.TestCase):
         self.assertEqual(r.error.code, "missing-namespace")
 
     def test_error_codes_must_include_422(self):
-        spec = _good_spec(error_codes=[400, 451])
+        spec = _good_spec(error_codes=[400, 455])
         r = validate(spec)
         self.assertEqual(r.error.code, "error-codes-missing-422")
 
@@ -532,7 +532,7 @@ class SynthesisContractTests(unittest.TestCase):
                           description="ISO 8601 start"),
             ],
             optional_params=[],
-            error_codes=[400, 422, 451],
+            error_codes=[400, 422, 455],
             source=SOURCE_AMG,
             namespace="acme-bookings",
         )
@@ -730,7 +730,7 @@ class HandleProposeAMGTests(unittest.TestCase):
         finally:
             sock.close()
 
-    def test_propose_with_http_method_name_returns_460(self):
+    def test_propose_with_http_method_name_returns_422(self):
         # GET is reserved; AMG should refuse before the negotiation
         # policy ever evaluates the proposal.
         resp = self._send({
@@ -738,19 +738,21 @@ class HandleProposeAMGTests(unittest.TestCase):
             "parameters": {"resource": "string"},
             "outcome": "object",
         })
-        self.assertEqual(resp.status_code, 460)
+        self.assertEqual(resp.status_code, 422)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
+        self.assertEqual(payload["error"]["code"], "negotiation-refused")
         self.assertEqual(payload["error"]["reason"], "ambiguous")
         self.assertEqual(payload["error"]["amg_code"], "reserved-http-method")
 
-    def test_propose_with_stoplist_name_returns_460(self):
+    def test_propose_with_stoplist_name_returns_422(self):
         resp = self._send({
             "name": "STATUS",
             "parameters": {"x": "string"},
             "outcome": "object",
         })
-        self.assertEqual(resp.status_code, 460)
+        self.assertEqual(resp.status_code, 422)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
+        self.assertEqual(payload["error"]["code"], "negotiation-refused")
         self.assertEqual(payload["error"]["amg_code"], "non-action-intent")
 
     def test_propose_with_existing_embedded_name_still_accepted(self):
@@ -797,7 +799,7 @@ class CLIIntegrationTests(unittest.TestCase):
                      "description": "time window"},
                 ],
                 "optional_params": [],
-                "error_codes": [400, 422, 451],
+                "error_codes": [400, 422, 455],
                 "source": "amg/1.0",
                 "namespace": "acme-finance",
             }), encoding="utf-8")

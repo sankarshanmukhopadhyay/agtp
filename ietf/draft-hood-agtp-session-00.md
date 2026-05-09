@@ -223,7 +223,7 @@ AGTP-SESSION inherits all base AGTP properties:
 - Attribution Records signed for every invocation, including those
   within sessions, with the session identifier included in the
   attribution metadata.
-- Status codes, including 451 Scope Violation and 551 Authority Chain
+- Status codes, including 455 Scope Violation and 551 Authority Chain
   Broken, apply within sessions exactly as outside them.
 - Three-level verification model. Sessions do not weaken verification.
 
@@ -376,7 +376,7 @@ deliberate scope expansion attempts.
 
 Mitigation: Authority-Scope is enforced on every invocation
 regardless of session context. A scope violation **MUST** trigger
-451 Scope Violation per base AGTP. Receiving parties **MAY** elect
+455 Scope Violation per base AGTP. Receiving parties **MAY** elect
 to terminate the session on first scope violation rather than
 continuing to accept further invocations. Termination on scope
 violation is **RECOMMENDED** for bounded sessions where the violation

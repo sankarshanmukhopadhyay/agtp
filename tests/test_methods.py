@@ -264,7 +264,8 @@ class MethodSetTests(unittest.TestCase):
                 # agtp_version / agent_id rather than a 'method' field.
                 continue
             if name == "PROPOSE":
-                # PROPOSE default is 460; payload tested separately.
+                # PROPOSE default is 422 negotiation-refused; payload
+                # tested separately.
                 continue
             with self.subTest(method=name):
                 resp = _send(self.server, ORCH_ID, name, body=params)
@@ -302,7 +303,7 @@ class MethodSetTests(unittest.TestCase):
     #
     # With v2 soft-deny in front of dispatch:
     #   * cognitive non-exempt methods (QUERY, SUMMARIZE, PLAN, EXECUTE)
-    #     hit the soft-deny gate and return 452 method-not-permitted-for-agent.
+    #     hit the soft-deny gate and return 403 method-not-permitted-for-agent.
     #   * DISCOVER, DESCRIBE, and the mechanics (DELEGATE, ESCALATE,
     #     CONFIRM, SUSPEND, PROPOSE, NOTIFY) are exempt from soft-deny;
     #     their handler-local capability check returns 405
@@ -321,7 +322,7 @@ class MethodSetTests(unittest.TestCase):
                         payload["error"]["code"], "method-not-in-requires"
                     )
                 else:
-                    self.assertEqual(resp.status_code, 452)
+                    self.assertEqual(resp.status_code, 403)
                     self.assertEqual(
                         payload["error"]["code"],
                         "method-not-permitted-for-agent",
@@ -370,7 +371,7 @@ class MethodSetTests(unittest.TestCase):
             "PROPOSE",
             body={"name": "FROBNICATE"},
         )
-        self.assertEqual(resp.status_code, 460)
+        self.assertEqual(resp.status_code, 422)
         payload = _decode_json(resp)
         self.assertEqual(payload["error"]["code"], "negotiation-refused")
         self.assertEqual(payload["error"]["reason"], "insufficient")

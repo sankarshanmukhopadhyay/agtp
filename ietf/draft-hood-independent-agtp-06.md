@@ -162,7 +162,7 @@ Commerce Binding specification {{AGTP-MERCHANT}}, which defines the
 merchant-side identity model that complements AGTP's agent-side
 identity model. Version 04 added four merchant-related request headers
 (Merchant-ID, Merchant-Manifest-Fingerprint, Intent-Assertion, Cart-
-Digest), the 455 Counterparty Unverified status code, and the
+Digest), the 458 Counterparty Unverified status code, and the
 `merchant` and `intent` Authority-Scope domains. Together these
 elements close the verification loop between the initiating agent and
 the receiving merchant on AGTP PURCHASE invocations. Version 03
@@ -308,7 +308,7 @@ property claims; see Section 7.7 and the IPR Notice preceding the Abstract.
 Merchant-side identity verification for PURCHASE counterparties is
 described at a high level in Section 8 of this document and specified
 in full in a separate companion: {{AGTP-MERCHANT}}. This document
-registers the merchant-related request headers, the 455 Counterparty
+registers the merchant-related request headers, the 458 Counterparty
 Unverified status code, and the `merchant` and `intent` Authority-Scope
 domains; the Merchant Manifest Document, Merchant Birth Certificate,
 counterparty verification procedure, and Intent Assertion JWT format
@@ -552,7 +552,7 @@ Budget-Limit:
   space-separated unit:value tokens drawn from the IANA AGTP Budget
   Unit Registry. Example: `Budget-Limit: tokens=5000
   compute-seconds=120 financial=10.00USD ttl=3600`. Exceeding the
-  declared limit **MUST** cause the server to return 452 Budget
+  declared limit **MUST** cause the server to return 456 Budget
   Exceeded rather than continue execution. Note: ttl= is RECOMMENDED 
   to bound budget lifetime.
 
@@ -560,7 +560,7 @@ AGTP-Zone-ID:
 : A request header declaring the network zone or organizational
   boundary within which a request must be processed. Scope-Enforcement
   Points (SEPs) **MUST** enforce zone boundaries and **MUST** return
-  453 Zone Violation if a DELEGATE or COLLABORATE request would route
+  457 Zone Violation if a DELEGATE or COLLABORATE request would route
   outside the declared zone.
 
 # Problem Statement
@@ -782,11 +782,11 @@ individual request.
 | Priority | **MAY** | Request priority hint: critical, normal, background |
 | TTL | **MAY** | Maximum acceptable response latency in milliseconds |
 | Budget-Limit | **MAY** | Max resource budget per invocation. Format: space-separated `unit=value` tokens. Units from IANA AGTP Budget Unit Registry. |
-| AGTP-Zone-ID | **MAY** | Network zone boundary constraint. SEPs **MUST** enforce; return 453 if DELEGATE or COLLABORATE would exit declared zone. |
+| AGTP-Zone-ID | **MAY** | Network zone boundary constraint. SEPs **MUST** enforce; return 457 if DELEGATE or COLLABORATE would exit declared zone. |
 | Content-Schema | **MAY** | URI reference to JSON Schema describing the request body structure. Enables receivers to validate payload without LLM inference. |
 | Telemetry-Export | **MAY** | OTLP endpoint URI for metric export, or `inline` to receive metrics embedded in the response Attribution-Record. |
 | Merchant-ID | **MUST** on PURCHASE | Canonical identifier of the intended merchant counterparty. See {{AGTP-MERCHANT}}. |
-| Merchant-Manifest-Fingerprint | **MUST** on PURCHASE | SHA-256 fingerprint of the Merchant Manifest Document verified by the requesting agent. Receiving server **MUST** reject with 455 if this does not match its current manifest. See {{AGTP-MERCHANT}}. |
+| Merchant-Manifest-Fingerprint | **MUST** on PURCHASE | SHA-256 fingerprint of the Merchant Manifest Document verified by the requesting agent. Receiving server **MUST** reject with 458 if this does not match its current manifest. See {{AGTP-MERCHANT}}. |
 | Intent-Assertion | **SHOULD** on PURCHASE | Detached JWT {{RFC7519}} carrying signed principal-authorized purchase intent. Forwardable to payment networks as standalone evidence. See {{AGTP-MERCHANT}}. |
 | Cart-Digest | **MAY** | Cryptographic digest of a structured cart returned by a prior QUOTE invocation. Binds a PURCHASE to a previously quoted cart without retransmission of line-item detail. See {{AGTP-MERCHANT}}. |
 {: title="AGTP Request Header Fields"}
@@ -808,7 +808,7 @@ individual request.
 
 ## Status Codes
 
-AGTP defines its own status code space. Codes 451, 452, 453, 550, and 551
+AGTP defines its own status code space. Codes 455, 456, 457, 458, 550, 551
 are AGTP-specific with no HTTP equivalent and are registered in the IANA
 AGTP Status Code Registry (see Section 9.3).
 
@@ -826,24 +826,25 @@ AGTP Status Code Registry (see Section 9.3).
 | 410 | Gone | Agent has been Revoked or Deprecated; canonical ID is permanently retired |
 | 422 | Unprocessable | Request well-formed but semantically invalid |
 | 429 | Rate Limited | Agent is exceeding permitted request frequency |
-| 451 | Scope Violation | Requested action is outside declared Authority-Scope. AGTP-specific |
-| 452 | Budget Exceeded | Method execution would exceed the Budget-Limit declared in the request. AGTP-specific |
-| 453 | Zone Violation | Request would route outside the AGTP-Zone-ID boundary. SEP-enforced. AGTP-specific |
-| 455 | Counterparty Unverified | PURCHASE counterparty failed merchant identity verification: Merchant-ID absent, Merchant-Manifest-Fingerprint mismatch, or merchant in non-Active lifecycle state. AGTP-specific. See {{AGTP-MERCHANT}}. |
+| 455 | Scope Violation | Requested action is outside declared Authority-Scope. AGTP-specific |
+| 456 | Budget Exceeded | Method execution would exceed the Budget-Limit declared in the request. AGTP-specific |
+| 457 | Zone Violation | Request would route outside the AGTP-Zone-ID boundary. SEP-enforced. AGTP-specific |
+| 458 | Counterparty Unverified | PURCHASE counterparty failed merchant identity verification: Merchant-ID absent, Merchant-Manifest-Fingerprint mismatch, or merchant in non-Active lifecycle state. AGTP-specific. See {{AGTP-MERCHANT}}. |
+| 459 | Grammar Violation | Method-Grammar header pathway: an unrecognized method name accompanied by `Method-Grammar: AMG/1.0` failed AMG's lexical, reserved, or stoplist pass. AGTP-specific. |
 | 500 | Server Error | Internal failure in the responding system |
 | 503 | Unavailable | Responding agent or system temporarily unavailable or Suspended |
 | 550 | Delegation Failure | A delegated sub-agent failed to complete the requested action. AGTP-specific |
 | 551 | Authority Chain Broken | Delegation chain contains an unverifiable or broken identity link. AGTP-specific |
 {: title="AGTP Status Codes"}
 
-Status code 451 (Scope Violation) is a governance signal: the agent
+Status code 455 (Scope Violation) is a governance signal: the agent
 attempted an action outside its declared Authority-Scope, caught at the
-protocol level. Status code 452 (Budget Exceeded) is a governance signal
-analogous to 451: the agent's requested action is within its Authority-Scope
+protocol level. Status code 456 (Budget Exceeded) is a governance signal
+analogous to 455: the agent's requested action is within its Authority-Scope
 but would consume resources beyond what the principal authorized for this
-invocation. Status code 453 (Zone Violation) is returned by SEPs when a
+invocation. Status code 457 (Zone Violation) is returned by SEPs when a
 DELEGATE or COLLABORATE request would route to an agent outside the declared
-AGTP-Zone-ID boundary. Status code 455 (Counterparty Unverified) is returned
+AGTP-Zone-ID boundary. Status code 458 (Counterparty Unverified) is returned
 on PURCHASE invocations when the receiving server cannot verify that the
 requesting agent has performed valid merchant identity verification against
 the server's current Merchant Manifest Document, or when the merchant is in
@@ -2006,7 +2007,7 @@ Idempotent: Yes.
 
 Purpose: Reserve a resource, time slot, seat, or allocation on behalf of
 the agent's principal. State-modifying. Notable error codes: 409 Conflict
-(resource unavailable), 451 Scope Violation (principal not authorized for
+(resource unavailable), 455 Scope Violation (principal not authorized for
 this resource type).
 
 | Parameter | Required | Description |
@@ -2076,7 +2077,7 @@ agent, carrying forward authority lineage.
 
 Security note: the authority_scope in a DELEGATE request **MUST NOT**
 exceed the delegating agent's own Authority-Scope. Servers **MUST** enforce
-this and **MUST** return 451 Scope Violation if violated. This is the
+this and **MUST** return 455 Scope Violation if violated. This is the
 protocol-level defense against authority laundering. Idempotent: No.
 
 ### COLLABORATE
@@ -2231,17 +2232,17 @@ a CSPRNG.
 |--------|--------|----------------|------------|---------------------|
 | QUERY | Retrieve information | No | Yes | 404, 422 |
 | SUMMARIZE | Synthesize content | No | Yes | 400, 422 |
-| BOOK | Reserve a resource | Yes | No | 409, 451 |
+| BOOK | Reserve a resource | Yes | No | 409, 455 |
 | SCHEDULE | Plan future actions | Yes | No | 400, 409 |
 | LEARN | Update agent context | Yes | No | 400, 403 |
-| DELEGATE | Transfer task to sub-agent | Yes | No | 403, 451, 551 |
+| DELEGATE | Transfer task to sub-agent | Yes | No | 403, 455, 551 |
 | COLLABORATE | Coordinate peer agents | Yes | No | 404, 403 |
 | CONFIRM | Attest to a prior action | Yes | Yes | 404, 400 |
 | ESCALATE | Defer to human/authority | Yes | Yes | 404 |
 | NOTIFY | Push information | No | No | 400, 404 |
 | DESCRIBE | Retrieve endpoint capabilities | No | Yes | 404, 422 |
 | SUSPEND | Pause session workflow | Yes | No | 404, 408 |
-| PROPOSE | Submit a dynamic endpoint proposal | Yes | No | 400, 403, 460 |
+| PROPOSE | Submit a dynamic endpoint proposal | Yes | No | 400, 403, 422 |
 {: title="AGTP Core Method Summary"}
 
 ## Method Registry and Extensibility
@@ -2294,7 +2295,7 @@ Method-Grammar: AGIS/1.0
    IANA registry.
 
 3. If the method identifier fails AGIS validation, the infrastructure
-   **MUST** return status 454 (Grammar Violation) and **MUST NOT** forward
+   **MUST** return status 422 Unprocessable and **MUST NOT** forward
    the request.
 
 4. AGIS-conformant custom methods carry the same transport-level identity,
@@ -2308,7 +2309,7 @@ continues to serve as the reference vocabulary for maximum cross-system
 interoperability; the grammar pathway enables domain specificity within
 those constraints.
 
-**Status code 454 Grammar Violation:**
+**Status code 422 Unprocessable (grammar-violation):**
 Returned when a method identifier is present with `Method-Grammar: AGIS/1.0`
 but fails AGIS grammar validation. The response body **MUST** include the
 specific validation failure from the AGIS eight-pass validator. This status
@@ -2388,8 +2389,8 @@ Step 5a: Endpoint instantiated (263)
          Instantiated endpoint is session-scoped by default
          Agent MAY call the endpoint immediately
 
-Step 5b: Proposal rejected (460)
-         Service returns 460 with rejection reason
+Step 5b: Proposal rejected (422)
+         Service returns 422 with rejection reason
          Response SHOULD reference data_manifest alternatives
          Agent MAY modify proposal and retry (maximum 3 turns)
          After 3 rejections agent MUST ESCALATE
@@ -2576,7 +2577,7 @@ COMMUNICATE category: REPLY, SEND, REPORT.
 ORCHESTRATE category: MONITOR, ROUTE, RETRY, PAUSE, RESUME, RUN, CHECK.
 
 Notable constraints: PURCHASE **MUST** carry explicit principal_id and
-scope enforcement; 451 Scope Violation applies if payments:purchase is
+scope enforcement; 455 Scope Violation applies if payments:purchase is
 not in the agent's Authority-Scope. RUN requires explicit procedure_id
 parameter; implementations **MUST NOT** accept free-form execution strings.
 
@@ -2739,14 +2740,14 @@ following additional headers:
 Full field definitions, wire examples, and security requirements are
 in {{AGTP-MERCHANT}}.
 
-## 455 Counterparty Unverified (Summary)
+## 458 Counterparty Unverified (Summary)
 
-Receiving servers **MUST** return 455 Counterparty Unverified on
+Receiving servers **MUST** return 458 Counterparty Unverified on
 PURCHASE invocations that fail merchant identity verification:
 missing `Merchant-ID` or `Merchant-Manifest-Fingerprint` headers,
 fingerprint mismatch, Merchant-ID mismatch, or a target merchant in
-any lifecycle state other than Active. 455 is a governance signal,
-parallel in role to 451 Scope Violation and 453 Zone Violation:
+any lifecycle state other than Active. 458 is a governance signal,
+parallel in role to 455 Scope Violation and 457 Zone Violation:
 **MUST** be logged; **MUST NOT** be retried without re-running
 counterparty verification.
 
@@ -2870,7 +2871,7 @@ binding.
 
 The Authority-Scope header declares what actions the agent is authorized
 to take. Compliant AGTP servers **MUST** parse the Authority-Scope on every
-request, return 451 Scope Violation for any method that exceeds declared
+request, return 455 Scope Violation for any method that exceeds declared
 scope, and log all scope violations for audit purposes. At Level 1, scope
 declarations are self-asserted in the request header, analogous to scope
 assertions in OAuth 2.0 {{RFC6749}}. At Level 2, scope is cryptographically
@@ -2899,7 +2900,7 @@ every request.
 ### Authority Laundering
 
 Threat: An agent claims an Authority-Scope broader than what it was
-granted. Mitigation: server-side scope enforcement; 451 Scope Violation
+granted. Mitigation: server-side scope enforcement; 455 Scope Violation
 returned and logged. In DELEGATE chains, each hop's scope **MUST** be a
 strict subset of the delegating agent's scope.
 
@@ -3124,15 +3125,19 @@ definitions:
 
 | Code | Name | Definition | Reference |
 |------|------|------------|-----------|
-| 451 | Scope Violation | The requested action is outside the Authority-Scope declared in the request headers. The server **MUST** log this event. The agent **MUST NOT** retry the same request without modifying its Authority-Scope declaration. This is a governance signal, not a protocol error. | This document, Section 5.5 |
-| 452 | Budget Exceeded | The requested method execution would exceed the resource limits declared in the Budget-Limit request header. The agent **MUST NOT** retry without modifying the Budget-Limit or reducing request scope. This is a governance signal, not a protocol error. **MUST** be logged. | This document, Section 5.5 |
-| 454 | Grammar Violation | The method identifier fails AGIS grammar validation {{AGIS}} when `Method-Grammar: AGIS/1.0` is present. The response body **MUST** identify the specific AGIS validation pass that failed. The agent **MUST NOT** retry without correcting the method identifier. | This document, Section 6.4 |
+| 455 | Scope Violation | The requested action is outside the Authority-Scope declared in the request headers. The server **MUST** log this event. The agent **MUST NOT** retry the same request without modifying its Authority-Scope declaration. This is a governance signal, not a protocol error. | This document, Section 5.5 |
+| 456 | Budget Exceeded | The requested method execution would exceed the resource limits declared in the Budget-Limit request header. The agent **MUST NOT** retry without modifying the Budget-Limit or reducing request scope. This is a governance signal, not a protocol error. **MUST** be logged. | This document, Section 5.5 |
+| 459 | Grammar Violation | The unrecognized method name carrying `Method-Grammar: AMG/1.0` failed AMG's name-targeted validation passes (lexical, reserved, or stoplist). The response body **MUST** identify which pass failed via `error.pass_name`. The agent **MUST NOT** retry without correcting the method identifier. | This document, Section 6.4 |
+| 460 | Reserved | Reserved for AGTP expansion. **MUST NOT** be returned by current implementations. | This document |
 | 261 | Negotiation In Progress | The service has received a PROPOSE request and is evaluating the endpoint proposal. The response body **MUST** include a Negotiation-ID and an estimated evaluation duration. The agent **MUST** poll or wait for a 263 or rejection response. | This document, Section 6.5 |
 | 262 | Authorization Required for Negotiation | The service requires credential establishment before evaluating the PROPOSE request. The response body **MUST** specify the authorization mechanism required (e.g., AGTP-CERT, OAuth scope). | This document, Section 6.5 |
 | 263 | Endpoint Instantiated | The service has accepted the PROPOSE request and instantiated the requested endpoint. The response body **MUST** contain a complete AGIS endpoint definition for the instantiated endpoint. The Negotiation-ID **MUST** match the proposal. | This document, Section 6.5 |
-| 460 | Proposal Rejected | The service cannot or will not instantiate the proposed endpoint. The response body **MUST** explain the rejection reason and **SHOULD** reference relevant data_manifest entries if the requested data class is available through a different approach. | This document, Section 6.5 |
-| 453 | Zone Violation | The request would route outside the network boundary declared in the AGTP-Zone-ID header. SEP-enforced. The agent **MUST NOT** retry without modifying the AGTP-Zone-ID or obtaining explicit cross-zone authorization. **MUST** be logged. | This document, Section 5.5 |
-| 455 | Counterparty Unverified | The merchant counterparty in a PURCHASE invocation failed identity verification. Returned when the `Merchant-ID` or `Merchant-Manifest-Fingerprint` request headers are absent, when the fingerprint does not match the receiving server's current Merchant Manifest Document, when the Merchant-ID does not match the server's canonical ID, or when the merchant is in a non-Active lifecycle state. Governance signal; **MUST** be logged. Full definition in {{AGTP-MERCHANT}}. | {{AGTP-MERCHANT}}, Section 7 |
+| 552 | Reserved | Reserved for AGTP expansion. **MUST NOT** be returned by current implementations. | This document |
+| 553 | Reserved | Reserved for AGTP expansion. **MUST NOT** be returned by current implementations. | This document |
+| 554 | Reserved | Reserved for AGTP expansion. **MUST NOT** be returned by current implementations. | This document |
+| 555 | Reserved | Reserved for AGTP expansion. **MUST NOT** be returned by current implementations. | This document |
+| 457 | Zone Violation | The request would route outside the network boundary declared in the AGTP-Zone-ID header. SEP-enforced. The agent **MUST NOT** retry without modifying the AGTP-Zone-ID or obtaining explicit cross-zone authorization. **MUST** be logged. | This document, Section 5.5 |
+| 458 | Counterparty Unverified | The merchant counterparty in a PURCHASE invocation failed identity verification. Returned when the `Merchant-ID` or `Merchant-Manifest-Fingerprint` request headers are absent, when the fingerprint does not match the receiving server's current Merchant Manifest Document, when the Merchant-ID does not match the server's canonical ID, or when the merchant is in a non-Active lifecycle state. Governance signal; **MUST** be logged. Full definition in {{AGTP-MERCHANT}}. | {{AGTP-MERCHANT}}, Section 7 |
 | 550 | Delegation Failure | A sub-agent to which a task was delegated via the DELEGATE method failed to complete the task within the declared deadline or returned an error. The response body **SHOULD** contain the sub-agent's error details. | This document, Section 5.5 |
 | 551 | Authority Chain Broken | One or more entries in the Delegation-Chain header cannot be verified as part of a valid and continuous delegation sequence. The specific unverifiable entry **SHOULD** be identified in the response body. The server **MUST** log this event. | This document, Section 5.5 |
 {: title="AGTP-Specific Status Code Definitions"}
@@ -3555,10 +3560,10 @@ Content-Type: application/agtp+json
 | Agent Birth Certificate | Yes (genesis record) | No | No | No |
 | Domain-expiry lifecycle handling | Specified | N/A | N/A | N/A |
 | Capability discovery | Native (DESCRIBE) | None | Reflection (partial) | None |
-| Resource budget enforcement | Native (Budget-Limit, 452) | None | None | None |
+| Resource budget enforcement | Native (Budget-Limit, 456) | None | None | None |
 | Execution attestation (RATS) | Optional (RFC 9334) | None | None | None |
 | Observability hooks | Native (Telemetry-Export) | None | None | None |
-| Network zone enforcement | Native (AGTP-Zone-ID, 453) | None | None | None |
+| Network zone enforcement | Native (AGTP-Zone-ID, 457) | None | None | None |
 | Session suspension/recovery | Native (SUSPEND method) | None | None | None |
 | AGMP composition profiles | Normative appendix | N/A | N/A | N/A |
 {: title="AGTP Compared to Existing Approaches"}
@@ -3607,7 +3612,7 @@ Agent Manifest Document:
 AGTP-Zone-ID:
 : A request header declaring the network zone or organizational boundary
   within which a request must be processed. SEPs **MUST** enforce zone
-  boundaries and return 453 Zone Violation if a DELEGATE or COLLABORATE
+  boundaries and return 457 Zone Violation if a DELEGATE or COLLABORATE
   request would route outside the declared zone.
 
 Attribution Record:
@@ -3623,7 +3628,7 @@ Budget-Limit:
 : A request header declaring the maximum resource consumption the principal
   authorizes for a method invocation, expressed as space-separated
   `unit=value` tokens from the IANA AGTP Budget Unit Registry. Exceeding
-  the declared limit causes 452 Budget Exceeded.
+  the declared limit causes 456 Budget Exceeded.
 
 Delegation Chain:
 : An ordered record of Agent-IDs representing the sequence of delegations
@@ -3666,7 +3671,7 @@ Scope-Enforcement Point (SEP):
   that enforces Authority-Scope and AGTP-Zone-ID compliance on AGTP
   requests without application-layer access. Requires {{AGTP-CERT}}.
 
-Scope Violation (451):
+Scope Violation (455):
 : An AGTP status code returned when an agent requests an action outside its
   declared Authority-Scope. A governance signal, not a protocol error.
   **MUST** be logged.

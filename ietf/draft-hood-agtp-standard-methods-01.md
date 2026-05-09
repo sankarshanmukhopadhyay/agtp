@@ -761,7 +761,7 @@ Security note: AUTHORIZE **MUST** carry `authorization:grant` in the
 agent's `Authority-Scope`. The granted scope **MUST NOT** exceed the
 authorizing agent's own declared scope (the anti-laundering constraint
 from {{AGTP}} Section 7.2.7 applies to all authorization grants).
-451 Scope Violation **MUST** be returned if either constraint is
+455 Scope Violation **MUST** be returned if either constraint is
 violated. Idempotent: No. Error codes: 403, 409, 451.
 
 ## CANCEL
@@ -805,7 +805,7 @@ directory and updating ownership records.
 
 Security note: TRANSFER **MUST** verify that the requesting agent
 holds `Authority-Scope` for the resource type being transferred.
-451 Scope Violation **MUST** be returned if not. Idempotent: No.
+455 Scope Violation **MUST** be returned if not. Idempotent: No.
 Error codes: 403, 404, 409, 451.
 
 ## PURCHASE
@@ -827,9 +827,9 @@ method identifier.
 {: title="PURCHASE Parameters"}
 
 Security note: PURCHASE **MUST** carry `payments:purchase` in the
-agent's `Authority-Scope`. 451 Scope Violation **MUST** be returned
+agent's `Authority-Scope`. 455 Scope Violation **MUST** be returned
 if absent. PURCHASE **MUST** validate against the `Budget-Limit`
-header if present. Idempotent: No. Error codes: 403, 409, 451, 452.
+header if present. Idempotent: No. Error codes: 403, 409, 455, 456, 458.
 
 ## SIGN
 
@@ -1424,8 +1424,8 @@ Idempotent: Yes. Error codes: 404, 408.
 The PURCHASE method carries financial consequences and **MUST** be
 subject to strict scope enforcement. Implementations **MUST** reject
 PURCHASE requests that do not carry `payments:purchase` in the
-`Authority-Scope` header with 451 Scope Violation. Budget-Limit
-validation **MUST** occur before execution; 452 Budget Exceeded
+`Authority-Scope` header with 455 Scope Violation. Budget-Limit
+validation **MUST** occur before execution; 456 Budget Exceeded
 **MUST** be returned if the purchase amount would exceed the declared
 budget.
 

@@ -13,8 +13,12 @@ The walkthrough validates each field as it's entered (re-prompts on
 failure with suggestions from the composer's suggestion engine),
 shows a preview, and offers four exits: yes / no / edit / save.
 
-Response handling renders 200 / 460 / 461 with appropriate detail
-and (for 461) prompts to accept the counter-proposal.
+Response handling renders the three PROPOSE outcomes:
+
+  * 200                              Synthesis accepted.
+  * 422 negotiation-refused          Server refused the proposal.
+  * 422 + counter_proposal body      Server suggested an alternative;
+                                     prompts to accept the counter.
 
 This module is deliberately separate from ``client.cli.main`` so the
 main CLI stays focused on method invocation; ``main.run()`` dispatches
@@ -740,15 +744,17 @@ def _render_propose_response(
     """
     Render a PROPOSE response. Returns an exit code.
 
-    For 461, when ``spec`` is provided, prompts for counter-proposal
-    acceptance and re-invokes against the suggested method name with
-    the original body.
+    For 422 counter-proposal responses (body carries
+    ``counter_proposal``), when ``spec`` is provided, prompts for
+    counter-proposal acceptance and re-invokes against the suggested
+    method name with the original body.
     """
     if not result.ok:
         print(_red(f"{_bad()} {result.error}"), file=out)
         return 1
     payload = result.parsed if isinstance(result.parsed, dict) else {}
     code = result.status_code
+    err_code = (payload.get("error") or {}).get("code") if payload else None
 
     if code == 200:
         synth = payload.get("synthesis") or {}
@@ -781,22 +787,9 @@ def _render_propose_response(
             )
         return 0
 
-    if code == 460:
-        err = payload.get("error", {}) or {}
-        print(_red(f"{_bad()} Server refused negotiation."), file=out)
-        print(file=out)
-        print(f"Reason: {err.get('reason', '(unknown)')}", file=out)
-        if err.get("explanation"):
-            print(f"Detail: {err['explanation']}", file=out)
-        print(file=out)
-        print(_dim(
-            "You might try a different server, or use --negotiate to attempt "
-            "alternative proposals automatically."
-        ), file=out)
-        return 1
-
-    if code == 461:
-        counter = payload.get("counter_proposal") or {}
+    # 422 with counter_proposal body → counter-proposal flow.
+    if code == 422 and isinstance(payload.get("counter_proposal"), dict):
+        counter = payload["counter_proposal"]
         suggested = counter.get("name", "(unknown)")
         print(_yellow(f"{_redo()} Server proposed an alternative."), file=out)
         print(file=out)
@@ -810,6 +803,21 @@ def _render_propose_response(
             _render_counter_differences(spec, counter, out=out)
         print(file=out)
         return _maybe_accept_counter(uri, suggested, spec, payload, out=out)
+
+    # 422 with negotiation-refused body → plain refusal.
+    if code == 422 and err_code == "negotiation-refused":
+        err = payload.get("error", {}) or {}
+        print(_red(f"{_bad()} Server refused negotiation."), file=out)
+        print(file=out)
+        print(f"Reason: {err.get('reason', '(unknown)')}", file=out)
+        if err.get("explanation"):
+            print(f"Detail: {err['explanation']}", file=out)
+        print(file=out)
+        print(_dim(
+            "You might try a different server, or use --negotiate to attempt "
+            "alternative proposals automatically."
+        ), file=out)
+        return 1
 
     # Anything else: surface the body and return non-zero.
     print(_red(f"{_bad()} {code} {result.status_text}"), file=out)

@@ -18,8 +18,8 @@ Tests cover:
     failure, successful compose.
   * Interactive: mocked stdin scripts walk through the
     prompts, edit-mode preserves defaults, save writes file.
-  * Response handling: 200 (synthesis), 460 (refused),
-    461 (counter-proposal), counter-acceptance re-invokes.
+  * Response handling: 200 (synthesis), 422 negotiation-refused,
+    422 counter-proposal, counter-acceptance re-issues PROPOSE.
 """
 
 from __future__ import annotations
@@ -434,7 +434,7 @@ class ResponseRenderTests(unittest.TestCase):
         self.assertIn("'input'", mapping_line)
         self.assertLess(mapping_line.index("q"), mapping_line.index("'input'"))
 
-    def test_461_renders_differences(self):
+    def test_422_counter_renders_differences(self):
         out = io.StringIO()
         with mock.patch("builtins.input", return_value="n"):
             cli_propose._render_propose_response(
@@ -448,7 +448,7 @@ class ResponseRenderTests(unittest.TestCase):
                         ],
                         "idempotent": True,
                     }
-                }, status=461),
+                }, status=422),
                 "agtp://abc",
                 spec=self._spec(),
                 out=out,
@@ -458,15 +458,17 @@ class ResponseRenderTests(unittest.TestCase):
         self.assertIn("EVALUATE", text)
         self.assertIn("ASSESS", text)
 
-    def test_460_renders_refusal(self):
+    def test_422_renders_refusal(self):
+        # PROPOSE refusal now rides 422 with error.code='negotiation-refused'.
         out = io.StringIO()
         rc = cli_propose._render_propose_response(
             _ok_result({
                 "error": {
+                    "code": "negotiation-refused",
                     "reason": "ambiguous",
                     "explanation": "intent overlaps with QUERY",
                 }
-            }, status=460),
+            }, status=422),
             "agtp://abc",
             spec=self._spec(),
             out=out,
@@ -475,7 +477,7 @@ class ResponseRenderTests(unittest.TestCase):
         text = out.getvalue()
         self.assertIn("ambiguous", text)
 
-    def test_461_counter_accept_reproposes(self):
+    def test_422_counter_accept_reproposes(self):
         # Counter-acceptance issues a second PROPOSE under the
         # suggested name, not a method invocation: the user is
         # composing, so they have a spec but no parameter values.
@@ -495,7 +497,7 @@ class ResponseRenderTests(unittest.TestCase):
                         "name": "ASSESS",
                         "description": "ASSESS is the canonical verb here",
                     }
-                }, status=461),
+                }, status=422),
                 "agtp://abc",
                 spec=self._spec(),
                 out=out,
@@ -506,7 +508,7 @@ class ResponseRenderTests(unittest.TestCase):
         self.assertEqual(mocked.call_args.args[1], "PROPOSE")
         self.assertEqual(mocked.call_args.kwargs["body"]["name"], "ASSESS")
 
-    def test_461_counter_decline_returns_1(self):
+    def test_422_counter_decline_returns_1(self):
         out = io.StringIO()
         with mock.patch("builtins.input", return_value="n"), \
              mock.patch.object(
@@ -515,7 +517,7 @@ class ResponseRenderTests(unittest.TestCase):
             rc = cli_propose._render_propose_response(
                 _ok_result({
                     "counter_proposal": {"name": "QUERY", "description": "x"}
-                }, status=461),
+                }, status=422),
                 "agtp://abc",
                 spec=self._spec(),
                 out=out,
