@@ -1637,29 +1637,32 @@ button.section-head:hover { background: var(--panel-3); }
 
 .dev-drawer {
   position: fixed;
-  left: 0;
+  top: 0;
   right: 0;
   bottom: 0;
-  height: 40vh;
-  min-height: 200px;
-  max-height: 90vh;
+  width: 720px;
+  min-width: 420px;
+  max-width: 90vw;
   background: var(--panel);
-  border-top: 1px solid var(--border);
+  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   z-index: 800;
   font-size: 12px;
-  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35);
 }
 .dev-drawer.hidden {
   display: none;
 }
 .dev-drawer-resize {
-  height: 5px;
-  cursor: row-resize;
+  position: absolute;
+  left: -2px;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
   background: transparent;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+  z-index: 1;
 }
 .dev-drawer-resize:hover {
   background: var(--accent-2);

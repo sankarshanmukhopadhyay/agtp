@@ -2336,14 +2336,14 @@ els.form.addEventListener("submit", (e) => {
   function loadDrawerState() {
     try {
       const raw = localStorage.getItem(DRAWER_KEY);
-      if (!raw) return { open: false, height: 0 };
+      if (!raw) return { open: false, width: 0 };
       const parsed = JSON.parse(raw);
       return {
         open: !!parsed.open,
-        height: Number(parsed.height) || 0,
+        width: Number(parsed.width) || 0,
       };
     } catch (e) {
-      return { open: false, height: 0 };
+      return { open: false, width: 0 };
     }
   }
   function saveDrawerState() {
@@ -2411,8 +2411,8 @@ els.form.addEventListener("submit", (e) => {
     D.drawer.classList.remove("hidden");
     D.drawer.setAttribute("aria-hidden", "false");
     D.toggle.classList.add("active");
-    if (drawerState.height) {
-      D.drawer.style.height = drawerState.height + "px";
+    if (drawerState.width) {
+      D.drawer.style.width = drawerState.width + "px";
     }
     drawerState.open = true;
     saveDrawerState();
@@ -3234,16 +3234,20 @@ els.form.addEventListener("submit", (e) => {
       D.composePane.classList.toggle("yaml-collapsed", yamlCollapsed);
     });
 
-    // Resize handle
-    let resizeStartY = 0, resizeStartH = 0;
+    // Resize handle. Drawer is right-anchored, so dragging the
+    // handle leftward grows the drawer (delta = startX - currentX).
+    let resizeStartX = 0, resizeStartW = 0;
     D.resize.addEventListener("mousedown", (e) => {
-      resizeStartY = e.clientY;
-      resizeStartH = D.drawer.getBoundingClientRect().height;
+      e.preventDefault();
+      resizeStartX = e.clientX;
+      resizeStartW = D.drawer.getBoundingClientRect().width;
       const onMove = (ev) => {
-        const dy = resizeStartY - ev.clientY;
-        const h = Math.max(160, Math.min(window.innerHeight - 80, resizeStartH + dy));
-        D.drawer.style.height = h + "px";
-        drawerState.height = h;
+        const dx = resizeStartX - ev.clientX;
+        const minW = 420;
+        const maxW = Math.max(minW, window.innerWidth * 0.9);
+        const w = Math.max(minW, Math.min(maxW, resizeStartW + dx));
+        D.drawer.style.width = w + "px";
+        drawerState.width = w;
       };
       const onUp = () => {
         document.removeEventListener("mousemove", onMove);

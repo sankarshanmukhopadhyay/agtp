@@ -207,17 +207,19 @@ elemen/
 ## Developer drawer
 
 Press **F12** (or **Ctrl+Shift+I** / **⌘+Shift+I**) to slide a
-DevTools-style drawer up from the bottom of the window. The drawer
-shares vertical space with the page above it — nothing is overlaid.
-Drag the thin bar at its top edge to resize; press **Escape** to close.
+DevTools-style drawer in from the right side of the window. The
+drawer shares horizontal space with the page on its left —
+nothing is overlaid. Drag the thin bar at its left edge to resize;
+press **Escape** to close.
 
 The drawer hosts authoring tools that don't belong in the agent /
 manifest views. Today there is one tab — **Compose** — and the same
 tab bar will host **Inspect**, **Storage**, and **Network** in future
 revisions.
 
-State (open / closed, height) persists in `localStorage` under
-`elemen.drawer.v1`. Default closed on first launch.
+State (open / closed, width) persists in `localStorage` under
+`elemen.drawer.v1`. Default closed on first launch; default width
+is 720px when first opened.
 
 ### Compose Method
 
