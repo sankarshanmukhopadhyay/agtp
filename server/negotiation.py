@@ -1,44 +1,32 @@
 """
-PROPOSE negotiation policy.
+PROPOSE counter-proposal helper.
 
-PROPOSE has three response paths:
+PROPOSE acceptance flows through :mod:`server.synthesis` (composition
+runtime + plan execution). This module owns the *counter-proposal*
+fallback: when the runtime declines, it scans the server's universe
+for a near-match method (synonym table or Levenshtein) and returns
+its serialized spec so the client receives a 422 with a
+``counter_proposal`` body.
 
-  1. Accept and instantiate
-     The server returns 200 and a Synthesis describing how the
-     proposal maps onto an existing method. The client subsequently
-     invokes by ``synthesis_id`` and the server forwards to the
-     underlying method, optionally remapping parameter names.
+Refusal-with-reason (the third PROPOSE path) is built directly from
+:func:`core.status.negotiation_refused` in
+:func:`server.methods.handle_propose` — no policy class is needed
+for it.
 
-  2. Refuse with reason (460 Negotiation Refused)
-     One of REFUSAL_OUT_OF_SCOPE / REFUSAL_AMBIGUOUS /
-     REFUSAL_INSUFFICIENT / REFUSAL_POLICY_REFUSED.
-
-  3. Counter-propose (461 Counter-Proposal)
-     The server suggests an existing or near-existing method that
-     covers the same intent. The client decides whether to accept the
-     counter (re-invoke against the named method) or escalate.
-
-Negotiation policy is pluggable; deployments swap in their own
-``NegotiationPolicy`` implementation. The default
-``BasicNegotiationPolicy`` performs structural validation, exact-name
-matching against the server's universe, a small synonym table, and a
-Levenshtein fallback for "close" names. The semantic matcher is
-deliberately illustrative; full AMG semantics are future work.
-
-Synthesis runtime (``Synthesis``, ``SYNTHESES``, ``new_synthesis_id``)
-lives in ``server.synthesis_runtime``. It is re-exported here so older
-imports such as ``from server.negotiation import SYNTHESES`` keep
-working during the transition.
+Backward compat: the legacy registry types (:class:`Synthesis`,
+:class:`SynthesisRegistry`, :data:`SYNTHESES`,
+:func:`new_synthesis_id`) are re-exported here so existing imports
+(``from server.negotiation import SYNTHESES``) keep resolving while
+the runtime owns their lifecycle.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional
 
-from core import status
+from core.endpoint import EndpointSpec
 from server.methods import MethodSpec, REGISTRY, spec_to_dict
-from server.synthesis_runtime import (
+from server.synthesis.runtime import (
     SYNTHESES,
     Synthesis,
     SynthesisRegistry,
@@ -46,57 +34,9 @@ from server.synthesis_runtime import (
 )
 
 
-# --------------------------------------------------------------------
-# Decision objects + Policy protocol.
-# --------------------------------------------------------------------
-
-
-@dataclass
-class ProposalDecision:
-    """
-    One of three outcomes returned by a NegotiationPolicy.
-
-    * outcome="accept"  : ``synthesis`` is set, ``refusal_reason`` and
-                          ``counter_proposal`` are None.
-    * outcome="refuse"  : ``refusal_reason`` and
-                          ``refusal_explanation`` are set.
-    * outcome="counter" : ``counter_proposal`` is set to a MethodSpec-
-                          shaped dict.
-    """
-
-    outcome: str
-    synthesis: Optional[Synthesis] = None
-    refusal_reason: Optional[str] = None
-    refusal_explanation: Optional[str] = None
-    counter_proposal: Optional[Dict[str, Any]] = None
-
-    def __post_init__(self) -> None:
-        valid = {"accept", "refuse", "counter"}
-        if self.outcome not in valid:
-            raise ValueError(
-                f"outcome must be one of {sorted(valid)} (got {self.outcome!r})"
-            )
-
-
-class NegotiationPolicy(Protocol):
-    """
-    Plug-in interface for PROPOSE handling.
-
-    ``server_methods`` is a snapshot of REGISTRY at the time of
-    evaluation. The policy SHOULD treat it as read-only; mutating it
-    is not supported.
-    """
-
-    def evaluate(
-        self,
-        proposal: Dict[str, Any],
-        server_methods: Dict[str, MethodSpec],
-    ) -> ProposalDecision: ...
-
-
-# --------------------------------------------------------------------
-# BasicNegotiationPolicy: the default, illustrative implementation.
-# --------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Synonym table + close-match search.
+# ---------------------------------------------------------------------------
 
 
 # Tiny synonym table. Augments Levenshtein for cases where two verbs
@@ -104,15 +44,15 @@ class NegotiationPolicy(Protocol):
 # deployments would either replace this with semantic embeddings or
 # disable counter-proposals entirely.
 SEMANTIC_SYNONYMS: Dict[str, List[str]] = {
-    "RESERVE": ["BOOK"],
-    "BOOK":    ["RESERVE"],
-    "AUDIT":   ["RECONCILE"],
+    "RESERVE":   ["BOOK"],
+    "BOOK":      ["RESERVE"],
+    "AUDIT":     ["RECONCILE"],
     "RECONCILE": ["AUDIT"],
-    "FETCH":   ["QUERY", "DESCRIBE"],
-    "GET":     ["QUERY", "DESCRIBE"],
-    "RUN":     ["EXECUTE"],
-    "INVOKE":  ["EXECUTE"],
-    "TELL":    ["NOTIFY"],
+    "FETCH":     ["QUERY", "DESCRIBE"],
+    "GET":       ["QUERY", "DESCRIBE"],
+    "RUN":       ["EXECUTE"],
+    "INVOKE":    ["EXECUTE"],
+    "TELL":      ["NOTIFY"],
 }
 
 
@@ -130,22 +70,12 @@ def _levenshtein(a: str, b: str) -> int:
         for j, cb in enumerate(b, start=1):
             cost = 0 if ca == cb else 1
             curr[j] = min(
-                prev[j] + 1,        # deletion
-                curr[j - 1] + 1,    # insertion
-                prev[j - 1] + cost, # substitution
+                prev[j] + 1,         # deletion
+                curr[j - 1] + 1,     # insertion
+                prev[j - 1] + cost,  # substitution
             )
         prev = curr
     return prev[-1]
-
-
-def _is_amg_valid_name(name: str) -> bool:
-    """Stub AMG validation: single uppercase token, alphabetic, length 3+."""
-    return (
-        isinstance(name, str)
-        and name.isupper()
-        and name.isalpha()
-        and len(name) >= 3
-    )
 
 
 def _find_close_match(
@@ -175,88 +105,47 @@ def _find_close_match(
     return None
 
 
-def _proposal_required_keys() -> tuple[str, ...]:
-    """Structural keys a proposal must carry."""
-    return ("name", "parameters", "outcome")
+# ---------------------------------------------------------------------------
+# find_counter_proposal — the public entry point.
+# ---------------------------------------------------------------------------
 
 
-class BasicNegotiationPolicy:
+def find_counter_proposal(
+    proposal: EndpointSpec,
+    server_methods: Optional[Dict[str, MethodSpec]] = None,
+) -> Optional[Dict[str, Any]]:
     """
-    Default policy. Refuses on missing structure, refuses on bad
-    names, accepts when the proposed name matches an existing method,
-    counter-proposes when a close name exists in the server universe,
-    refuses ``out_of_scope`` otherwise.
+    Search the server's method universe for a near-match the
+    proposer probably meant. Returns a ``MethodSpec``-shaped dict
+    (suitable for the body of a 422 ``counter_proposal`` response)
+    when a close match is found, or ``None`` when nothing is close
+    enough — in which case the caller surfaces a plain
+    ``negotiation-refused`` response.
+
+    The search runs the same steps the v1 ``BasicNegotiationPolicy``
+    used (synonym table + Levenshtein-2). Lifted to a free function
+    so the policy class can retire.
+
+    :param proposal: validated proposal spec (from
+        :func:`EndpointSpec.from_proposal`).
+    :param server_methods: optional override of the universe; defaults
+        to the live ``REGISTRY``. Tests pass a snapshot here.
     """
-
-    def evaluate(
-        self,
-        proposal: Dict[str, Any],
-        server_methods: Dict[str, MethodSpec],
-    ) -> ProposalDecision:
-        # Structural validation.
-        missing = [k for k in _proposal_required_keys() if k not in proposal]
-        if missing:
-            return ProposalDecision(
-                outcome="refuse",
-                refusal_reason=status.REFUSAL_INSUFFICIENT,
-                refusal_explanation=(
-                    f"proposal lacks required field(s): {', '.join(missing)}"
-                ),
-            )
-
-        name = str(proposal["name"]).upper()
-        if not _is_amg_valid_name(name):
-            return ProposalDecision(
-                outcome="refuse",
-                refusal_reason=status.REFUSAL_AMBIGUOUS,
-                refusal_explanation=(
-                    "proposed name fails AMG validation: must be a single "
-                    "uppercase alphabetic token of length >= 3"
-                ),
-            )
-
-        # Exact match: accept and synthesize a passthrough.
-        if name in server_methods:
-            spec = server_methods[name]
-            requested_params = list(proposal.get("parameters", {}) or {})
-            mapping = {p: p for p in requested_params if p in (
-                set(spec.required_params) | set(spec.optional_params)
-            )}
-            synth = Synthesis(
-                synthesis_id=new_synthesis_id(),
-                target_method=name,
-                parameter_mapping=mapping,
-                description=(
-                    proposal.get("description")
-                    or f"synthesis pointing at {name}"
-                ),
-                proposal_name=name,
-            )
-            return ProposalDecision(outcome="accept", synthesis=synth)
-
-        # Close match: counter-propose.
-        close = _find_close_match(name, server_methods)
-        if close is not None:
-            return ProposalDecision(
-                outcome="counter",
-                counter_proposal=spec_to_dict(server_methods[close]),
-            )
-
-        # Nothing close: out of scope.
-        return ProposalDecision(
-            outcome="refuse",
-            refusal_reason=status.REFUSAL_OUT_OF_SCOPE,
-            refusal_explanation=(
-                f"proposed verb {name!r} has no close match on this server"
-            ),
-        )
+    universe = server_methods if server_methods is not None else REGISTRY
+    name = proposal.name.upper()
+    close = _find_close_match(name, universe)
+    if close is None or close == name:
+        # An exact match would have been an accept (handled by the
+        # synthesis runtime upstream of us); if we got here at all,
+        # the runtime already declined and an exact match means the
+        # method exists but no policy could compose it.
+        return None
+    return spec_to_dict(universe[close])
 
 
 __all__ = [
-    "BasicNegotiationPolicy",
-    "NegotiationPolicy",
-    "ProposalDecision",
     "SEMANTIC_SYNONYMS",
+    "find_counter_proposal",
     # Re-exported from synthesis_runtime for backward-compat:
     "SYNTHESES",
     "Synthesis",

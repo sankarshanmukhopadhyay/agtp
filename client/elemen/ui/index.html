@@ -81,7 +81,7 @@
       <!--
         Tab visibility depends on URI type. JS toggles which buttons
         render based on result.kind and (for servers) the manifest's
-        apis / hosts_protocols fields. Agents have no Methods or APIs
+        apis / hosted_protocols fields. Agents have no Methods or APIs
         tab; servers have no Tools tab unless they bridge a protocol.
       -->
       <button class="rtab active" data-tab="pretty">Overview</button>
@@ -159,7 +159,7 @@
     </div>
 
     <!--
-      Per-protocol panes for hosts_protocols entries (MCP, OpenAPI,
+      Per-protocol panes for hosted_protocols entries (MCP, OpenAPI,
       etc.). Created dynamically in JS; the host element below acts
       as the insertion point so the static raw/headers/invocations
       tabs stay above and after.
@@ -262,9 +262,15 @@
             </button>
             <div class="compose-section-body" data-body="identity">
               <div class="compose-field">
-                <label>Method name <span class="compose-field-hint">uppercase, single token</span></label>
+                <label>Verb <span class="compose-field-hint">one of the AGTP catalog (uppercase, single token)</span></label>
                 <input id="cf-name" type="text" autocomplete="off" spellcheck="false" data-field="name" />
+                <div id="cf-name-autocomplete" class="compose-autocomplete hidden"></div>
                 <div class="compose-feedback" data-feedback="name"></div>
+              </div>
+              <div class="compose-field">
+                <label>Path <span class="compose-field-hint">optional; e.g. /orders/{order_id}</span></label>
+                <input id="cf-path" type="text" autocomplete="off" spellcheck="false" data-field="path" placeholder="/orders/{order_id}" />
+                <div class="compose-feedback" data-feedback="path"></div>
               </div>
               <div class="compose-field">
                 <label>Description <span class="compose-field-hint">optional; defaults to intent</span></label>
@@ -274,11 +280,11 @@
             </div>
           </div>
 
-          <!-- AMG semantic block -->
+          <!-- Semantic block (intent / actor / outcome / capability / impact / ...) -->
           <div class="compose-section" data-section="semantic">
             <button type="button" class="compose-section-head" data-toggle="semantic">
               <span class="compose-section-indicator" data-indicator="semantic">○</span>
-              <span class="compose-section-title">AMG semantic block</span>
+              <span class="compose-section-title">Semantic block</span>
               <span class="caret">▾</span>
             </button>
             <div class="compose-section-body" data-body="semantic">
@@ -313,22 +319,22 @@
                 </select>
               </div>
               <div class="compose-field">
-                <label>Impact tier</label>
-                <div class="compose-impact" data-field="semantic.impact_tier">
+                <label>Impact</label>
+                <div class="compose-impact" data-field="semantic.impact">
                   <button type="button" class="impact-btn" data-impact="informational">informational</button>
                   <button type="button" class="impact-btn" data-impact="reversible">reversible</button>
                   <button type="button" class="impact-btn" data-impact="irreversible">irreversible</button>
                 </div>
               </div>
               <div class="compose-field">
-                <label>Confidence guidance <span id="cf-confidence-value" class="compose-field-value">—</span></label>
-                <input id="cf-confidence" type="range" min="0" max="1" step="0.01" value="0" data-field="semantic.confidence_guidance" />
+                <label>Confidence <span id="cf-confidence-value" class="compose-field-value">—</span></label>
+                <input id="cf-confidence" type="range" min="0" max="1" step="0.01" value="0" data-field="semantic.confidence" />
                 <div class="compose-confidence-marks">
                   <span style="left: 50%">0.50</span>
                   <span style="left: 75%">0.75</span>
                   <span style="left: 85%">0.85</span>
                 </div>
-                <div class="compose-feedback" data-feedback="semantic.confidence_guidance"></div>
+                <div class="compose-feedback" data-feedback="semantic.confidence"></div>
               </div>
               <div class="compose-field compose-field-inline">
                 <label><input id="cf-idempotent" type="checkbox" data-field="semantic.is_idempotent" /> Idempotent</label>
@@ -373,10 +379,6 @@
             </button>
             <div class="compose-section-body" data-body="authority">
               <div class="compose-field">
-                <label>Source</label>
-                <input id="cf-source" type="text" value="amg/1.0" readonly data-field="source" />
-              </div>
-              <div class="compose-field">
                 <label>Namespace <span class="compose-field-hint">your organization or project (lowercase-snake-case)</span></label>
                 <input id="cf-namespace" type="text" autocomplete="off" data-field="namespace" />
                 <div class="compose-feedback" data-feedback="namespace"></div>
@@ -387,28 +389,11 @@
                   <button type="button" class="chip" data-code="400">400</button>
                   <button type="button" class="chip" data-code="405">405</button>
                   <button type="button" class="chip" data-code="422">422</button>
-                  <button type="button" class="chip" data-code="455">455</button>
-                  <button type="button" class="chip" data-code="456">456</button>
-                  <button type="button" class="chip" data-code="457">457</button>
-                  <button type="button" class="chip" data-code="458">458</button>
-                  <button type="button" class="chip" data-code="550">550</button>
-                  <button type="button" class="chip" data-code="551">551</button>
+                  <button type="button" class="chip" data-code="459">459</button>
+                  <button type="button" class="chip" data-code="460">460</button>
                 </div>
                 <div class="compose-feedback" data-feedback="error_codes"></div>
               </div>
-            </div>
-          </div>
-
-          <!-- Substitution -->
-          <div class="compose-section collapsed" data-section="substitution">
-            <button type="button" class="compose-section-head" data-toggle="substitution">
-              <span class="compose-section-indicator" data-indicator="substitution">○</span>
-              <span class="compose-section-title">Substitution</span>
-              <span class="caret">▾</span>
-            </button>
-            <div class="compose-section-body" data-body="substitution">
-              <div id="cf-substitutes" class="compose-subs"></div>
-              <button type="button" id="cf-sub-add" class="compose-params-add">+ Add substitution</button>
             </div>
           </div>
 

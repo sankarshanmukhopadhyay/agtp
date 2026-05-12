@@ -36,6 +36,7 @@ from client.core_client import (
     ResolutionError,
 )
 from core.handshake import format_outcome, match_from_manifest_dict
+from core.methods import find_close_matches, is_approved_verb
 from core.identity import (
     CONTENT_TYPE_HTML,
     CONTENT_TYPE_JSON,
@@ -153,6 +154,55 @@ def _format_body(result: FetchResult) -> str:
         except (TypeError, ValueError):
             return body_text
     return body_text
+
+
+def _print_catalog_warning(
+    result: FetchResult,
+    method_name: str,
+) -> None:
+    """Phase-6 advisory: when the response carries an
+    ``AGTP-Catalog-Warning`` header, surface it to the operator so
+    they know to migrate. The header is purely advisory; the
+    request still processed normally on the server side.
+
+    Header shape: ``deprecated; successor=AUDIT; removed_in=2.0.0``.
+    The CLI parses the parts and prints a one-line YELLOW warning
+    to stderr. Coloring is best-effort (skipped on non-TTY stderr
+    so transcript captures stay clean).
+    """
+    header = ""
+    for k, v in (result.headers or {}).items():
+        if k.lower() == "agtp-catalog-warning":
+            header = v
+            break
+    if not header:
+        return
+    # Parse the structured shape so we can surface a readable line.
+    parts = [p.strip() for p in header.split(";") if p.strip()]
+    fields: Dict[str, str] = {}
+    label = ""
+    for p in parts:
+        if "=" in p:
+            k, _, v = p.partition("=")
+            fields[k.strip().lower()] = v.strip()
+        else:
+            label = p
+    successor = fields.get("successor")
+    removed_in = fields.get("removed_in")
+    bits = [f"{method_name} is {label or 'deprecated'}."]
+    if successor:
+        bits.append(f"Successor: {successor}.")
+    if removed_in:
+        bits.append(f"Removed in: {removed_in}.")
+    msg = " ".join(bits)
+
+    # ANSI yellow when stderr is a TTY; otherwise plain text so
+    # CI / piped output stays grep-friendly.
+    if hasattr(sys.stderr, "isatty") and sys.stderr.isatty():
+        prefix = "\x1b[33mWARNING:\x1b[0m"
+    else:
+        prefix = "WARNING:"
+    print(f"{prefix} {msg}", file=sys.stderr)
 
 
 def _open_in_browser(html: str, agent_id: Optional[str]) -> Path:
@@ -355,6 +405,164 @@ def _handle_negotiate(
 
 
 # ---------------------------------------------------------------------------
+# --grammar-check (catalog probe).
+# ---------------------------------------------------------------------------
+
+
+def _do_grammar_check(args, parsed: ParsedURI) -> int:
+    """
+    Probe whether a verb is admissible on the target server.
+
+    There is no separate probe header for verb admission; the catalog
+    gate at the top of every dispatch does the admission check, so
+    this flag is sugar that asks the question without committing the
+    operator to a real invocation.
+
+    Two-stage behavior:
+
+      1. **Local check** against ``core/methods.json``. If the method
+         isn't even in the catalog locally, refuse immediately with
+         close-match suggestions — no network call.
+      2. **Live probe** against the server with an empty body. The
+         status code carries the answer:
+
+           * **200 / 400 / 422** — the verb passed the dispatcher's
+             gates and reached the handler. 400 is the common case
+             for a probe with no body (the handler reports missing
+             required parameters); we treat that as proof of
+             admission.
+           * **459 method-grammar-violation** — the server's
+             catalog (or its ``policies.methods``) refused the
+             name. Suggestions printed.
+           * **405 method-not-implemented** — the verb is in the
+             catalog but no handler is registered. On an interactive
+             TTY, the CLI offers to chain into
+             ``--propose --interactive`` so the operator can
+             negotiate a synthesis in one command.
+           * **405 method-not-allowed-by-policy** — the server's
+             ``policies.methods`` actively disallows the verb.
+           * **403** — the agent's capability or the server's policy
+             refuses the call (no PROPOSE chain offered).
+    """
+    method_name = args.method.upper()
+
+    # Local catalog check first — fast feedback, no network round-trip.
+    # Lookups are imported at module level so tests can monkeypatch
+    # ``cli_main.is_approved_verb`` to exercise the rare case where
+    # the local catalog disagrees with the server.
+    if not is_approved_verb(method_name):
+        suggestions = find_close_matches(method_name)
+        print(
+            f"459 (local catalog): {method_name!r} is not in the "
+            f"AGTP verb catalog.",
+            file=sys.stderr,
+        )
+        if suggestions:
+            print(
+                f"  suggestions: {', '.join(suggestions)}",
+                file=sys.stderr,
+            )
+        return 1
+
+    result = core_client.invoke_method(
+        args.uri,
+        method_name,
+        registry_url=args.registry,
+        insecure=args.insecure,
+        insecure_skip_verify=args.insecure_skip_verify,
+        verbose=args.verbose,
+    )
+    if not result.ok:
+        print(f"error: {result.error}", file=sys.stderr)
+        return 1
+
+    payload: Dict[str, Any] = (
+        result.parsed if isinstance(result.parsed, dict) else {}
+    )
+    code = result.status_code
+    err = payload.get("error") or {}
+
+    # Admitted — verb cleared every dispatcher gate. 400/422 are the
+    # common shapes for a probe with no body; both prove admission.
+    if code in (200, 400, 422):
+        print(
+            f"✓ {method_name} is admitted by {parsed.host or args.uri}.",
+        )
+        if code == 400:
+            print("  (probe carried no body, so the handler reported "
+                  "missing required parameters — this is expected.)")
+        return 0
+
+    # Catalog refusal at the server (server's catalog or policy
+    # disagreed with the local check, or the legacy/embedded carve-out
+    # changed the answer). Render suggestions if present.
+    if code == 459:
+        print(
+            f"459 Method Grammar Violation: {method_name!r} is not "
+            f"admissible on this server.",
+            file=sys.stderr,
+        )
+        suggestions = err.get("suggestions") or []
+        if suggestions:
+            print(
+                f"  suggestions: {', '.join(suggestions)}",
+                file=sys.stderr,
+            )
+        return 1
+
+    # 405 splits into "no handler registered" (catalog admits but
+    # nothing is bound) vs "policy refuses" (policies.methods disallows).
+    # The first invites a PROPOSE; the second doesn't.
+    if code == 405:
+        explanation = err.get("explanation") or ""
+        if err.get("code") == "method-not-implemented":
+            print(
+                f"405 Method Not Allowed: {method_name} is in the "
+                f"AGTP catalog but no handler is registered on this "
+                f"server.",
+            )
+            if sys.stdin.isatty():
+                try:
+                    ans = input(
+                        f"Want to PROPOSE {method_name}? (y/N): "
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    ans = ""
+                if ans in ("y", "yes"):
+                    args.propose = True
+                    args.interactive = True
+                    from client.cli.propose import run_propose
+                    return run_propose(args)
+            return 0
+        # policies.methods actively refused.
+        print(
+            f"405 Method Not Allowed: {method_name} is refused by "
+            f"this server's policies.methods.",
+            file=sys.stderr,
+        )
+        if explanation:
+            print(f"  {explanation}", file=sys.stderr)
+        return 1
+
+    if code == 403:
+        print(
+            f"403 Forbidden: {err.get('code', 'unknown')}",
+            file=sys.stderr,
+        )
+        if err.get("explanation"):
+            print(f"  {err['explanation']}", file=sys.stderr)
+        return 1
+
+    # Anything else: surface it.
+    print(
+        f"AGTP/1.0 {result.status_code} {result.status_text}",
+        file=sys.stderr,
+    )
+    print(_format_body(result))
+    return 1
+
+
+# ---------------------------------------------------------------------------
 # Run loop.
 # ---------------------------------------------------------------------------
 
@@ -390,6 +598,23 @@ def run(args) -> int:
             file=sys.stderr,
         )
         return 2
+
+    if args.grammar_check:
+        if not args.method:
+            print(
+                "error: --grammar-check requires a positional method "
+                "argument (the verb to probe)",
+                file=sys.stderr,
+            )
+            return 2
+        if args.match_check or args.negotiate:
+            print(
+                "error: --grammar-check is mutually exclusive with "
+                "--match-check and --negotiate",
+                file=sys.stderr,
+            )
+            return 2
+        return _do_grammar_check(args, parsed)
 
     if args.match_check:
         return _do_match_check(args, parsed)
@@ -483,6 +708,12 @@ def run(args) -> int:
             return rc
 
     body_text = _format_body(result)
+
+    # Phase-6: surface AGTP-Catalog-Warning advisories to the user.
+    # The header rides on every response for a deprecated verb; the
+    # CLI prints a short yellow warning to stderr before the body so
+    # automated transcripts capture it without parsing JSON.
+    _print_catalog_warning(result, method_name)
 
     if (
         method_name == "DESCRIBE"
@@ -603,6 +834,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Run the matching handshake against the server's manifest "
             "and report which of the agent's required methods the "
             "server exposes. No method is invoked."
+        ),
+    )
+    parser.add_argument(
+        "--grammar-check",
+        action="store_true",
+        help=(
+            "Probe whether the verb is in the AGTP catalog and "
+            "admissible on the target server. Refuses unknown verbs "
+            "locally with close-match suggestions; 459 / 405 / 403 "
+            "from the server are rendered inline. On 405 "
+            "method-not-implemented and an interactive TTY, offers "
+            "to chain into --propose --interactive."
         ),
     )
     parser.add_argument(

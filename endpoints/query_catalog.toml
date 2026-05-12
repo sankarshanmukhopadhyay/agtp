@@ -1,0 +1,43 @@
+# Sample: a simple endpoint using an embedded verb.
+#
+# QUERY is one of the 12 protocol primitives — it's already wired
+# into the embedded registry. Declaring an endpoint at /catalog
+# binds the QUERY handler to that path so callers can ask
+# `QUERY /catalog` to enumerate the server's catalog.
+#
+# This file demonstrates the minimum-viable shape: required
+# semantic fields, one input, one output, no declared error
+# conditions.
+
+[endpoint]
+method = "QUERY"
+path = "/catalog"
+description = "Returns the catalog of items the server can sell."
+namespace = "storefront"
+
+[endpoint.semantic]
+intent = "Surface the catalog of items the server is willing to sell."
+actor = "agent"
+outcome = "An array of item summaries (id, name, category, in_stock) is returned."
+capability = "retrieval"
+confidence = 0.95
+impact = "informational"
+is_idempotent = true
+
+[[endpoint.input.optional]]
+name = "category"
+type = "string"
+description = "When set, filters the catalog to the named category."
+
+[[endpoint.output]]
+name = "items"
+type = "array"
+description = "Catalog item summaries."
+schema = { type = "array", items = { type = "object" } }
+
+[endpoint.errors]
+list = []
+
+[endpoint.handler]
+type = "registered_function"
+function = "samples.handlers.query_catalog"

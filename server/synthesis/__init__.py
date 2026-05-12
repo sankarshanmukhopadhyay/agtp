@@ -3,7 +3,8 @@ Server synthesis runtime: composition policies and execution.
 
 PROPOSE flow at a glance:
 
-  1. ``handle_propose`` validates the proposal under AMG.
+  1. ``handle_propose`` validates the proposal against the verb catalog
+     and the path grammar.
   2. The :class:`SynthesisRuntime` walks its policies in order,
      looking for one that can compose the proposal from existing
      server methods.

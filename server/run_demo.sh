@@ -7,7 +7,7 @@
 #
 # Starts the registry (HTTP, dev mode), starts the agent server
 # (plaintext, dev mode), registers both agents, then walks through
-# twenty-six scenarios covering every method plus the 405 and 501 error
+# twenty-nine scenarios covering every method plus the 405, 459, and 460 error
 # paths.
 #
 # Output goes to server/transcripts/methods-demo.txt and a few sidecar
@@ -235,21 +235,19 @@ run_scenario 18 "PROPOSE accept (QUERY -> 200 with synthesis_id)" \
 run_scenario 19 "--match-check on Lauren (full match against demo server)" \
     $CLIENT "agtp://$LAUREN_ID" --match-check "${CLIENT_ARGS[@]}"
 
-# Method-Grammar header runtime pathway: lighter-weight than PROPOSE,
-# validates the method name against AMG and returns either an
-# invitation-to-PROPOSE (200) or a 459 Grammar Violation.
+# Catalog probe via --grammar-check: ask whether a verb is in the
+# AGTP catalog and admissible on the server, without committing to
+# a real invocation. The Method-Grammar header pathway was retired
+# in the catalog-collapse refactor; the catalog gate at the top of
+# dispatch carries the same job for ordinary requests.
 CURL="$PY -m client.cli.curl"
 CURL_ARGS=(--insecure --insecure-skip-verify)
 
-run_scenario 20 "Method-Grammar pathway: RECONCILE on Orchestrator (200 invitation-to-PROPOSE)" \
-    $CURL -X RECONCILE "agtp://$ORCH_ID" \
-    -H "Method-Grammar: AMG/1.0" \
-    "${CURL_ARGS[@]}"
+run_scenario 20 "Catalog probe: RECONCILE on Orchestrator (catalog admits; 405 method-not-implemented)" \
+    $CLIENT "agtp://$ORCH_ID" RECONCILE --grammar-check "${CLIENT_ARGS[@]}"
 
-run_scenario 21 "Method-Grammar pathway: STATUS on Orchestrator (459 stoplist violation)" \
-    $CURL -X STATUS "agtp://$ORCH_ID" \
-    -H "Method-Grammar: AMG/1.0" \
-    "${CURL_ARGS[@]}"
+run_scenario 21 "Catalog probe: FROBNICATE on Orchestrator (refused locally; no network call)" \
+    $CLIENT "agtp://$ORCH_ID" FROBNICATE --grammar-check "${CLIENT_ARGS[@]}"
 
 # Synthesis runtime: PROPOSE matches a recipe in agtp-recipes.toml
 # (AUDIT = QUERY + SUMMARIZE), the runtime instantiates a multi-step
@@ -295,6 +293,27 @@ if [ -n "$SYN_ID" ]; then
 else
     echo "[runner] skipping scenarios 25-26: no synthesis_id captured" | tee -a "$TRANSCRIPT"
 fi
+
+# Catalog-based dispatcher gates: 459 (verb not in catalog) and
+# 460 (path violates path grammar). These exercise the front-line
+# validators that gate method dispatch.
+
+run_scenario 27 "Unknown verb FROBNICATE on Orchestrator (459 method-grammar-violation, suggestions in body)" \
+    $CLIENT "agtp://$ORCH_ID" FROBNICATE \
+    "${CLIENT_ARGS[@]}"
+
+run_scenario 28 "Legacy verb GET without Legacy: opt-in (459, suggestion leads with FETCH)" \
+    $CURL -X GET "agtp://$ORCH_ID" \
+    "${CURL_ARGS[@]}"
+
+run_scenario 29 "Typo PROPOSEX on Orchestrator (459 with PROPOSE in suggestions)" \
+    $CLIENT "agtp://$ORCH_ID" PROPOSEX \
+    "${CLIENT_ARGS[@]}"
+
+# Note: 460 path grammar violations require path-aware wire shape,
+# which AGTP does not yet carry on the request line. The validator
+# is in place at core/path_grammar; once the endpoint registry
+# lands, paths flow through dispatch and 460 fires for verb-in-path.
 
 {
     echo

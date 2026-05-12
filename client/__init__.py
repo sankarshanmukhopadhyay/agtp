@@ -5,9 +5,12 @@ Resolves ``agtp://`` URIs and invokes methods on agents and servers.
 Run via ``python -m client`` or the ``agtp`` console script after
 install. Companion tools live alongside:
 
-  * ``client.curl``    diagnostic CLI (``agtp-curl``)
-  * ``client.migrate`` v1 -> v2 Agent Document migration
-  * ``client.amg``     AMG validator (client-side instance)
+  * ``client.cli``     ``agtp`` console script (CLI + --propose flow)
+  * ``client.elemen``  desktop browser (``elemen``)
+  * ``client.core_client`` shared resolver / fetcher
+
+Verb / path validation lives in :mod:`core.methods` and
+:mod:`core.path_grammar`.
 
 The default registry URL is the constant exported here.
 """

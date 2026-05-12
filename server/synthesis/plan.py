@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from server.amg.grammar import AMGMethodSpec
+from core.endpoint import EndpointSpec
 
 
 # ---------------------------------------------------------------------------
@@ -108,12 +108,12 @@ class SynthesisPlan:
     """
     The composition recipe a synthesis will execute.
 
-    A plan binds a proposed method (the AMG-validated spec the agent
+    A plan binds a proposed method (the validated spec the agent
     submitted) to a sequence of underlying invocations. Plans flow
     through the runtime as the canonical "this synthesis works" object.
     """
 
-    proposed_method: AMGMethodSpec
+    proposed_method: EndpointSpec
     steps: List[CompositionStep]
     output_aggregation: str = "last"
     description: Optional[str] = None

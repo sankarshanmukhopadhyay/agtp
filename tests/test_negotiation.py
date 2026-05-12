@@ -20,10 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core import status as status_codes
 from core import wire
 from server.config import AgentsConfig, ServerConfig, ServerInfo, ServerPolicy
+from core.endpoint import EndpointSpec
 from server.negotiation import (
-    BasicNegotiationPolicy,
     SYNTHESES,
     Synthesis,
+    find_counter_proposal,
     new_synthesis_id,
 )
 from server.methods import REGISTRY
@@ -78,7 +79,7 @@ class _Server:
 
 def _send(server: _Server, target: str, method: str, body=None, *, headers_extra=None):
     headers = {
-        "Target-Agent": target,
+        "Agent-ID": target,
         "Accept": "application/json",
         "Host": server.host,
     }
@@ -99,46 +100,25 @@ def _send(server: _Server, target: str, method: str, body=None, *, headers_extra
 
 
 # ---------------------------------------------------------------------------
-# BasicNegotiationPolicy unit tests (no server).
+# find_counter_proposal unit tests (no server).
 # ---------------------------------------------------------------------------
 
 
-class BasicPolicyTests(unittest.TestCase):
+class FindCounterProposalTests(unittest.TestCase):
+    """
+    Direct tests for the lifted free function. The accept-on-exact-
+    match path is no longer this function's concern — the synthesis
+    runtime owns it. ``find_counter_proposal`` only fires when the
+    runtime declined and we're looking for a near-match the proposer
+    probably meant.
+    """
 
     def setUp(self):
         SYNTHESES.clear()
-        self.policy = BasicNegotiationPolicy()
 
-    def test_accepts_proposal_naming_existing_method(self):
-        decision = self.policy.evaluate(
-            {
-                "name": "QUERY",
-                "parameters": {"intent": "string"},
-                "outcome": "results",
-            },
-            REGISTRY,
-        )
-        self.assertEqual(decision.outcome, "accept")
-        self.assertIsNotNone(decision.synthesis)
-        self.assertEqual(decision.synthesis.target_method, "QUERY")
-        self.assertTrue(decision.synthesis.synthesis_id.startswith("syn-"))
-
-    def test_refuses_when_structural_fields_missing(self):
-        decision = self.policy.evaluate({"name": "QUERY"}, REGISTRY)
-        self.assertEqual(decision.outcome, "refuse")
-        self.assertEqual(decision.refusal_reason, status_codes.REFUSAL_INSUFFICIENT)
-
-    def test_refuses_ambiguous_when_name_invalid(self):
-        decision = self.policy.evaluate(
-            {"name": "no", "parameters": {}, "outcome": "x"},
-            REGISTRY,
-        )
-        self.assertEqual(decision.outcome, "refuse")
-        self.assertEqual(decision.refusal_reason, status_codes.REFUSAL_AMBIGUOUS)
-
-    def test_counter_proposes_via_synonym_table(self):
-        # RESERVE has BOOK in the synonym table. BOOK is not embedded
-        # but we register it as a custom method for this test only.
+    def test_counter_via_synonym_table(self):
+        # RESERVE -> BOOK (synonym). BOOK isn't embedded; register it
+        # as a custom method so the universe contains it.
         from server.methods import register_custom, unregister
         register_custom(
             lambda req, st, doc: None,
@@ -153,36 +133,48 @@ class BasicPolicyTests(unittest.TestCase):
             description="reserve a resource for a window",
         )
         try:
-            decision = self.policy.evaluate(
-                {
-                    "name": "RESERVE",
-                    "parameters": {"resource": "string"},
-                    "outcome": "confirmation",
-                },
-                REGISTRY,
+            proposal = EndpointSpec.from_proposal(
+                {"name": "RESERVE", "parameters": {"resource": "string"}}
             )
-            self.assertEqual(decision.outcome, "counter")
-            self.assertIsNotNone(decision.counter_proposal)
-            self.assertEqual(decision.counter_proposal["name"], "BOOK")
+            counter = find_counter_proposal(proposal, REGISTRY)
+            self.assertIsNotNone(counter)
+            self.assertEqual(counter["name"], "BOOK")
         finally:
             unregister("BOOK")
 
-    def test_counter_proposes_via_levenshtein(self):
-        # PROPOSEX is one edit away from PROPOSE (an embedded method).
-        decision = self.policy.evaluate(
-            {"name": "PROPOSEX", "parameters": {}, "outcome": "x"},
-            REGISTRY,
-        )
-        self.assertEqual(decision.outcome, "counter")
-        self.assertEqual(decision.counter_proposal["name"], "PROPOSE")
+    def test_counter_via_levenshtein(self):
+        # PROPOSEX is one edit away from PROPOSE (embedded).
+        proposal = EndpointSpec.from_proposal({"name": "PROPOSEX"})
+        counter = find_counter_proposal(proposal, REGISTRY)
+        self.assertIsNotNone(counter)
+        self.assertEqual(counter["name"], "PROPOSE")
 
-    def test_refuses_out_of_scope_when_nothing_close(self):
-        decision = self.policy.evaluate(
-            {"name": "ZBLARGON", "parameters": {}, "outcome": "x"},
-            REGISTRY,
-        )
-        self.assertEqual(decision.outcome, "refuse")
-        self.assertEqual(decision.refusal_reason, status_codes.REFUSAL_OUT_OF_SCOPE)
+    def test_no_counter_when_nothing_close(self):
+        proposal = EndpointSpec.from_proposal({"name": "ZBLARGON"})
+        self.assertIsNone(find_counter_proposal(proposal, REGISTRY))
+
+    def test_no_counter_when_proposal_matches_exactly(self):
+        # An exact match would have been satisfied by the runtime
+        # upstream; if we got this far, the runtime declined and
+        # the exact match is a non-answer for the counter step.
+        proposal = EndpointSpec.from_proposal({"name": "QUERY"})
+        self.assertIsNone(find_counter_proposal(proposal, REGISTRY))
+
+    def test_default_universe_is_registry(self):
+        # Calling without an explicit universe uses REGISTRY.
+        proposal = EndpointSpec.from_proposal({"name": "PROPOSEX"})
+        counter = find_counter_proposal(proposal)
+        self.assertIsNotNone(counter)
+        self.assertEqual(counter["name"], "PROPOSE")
+
+    def test_returned_shape_is_method_spec_dict(self):
+        proposal = EndpointSpec.from_proposal({"name": "PROPOSEX"})
+        counter = find_counter_proposal(proposal, REGISTRY)
+        # Same shape spec_to_dict produces; tests downstream of the
+        # counter response rely on these keys.
+        for key in ("name", "category", "semantic_class", "idempotent",
+                    "state_modifying", "required_params", "optional_params"):
+            self.assertIn(key, counter, f"missing {key} in counter dict")
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +192,7 @@ class ProposeEndToEndTests(unittest.TestCase):
         cls.registry = AgentRegistry(agents_dir)
         cls.config = ServerConfig(
             server=ServerInfo(
-                issuer="t.local", operator="x", contact="", amg_version="1.0"
+                server_id="t.local", operator="x", contact=""
             ),
             policy=ServerPolicy(),
             agents=AgentsConfig(disclosure="public"),
@@ -219,6 +211,9 @@ class ProposeEndToEndTests(unittest.TestCase):
         SYNTHESES.clear()
 
     def test_propose_accept_returns_synthesis(self):
+        # §7: PROPOSE accept returns 263 Proposal Approved; body is
+        # the new top-level shape (synthesis_id / endpoint /
+        # persistent / expires_at / granted_duration).
         resp = _send(
             self.server, ORCH_ID, "PROPOSE",
             body={
@@ -227,11 +222,13 @@ class ProposeEndToEndTests(unittest.TestCase):
                 "outcome": "results",
             },
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 263)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
-        self.assertEqual(payload["outcome"], "accept")
-        synth_id = payload["synthesis"]["synthesis_id"]
+        synth_id = payload["synthesis_id"]
+        self.assertTrue(synth_id.startswith("syn-"))
         self.assertIn(synth_id, [s.synthesis_id for s in [SYNTHESES.get(synth_id)] if s])
+        # The endpoint sub-block carries the proposal's contract.
+        self.assertIn("endpoint", payload)
 
     def test_synthesis_can_be_invoked_via_header(self):
         # Step 1: propose -> get synthesis
@@ -243,7 +240,8 @@ class ProposeEndToEndTests(unittest.TestCase):
                 "outcome": "results",
             },
         )
-        synth_id = json.loads(resp1.body_bytes.decode("utf-8"))["synthesis"]["synthesis_id"]
+        self.assertEqual(resp1.status_code, 263)
+        synth_id = json.loads(resp1.body_bytes.decode("utf-8"))["synthesis_id"]
 
         # Step 2: invoke the synthesis. The method name in the request
         # is overwritten by the synthesis target on the server.
@@ -266,7 +264,8 @@ class ProposeEndToEndTests(unittest.TestCase):
                 "outcome": "results",
             },
         )
-        synth_id = json.loads(resp.body_bytes.decode("utf-8"))["synthesis"]["synthesis_id"]
+        self.assertEqual(resp.status_code, 263)
+        synth_id = json.loads(resp.body_bytes.decode("utf-8"))["synthesis_id"]
         self.assertIsNotNone(SYNTHESES.get(synth_id))
 
         # SUSPEND naming the synthesis.
@@ -279,30 +278,36 @@ class ProposeEndToEndTests(unittest.TestCase):
         self.assertEqual(suspend_payload["synthesis_cleared"], synth_id)
         self.assertIsNone(SYNTHESES.get(synth_id))
 
-    def test_propose_refuse_returns_422(self):
-        # PROPOSE refusal is now wired to 422 Unprocessable; the
-        # error.code='negotiation-refused' tag preserves the AGTP
-        # framing without occupying a dedicated status number.
+    def test_propose_refuse_returns_463(self):
+        # §7: PROPOSE refusal returns 463 Proposal Rejected with a
+        # structured reason. Out-of-scope = "no near-match found";
+        # composition-impossible = "name doesn't compose from
+        # primitives". Counter-proposal logic for typo-shaped names
+        # is exercised in test_propose_counter_returns_463.
         resp = _send(
             self.server, ORCH_ID, "PROPOSE",
             body={"name": "ZBLARGON", "parameters": {}, "outcome": "x"},
         )
-        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.status_code, 463)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
-        self.assertEqual(payload["error"]["code"], "negotiation-refused")
-        self.assertEqual(payload["error"]["reason"], "out_of_scope")
+        self.assertEqual(payload["error"]["code"], "proposal-rejected")
+        self.assertIn(
+            payload["error"]["reason"],
+            ("out-of-scope", "composition-impossible"),
+        )
 
-    def test_propose_counter_returns_422(self):
-        # Counter-proposal also rides 422; clients disambiguate by
-        # checking for the counter_proposal field in the body.
+    def test_propose_counter_returns_463(self):
+        # §7: counter-proposal piggybacks on 463 with the suggested
+        # endpoint contract attached to ``error.counter_proposal``.
         resp = _send(
             self.server, ORCH_ID, "PROPOSE",
             body={"name": "PROPOSEX", "parameters": {}, "outcome": "x"},
         )
-        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.status_code, 463)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
-        self.assertIn("counter_proposal", payload)
-        self.assertEqual(payload["counter_proposal"]["name"], "PROPOSE")
+        self.assertIn("counter_proposal", payload["error"])
+        self.assertEqual(payload["error"]["counter_proposal"]["name"], "PROPOSE")
+        self.assertEqual(payload["error"]["reason"], "out-of-scope")
 
 
 # ---------------------------------------------------------------------------

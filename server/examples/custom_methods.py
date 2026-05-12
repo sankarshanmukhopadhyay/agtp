@@ -1,10 +1,11 @@
 """
-Example custom (AMG-flagged) methods.
+Example custom methods.
 
 This module shows how a deployment registers verbs beyond the AGTP
 embedded twelve. Importing it runs `register_custom` at module-load
 time, so the methods appear in REGISTRY and DISCOVER /methods reports
-them in the `custom` bucket with `source="amg/1.0"`.
+them in the `custom` bucket (alongside the embedded twelve in
+`embedded`).
 
 Nothing in core depends on this module. Servers opt in explicitly via
 import or `--load-module agtp.examples.custom_methods`.

@@ -1,0 +1,90 @@
+# Sample: a custom-verb endpoint with the full contract.
+#
+# BOOK is in the AGTP catalog under capability=transaction. Binding
+# it to /room with a `registered_function` handler tells the server
+# to import staybeta.handlers.book_room and call it on every
+# `BOOK /room` request. The handler resolution itself lands in
+# Phase 2; Phase 1 just stores and validates the binding.
+#
+# This file demonstrates the patterns an operator most often
+# reaches for: required + optional inputs, a structured output,
+# named error conditions, and a non-trivial namespace.
+
+[endpoint]
+method = "BOOK"
+path = "/room"
+description = "Books a room for the named guest at the named property."
+namespace = "reservations"
+
+[endpoint.semantic]
+intent = "Reserve a room for the named guest at the named property."
+actor = "agent"
+outcome = "A confirmed reservation_id is returned for the guest, with the room held until check-in."
+capability = "transaction"
+confidence = 0.85
+impact = "irreversible"
+is_idempotent = false
+
+[[endpoint.input.required]]
+name = "guest_id"
+type = "string"
+description = "The booking guest's profile identifier."
+format = "uuid"
+
+[[endpoint.input.required]]
+name = "property_id"
+type = "string"
+description = "The hotel / property where the room sits."
+format = "uuid"
+
+[[endpoint.input.required]]
+name = "check_in"
+type = "string"
+description = "Arrival date (ISO-8601)."
+format = "date"
+
+[[endpoint.input.required]]
+name = "check_out"
+type = "string"
+description = "Departure date (ISO-8601)."
+format = "date"
+
+[[endpoint.input.required]]
+name = "room_type"
+type = "string"
+description = "Category of room to reserve."
+enum = ["single", "double", "suite"]
+
+[[endpoint.input.optional]]
+name = "special_requests"
+type = "string"
+description = "Free-form notes the front desk should see at check-in."
+
+[[endpoint.output]]
+name = "reservation_id"
+type = "string"
+description = "Server-assigned reservation handle."
+format = "uuid"
+
+[[endpoint.output]]
+name = "confirmation_email"
+type = "string"
+description = "Address the confirmation was sent to."
+format = "email"
+
+[[endpoint.output]]
+name = "total_cost"
+type = "number"
+description = "Quoted total in the property's currency."
+
+[endpoint.errors]
+list = [
+  "room_unavailable",
+  "invalid_dates",
+  "guest_not_found",
+  "property_not_found",
+]
+
+[endpoint.handler]
+type = "registered_function"
+function = "samples.handlers.book_room"

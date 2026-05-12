@@ -8,8 +8,8 @@ For every method:
     returns 405.
 
 Plus a small batch of cross-cutting tests:
-  * unknown methods return 501;
-  * the registry exposes complete AMG metadata for every entry;
+  * unknown methods return 459 (Method Grammar Violation);
+  * the registry exposes complete semantic metadata for every entry;
   * DESCRIBE content-negotiates JSON / YAML / HTML.
 
 Run:
@@ -125,7 +125,7 @@ def _send(
 ) -> wire.AGTPResponse:
     body_bytes = b"" if body is None else json.dumps(body).encode("utf-8")
     headers = {
-        "Target-Agent": target_agent,
+        "Agent-ID": target_agent,
         "Accept": accept,
         "Host": server.host,
     }
@@ -212,20 +212,21 @@ class MethodSetTests(unittest.TestCase):
         cls.server.stop()
         cls.tmp_dir.cleanup()
 
-    # ---- registry / AMG metadata ----
+    # ---- registry / semantic metadata ----
 
     def test_registry_has_all_twelve_embedded_methods(self) -> None:
         expected = {
             "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
             "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
         }
+        from core.methods import EMBEDDED_VERBS
         embedded = {
-            name for name, spec in REGISTRY.items()
-            if spec.source == "agtp/1.0"
+            name for name in REGISTRY
+            if name in EMBEDDED_VERBS
         }
         self.assertEqual(embedded, expected)
 
-    def test_registry_entries_are_amg_complete(self) -> None:
+    def test_registry_entries_are_semantic_complete(self) -> None:
         cognitive = {"QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE"}
         mechanics = {"DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY"}
         for name, spec in REGISTRY.items():
@@ -247,12 +248,15 @@ class MethodSetTests(unittest.TestCase):
     # ---- happy paths ----
 
     def test_all_methods_succeed_against_orchestrator(self) -> None:
+        # §7: PROPOSE accept returns 263 Proposal Approved (not 200).
+        # Every other method still uses 200 for happy path.
         for name, params in VALID_PARAMS.items():
             with self.subTest(method=name):
                 resp = _send(self.server, ORCH_ID, name, body=params)
+                expected = 263 if name == "PROPOSE" else 200
                 self.assertEqual(
                     resp.status_code,
-                    200,
+                    expected,
                     f"{name} returned {resp.status_code}: "
                     f"{resp.body_bytes!r}",
                 )
@@ -280,6 +284,12 @@ class MethodSetTests(unittest.TestCase):
             spec = REGISTRY[name]
             if not spec.required_params:
                 continue
+            if name == "PROPOSE":
+                # §7: PROPOSE returns 400 bad-request with
+                # issue="missing-required-field" instead of 422
+                # missing-required-params (the rest of the registry
+                # still uses the legacy require_params path).
+                continue
             with self.subTest(method=name):
                 # Send a body that lacks every required key.
                 empty_body: dict = {}
@@ -298,6 +308,15 @@ class MethodSetTests(unittest.TestCase):
                     set(payload["error"]["missing"]),
                     set(spec.required_params),
                 )
+
+    def test_propose_missing_name_returns_400(self) -> None:
+        # §7: PROPOSE body without a ``name`` field is a malformed
+        # request, not a negotiation refusal.
+        resp = _send(self.server, ORCH_ID, "PROPOSE", body={})
+        self.assertEqual(resp.status_code, 400)
+        payload = _decode_json(resp)
+        self.assertEqual(payload["error"]["code"], "bad-request")
+        self.assertEqual(payload["error"]["issue"], "missing-required-field")
 
     # ---- soft-deny / capability check for an undeclared agent ----
     #
@@ -328,13 +347,19 @@ class MethodSetTests(unittest.TestCase):
                         "method-not-permitted-for-agent",
                     )
 
-    # ---- 501 unknown method ----
+    # ---- 459 unknown method ----
 
-    def test_unknown_method_returns_501(self) -> None:
+    def test_unknown_method_returns_459(self) -> None:
+        # FAKEMETHOD is not in the curated AGTP verb list. The
+        # dispatcher refuses with 459 Method Grammar Violation
+        # before reaching the registry. Earlier revisions returned
+        # 501; the new spec separates "name not in catalog" (459)
+        # from "valid name but no handler" (405).
         resp = _send(self.server, ORCH_ID, "FAKEMETHOD", body={})
-        self.assertEqual(resp.status_code, 501)
+        self.assertEqual(resp.status_code, 459)
         payload = _decode_json(resp)
-        self.assertEqual(payload["error"]["code"], "method-not-implemented")
+        self.assertEqual(payload["error"]["code"], "method-grammar-violation")
+        self.assertEqual(payload["error"]["method"], "FAKEMETHOD")
 
     # ---- DESCRIBE content negotiation ----
 
@@ -363,18 +388,25 @@ class MethodSetTests(unittest.TestCase):
 
     # ---- PROPOSE: structural refusal + accept path on existing verb ----
 
-    def test_propose_refuses_insufficient_when_structural_fields_missing(self) -> None:
-        # Old shape (endpoint_name + schema) is missing parameters/outcome.
+    def test_propose_refuses_out_of_scope_when_no_close_match(self) -> None:
+        # §7: PROPOSE refusal returns 463 Proposal Rejected with
+        # structured reason. FROBNICATE has no recipe and no
+        # close-match counter; the runtime declines and the handler
+        # surfaces proposal-rejected with
+        # reason=composition-impossible (no near-match available).
         resp = _send(
             self.server,
             ORCH_ID,
             "PROPOSE",
             body={"name": "FROBNICATE"},
         )
-        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.status_code, 463)
         payload = _decode_json(resp)
-        self.assertEqual(payload["error"]["code"], "negotiation-refused")
-        self.assertEqual(payload["error"]["reason"], "insufficient")
+        self.assertEqual(payload["error"]["code"], "proposal-rejected")
+        self.assertIn(
+            payload["error"]["reason"],
+            ("out-of-scope", "composition-impossible"),
+        )
 
     def test_propose_accepts_proposal_naming_existing_method(self) -> None:
         from server.negotiation import SYNTHESES
@@ -390,11 +422,12 @@ class MethodSetTests(unittest.TestCase):
                 "description": "ask the agent about itself",
             },
         )
-        self.assertEqual(resp.status_code, 200)
+        # §7: accept returns 263 Proposal Approved; synthesis_id is
+        # at the top level, multi-step details under ``synthesis``.
+        self.assertEqual(resp.status_code, 263)
         payload = _decode_json(resp)
-        self.assertEqual(payload["outcome"], "accept")
+        self.assertTrue(payload["synthesis_id"].startswith("syn-"))
         self.assertEqual(payload["synthesis"]["target_method"], "QUERY")
-        self.assertTrue(payload["synthesis"]["synthesis_id"].startswith("syn-"))
 
     # ---- SUSPEND nonce shape ----
 
@@ -437,12 +470,11 @@ class MethodSetTests(unittest.TestCase):
         names = [item["name"] for item in _decode_json(resp)["embedded"]]
         self.assertEqual(names, sorted(names))
 
-    def test_embedded_entries_carry_source_and_no_namespace(self) -> None:
+    def test_embedded_entries_have_no_namespace(self) -> None:
         resp = _send(
             self.server, ORCH_ID, "DISCOVER", body={"target": "methods"}
         )
         for entry in _decode_json(resp)["embedded"]:
-            self.assertEqual(entry["source"], "agtp/1.0", entry["name"])
             self.assertNotIn(
                 "namespace", entry,
                 f"{entry['name']} embedded entry must omit namespace",
@@ -450,8 +482,11 @@ class MethodSetTests(unittest.TestCase):
 
     # ---- single-agent default routing ----
 
-    def test_target_agent_required_when_multiple_hosted(self) -> None:
-        # Send DESCRIBE without Target-Agent against the multi-agent server.
+    def test_agent_id_required_when_multiple_hosted(self) -> None:
+        # §10: the canonical header is Agent-ID; the legacy
+        # ``Target-Agent`` still works via back-compat fallback.
+        # Send DESCRIBE without either header against the
+        # multi-agent server and expect ``missing-agent-id``.
         sock = socket.create_connection((self.server.host, self.server.port))
         try:
             req = wire.AGTPRequest(
@@ -464,7 +499,126 @@ class MethodSetTests(unittest.TestCase):
             sock.close()
         self.assertEqual(resp.status_code, 400)
         payload = _decode_json(resp)
-        self.assertEqual(payload["error"]["code"], "missing-target-agent")
+        self.assertEqual(payload["error"]["code"], "missing-agent-id")
+
+
+class EmbeddedSemanticBlockTests(unittest.TestCase):
+    """
+    Every embedded method must carry a complete semantic block.
+    The composition runtime, the manifest, and Elemen's overview all
+    consume these values; missing fields would silently degrade
+    recipe matching and catalog readiness.
+    """
+
+    EMBEDDED = (
+        "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
+        "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
+    )
+
+    def test_every_embedded_method_has_semantic_block(self):
+        from server.methods import REGISTRY
+        for name in self.EMBEDDED:
+            with self.subTest(method=name):
+                spec = REGISTRY[name]
+                self.assertIsNotNone(
+                    spec.semantic,
+                    f"{name} is missing its semantic block",
+                )
+
+    def test_semantic_block_fields_are_well_formed(self):
+        from core.endpoint import ALL_CAPABILITIES, ALL_IMPACTS
+        from server.methods import REGISTRY
+        for name in self.EMBEDDED:
+            with self.subTest(method=name):
+                sb = REGISTRY[name].semantic
+                self.assertTrue(sb.intent, f"{name}.intent is empty")
+                self.assertGreaterEqual(
+                    len(sb.intent), 20,
+                    f"{name}.intent shorter than 20 chars",
+                )
+                # actor is free-form per agtp-api §6; just require
+                # a non-empty string.
+                self.assertIsInstance(sb.actor, str)
+                self.assertTrue(sb.actor.strip(), f"{name}.actor is empty")
+                self.assertTrue(sb.outcome, f"{name}.outcome is empty")
+                self.assertGreaterEqual(len(sb.outcome), 20)
+                self.assertIn(sb.capability, ALL_CAPABILITIES)
+                self.assertIsInstance(sb.confidence, float)
+                self.assertGreaterEqual(sb.confidence, 0.0)
+                self.assertLessEqual(sb.confidence, 1.0)
+                self.assertIn(sb.impact, ALL_IMPACTS)
+                self.assertIsInstance(sb.is_idempotent, bool)
+
+    def test_semantic_is_idempotent_agrees_with_protocol_idempotent(self):
+        # Coherence rule: semantic.is_idempotent must match the
+        # protocol-level idempotent flag.
+        from server.methods import REGISTRY
+        for name in self.EMBEDDED:
+            with self.subTest(method=name):
+                spec = REGISTRY[name]
+                self.assertEqual(
+                    spec.semantic.is_idempotent,
+                    spec.idempotent,
+                    f"{name}: semantic.is_idempotent ({spec.semantic.is_idempotent}) "
+                    f"disagrees with idempotent ({spec.idempotent})",
+                )
+
+    def test_state_modifying_methods_are_not_marked_idempotent(self):
+        # Coherence rule: is_idempotent=true is incompatible
+        # with state_modifying=true.
+        from server.methods import REGISTRY
+        for name in self.EMBEDDED:
+            with self.subTest(method=name):
+                spec = REGISTRY[name]
+                if spec.state_modifying:
+                    self.assertFalse(
+                        spec.semantic.is_idempotent,
+                        f"{name}: state_modifying methods must not be is_idempotent",
+                    )
+
+    def test_irreversible_methods_have_high_confidence(self):
+        # Coherence rule (warning, but we want it satisfied
+        # for embedded methods): impact=irreversible methods should
+        # declare confidence >= 0.85.
+        from core.endpoint import IRREVERSIBLE_CONFIDENCE_FLOOR
+        from server.methods import REGISTRY
+        for name in self.EMBEDDED:
+            with self.subTest(method=name):
+                sb = REGISTRY[name].semantic
+                if sb.impact == "irreversible":
+                    self.assertGreaterEqual(
+                        sb.confidence,
+                        IRREVERSIBLE_CONFIDENCE_FLOOR,
+                    )
+
+    def test_spec_to_endpoint_spec_carries_semantic(self):
+        # The synthesis runtime sees embedded methods through
+        # spec_to_endpoint_spec; the semantic block must survive the
+        # lift.
+        from server.methods import REGISTRY, spec_to_endpoint_spec
+        for name in self.EMBEDDED:
+            with self.subTest(method=name):
+                ep = spec_to_endpoint_spec(REGISTRY[name])
+                self.assertIsNotNone(
+                    ep.semantic,
+                    f"{name}: EndpointSpec.semantic is None after lift",
+                )
+                self.assertEqual(
+                    ep.semantic.intent,
+                    REGISTRY[name].semantic.intent,
+                )
+
+    def test_spec_to_dict_serializes_semantic(self):
+        # The DISCOVER /methods endpoint and the manifest both serialize
+        # via spec_to_dict; downstream catalogs and Elemen's overview
+        # rely on the semantic block being present in the wire form.
+        from server.methods import REGISTRY, spec_to_dict
+        for name in self.EMBEDDED:
+            with self.subTest(method=name):
+                payload = spec_to_dict(REGISTRY[name])
+                self.assertIn("semantic", payload)
+                self.assertEqual(payload["semantic"]["actor"],
+                                 REGISTRY[name].semantic.actor)
 
 
 class CustomMethodTests(unittest.TestCase):
@@ -522,9 +676,9 @@ class CustomMethodTests(unittest.TestCase):
         from server.methods import unregister
         unregister("RECONCILE")
 
-    def test_reconcile_appears_in_registry_with_amg_source(self) -> None:
+    def test_reconcile_appears_in_registry_with_namespace(self) -> None:
+        # Custom methods (non-embedded) carry a namespace.
         spec = REGISTRY["RECONCILE"]
-        self.assertEqual(spec.source, "amg/1.0")
         self.assertEqual(spec.namespace, "acme-finance")
         self.assertEqual(spec.category, "transact")
 
@@ -558,7 +712,6 @@ class CustomMethodTests(unittest.TestCase):
         self.assertEqual(len(custom), 1)
         entry = custom[0]
         self.assertEqual(entry["name"], "RECONCILE")
-        self.assertEqual(entry["source"], "amg/1.0")
         self.assertEqual(entry["namespace"], "acme-finance")
 
     def test_invoking_reconcile_succeeds_with_required_params(self) -> None:
@@ -575,11 +728,16 @@ class CustomMethodTests(unittest.TestCase):
         self.assertEqual(payload["status"], "stub-reconciled")
 
     def test_register_custom_rejects_missing_namespace(self) -> None:
+        # Use a verb that IS in the catalog and ISN'T already
+        # registered (FORECAST) so the Phase-6 catalog-membership
+        # check passes AND the structural ``namespace required``
+        # validator under test actually fires (rather than the
+        # already-registered RuntimeError firing first).
         from server.methods import register_custom
         with self.assertRaises(ValueError):
             register_custom(
                 lambda *a, **k: None,  # noqa: E731
-                name="BADCUSTOM",
+                name="FORECAST",
                 namespace="",
                 category="transact",
                 semantic_class="action-intent",
@@ -590,24 +748,19 @@ class CustomMethodTests(unittest.TestCase):
                 description="bad",
             )
 
-    def test_decorator_rejects_namespace_on_embedded_source(self) -> None:
-        from server.methods import method
-        with self.assertRaises(ValueError):
-
-            @method(
-                name="BADEMBEDDED",
-                category="cognitive",
-                semantic_class="action-intent",
-                idempotent=True,
-                state_modifying=False,
-                required_params=[],
-                error_codes=[400],
-                description="bad",
-                source="agtp/1.0",
-                namespace="should-not-be-allowed",
-            )
-            def _bad(req, st, doc):
-                return None
+    def test_embedded_methods_register_without_namespace(self) -> None:
+        # The embedded-vs-custom distinction is determined by
+        # membership in EMBEDDED_VERBS. All 12 embedded primitives
+        # register at module load with ``namespace=None``; verify
+        # the registry state reflects that.
+        from core.methods import EMBEDDED_VERBS
+        for name in EMBEDDED_VERBS:
+            with self.subTest(method=name):
+                spec = REGISTRY[name]
+                self.assertIsNone(
+                    spec.namespace,
+                    f"embedded method {name} should not carry a namespace",
+                )
 
 
 if __name__ == "__main__":

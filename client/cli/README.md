@@ -16,16 +16,21 @@ agtp <uri> --propose -d '{...}'   # PROPOSE with an inline body
 agtp <uri> --propose --params-file path/to/method.yaml
 ```
 
-## `--propose`: declaring a new method
+## `--propose`: declaring an endpoint
 
-The ``--propose`` flow wires the [`AMG composer`](../amg/) into the
-CLI. Three entry shapes converge on a single submitted PROPOSE:
+The ``--propose`` flow walks the author through a (verb, path,
+semantic block, parameters) tuple and submits it to the server.
+Validators are cheap list lookups against the AGTP method catalog
+([`core/methods.json`](../../core/methods.json)) and the path grammar
+([`core/path_grammar.py`](../../core/path_grammar.py)).
+
+Three entry shapes converge on a single submitted PROPOSE:
 
 | Shape                                  | Use when                                |
 |---|---|
-| ``--propose --interactive`` (or ``-i``) | composing a method from scratch in a terminal |
+| ``--propose --interactive`` (or ``-i``) | composing an endpoint from scratch in a terminal |
 | ``--propose -d '<json>'``              | scripting a PROPOSE from a CI job |
-| ``--propose --params-file FILE``       | submitting a hand-edited ``*.method.yaml`` / ``*.method.json`` |
+| ``--propose --params-file FILE``       | submitting a hand-edited ``*.endpoint.yaml`` / ``*.endpoint.json`` |
 
 The mode is enforced post-parse: ``--propose`` is mutually exclusive
 with a positional method argument, and at least one of
@@ -36,50 +41,65 @@ with a positional method argument, and at least one of
 ```text
 $ agtp agtp://acme.example --propose -i
 
-Compose a new method to propose to agtp://acme.example.
+Compose an endpoint to propose to agtp://acme.example.
 Press Ctrl-C at any prompt to abort.
 
-Method name (uppercase, single token):
-> evaluate
-  ✗ 'evaluate' is not a valid method name (must be 3-32 uppercase ASCII letters).
-    Try 'EVALUATE'.
+Verb (one of the AGTP catalog):
+> FROBNICATE
+  ✗ 'FROBNICATE' is not in the AGTP verb catalog.
 
-Method name (uppercase, single token):
-> EVALUATE
-  ✓ Name passes lexical and stoplist checks.
+Verb (one of the AGTP catalog):
+> RECONCILE
+  ✓ Verb 'RECONCILE' is in the approved AGTP catalog.
+
+Path (optional, e.g. /orders/{order_id}):
+> /orders/{order_id}
+  ✓ Path '/orders/{order_id}' accepted.
 
 Intent (one sentence, agent-goal voice):
-> Evaluates the input against a declared ruleset
+> Reconciles transactions for the named account
   ✓ Intent looks good.
 
 [...]
 
-──── Proposed Method ────────────────────────────────────────
-Name:        EVALUATE
-Intent:      Evaluates the input against a declared ruleset
+──── Proposed Endpoint ──────────────────────────────────────
+Verb:        RECONCILE
+Path:        /orders/{order_id}
+Intent:      Reconciles transactions for the named account
 Actor:       agent
-Outcome:     A structured assessment with pass/fail per rule is returned
+Outcome:     A reconciliation summary listing matched and unmatched entries is returned
 Capability:  analysis
-Impact:      informational  (confidence floor 0.85)
-Idempotent:  yes
+Namespace:   acme-finance
 Parameters:
   Required:
-    input:string  ─  The data to evaluate
-    ruleset:string  ─  Identifier of the ruleset
-  Optional: (none)
-Namespace:   acme-quality
-Source:      amg/1.0
+    account_id:string ─ the ledger account
+    period:string ─ time window like 2026-Q1
+  Optional:
+    tolerance:number ─ rounding tolerance
 ─────────────────────────────────────────────────────────────
 
 Submit this PROPOSE to agtp://acme.example? (y/N/e to edit/s to save):
 > y
 ```
 
-Per-field validation surfaces feedback at the moment the value is
-typed; the suggestion engine pulls from
-[`client.amg.composer.suggest_fix`](../amg/composer.py). Edit-mode
-re-enters the walkthrough with every prior value preserved as the
-default — pressing Enter keeps the existing value.
+Per-field validation runs as soon as a value is entered:
+
+  * **Verb** — checked against
+    [`core.methods.is_approved_verb`](../../core/methods.py); typos
+    and legacy HTTP names get close-match suggestions from the
+    catalog.
+  * **Path** — checked against
+    [`core.path_grammar.validate_path`](../../core/path_grammar.py);
+    paths must begin with ``/``, must not have a trailing slash
+    (except the root), must not embed a verb token in any segment.
+  * **Intent / Outcome** — minimum 20 characters, single sentence.
+  * **Actor / Capability** — must be from the recognized vocabulary
+    (``agent / user / system`` and the seven capability buckets).
+  * **Parameter triples** — ``name:type:description``; names are
+    lowercase snake_case, types from the recognized primitive set.
+
+Edit-mode re-enters the walkthrough with every prior value
+preserved as the default — pressing Enter keeps the existing value.
 
 The four post-preview options:
 
@@ -108,28 +128,32 @@ The CLI renders the three PROPOSE outcomes individually:
 ### Body file shape
 
 ``--params-file`` accepts both JSON and YAML (extension-driven).
-The same shape that
-[`client.amg.compose_from_dict`](../amg/composer.py) accepts:
+The body is the wire-shaped PROPOSE proposal:
 
 ```yaml
-name: EVALUATE
+name: RECONCILE
+path: /orders/{order_id}                # optional
+parameters:
+  account_id: string
+  period: string
+outcome: A reconciliation summary is returned
+description: Reconcile transactions for the named account and period.
 semantic:
-  intent: Evaluates the input against a declared ruleset
+  intent: Reconciles transactions for the named account
   actor: agent
-  outcome: A structured assessment with pass/fail per rule is returned
+  outcome: A reconciliation summary is returned
   capability: analysis
-  confidence_guidance: 0.85
-  impact_tier: informational
-  is_idempotent: true
-description: Run a ruleset against the supplied input and report.
-category: transact
 required_params:
-  - { name: input,   type: string, description: The data to evaluate }
-  - { name: ruleset, type: string, description: Identifier of the ruleset }
-error_codes: [400, 422]
-source: amg/1.0
-namespace: acme-quality
+  - { name: account_id, type: string, description: the ledger account }
+  - { name: period,     type: string, description: time window like 2026-Q1 }
+optional_params:
+  - { name: tolerance,  type: number, description: rounding tolerance }
+namespace: acme-finance
 ```
+
+The verb name is checked against the catalog (``core/methods.json``)
+and any path is checked against the path grammar before any wire
+traffic. Local refusals exit 1 with an actionable message.
 
 When ``--params-file *.yaml`` is supplied, ``pyyaml`` is required
 (install via the ``[yaml]`` extra: ``pip install -e .[yaml]``).
@@ -142,6 +166,48 @@ When ``--params-file *.yaml`` is supplied, ``pyyaml`` is required
     refusal, or invocation error.
   * **2** — argparse / mutex error, malformed body, missing
     ``--params-file``, missing dependency.
+
+## `--grammar-check`: probe a verb without committing
+
+```bash
+agtp <uri> RECONCILE --grammar-check
+```
+
+Probes whether a verb is in the AGTP catalog and whether the
+server admits it. The Method-Grammar header pathway the protocol
+previously shipped was retired; the catalog-based dispatcher gives
+the same answer at the top of every request, so this flag is just
+sugar — it lets the operator ask the question without committing
+to a real invocation.
+
+Two-stage check:
+
+  1. **Local catalog** (`core/methods.json`). If the verb isn't
+     locally recognized, refuse immediately with close-match
+     suggestions — no network call.
+  2. **Live probe** with an empty body. The status code carries the
+     answer:
+
+      * **200 / 400 / 422** — the verb passed every dispatcher gate
+        and reached the handler. ``400 missing-required-params`` is
+        the common case for a bodyless probe and is treated as
+        proof of admission.
+      * **459** Method Grammar Violation — the server's catalog (or
+        ``policies.methods``) refused the name. Suggestions are
+        printed when the body carries them.
+      * **405 method-not-implemented** — the verb is in the AGTP
+        catalog but no handler is registered on this server. On an
+        interactive TTY, the CLI offers to chain into
+        ``--propose --interactive`` so the full pathway runs from
+        one command.
+      * **405 method-not-allowed-by-policy** — the server's
+        ``policies.methods`` actively disallows the verb. No PROPOSE
+        chain is offered.
+      * **403** Forbidden — the agent's capability or the server's
+        policy declined.
+
+The flag is mutually exclusive with ``--match-check``,
+``--negotiate``, and ``--propose``.
 
 ## `--negotiate` (legacy fallback)
 

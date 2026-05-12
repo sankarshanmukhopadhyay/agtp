@@ -1,0 +1,2679 @@
+{
+  "version": "1.0.0",
+  "embedded": [
+    "QUERY",
+    "DISCOVER",
+    "DESCRIBE",
+    "SUMMARIZE",
+    "PLAN",
+    "EXECUTE",
+    "DELEGATE",
+    "ESCALATE",
+    "CONFIRM",
+    "SUSPEND",
+    "PROPOSE",
+    "NOTIFY"
+  ],
+  "legacy": {
+    "GET": {
+      "preferred": "FETCH",
+      "description": "Legacy retrieval verb."
+    },
+    "POST": {
+      "preferred": "CREATE",
+      "description": "Legacy creation/submission verb."
+    },
+    "PUT": {
+      "preferred": "REPLACE",
+      "description": "Legacy replacement verb."
+    },
+    "DELETE": {
+      "preferred": "REMOVE",
+      "description": "Legacy removal verb."
+    },
+    "PATCH": {
+      "preferred": "MODIFY",
+      "description": "Legacy modification verb."
+    }
+  },
+  "categories": {
+    "discovery": "Find, locate, observe, or detect without retrieving content.",
+    "retrieval": "Obtain, load, or pull content into the agent's working context.",
+    "analysis": "Reason over, compute on, score, or judge content.",
+    "transaction": "Commit value, exchange, or external state-changing actions.",
+    "modification": "Change, restructure, or remove existing state.",
+    "creation": "Bring new entities or artifacts into existence.",
+    "notification": "Signal, communicate, or publish to recipients.",
+    "mechanics": "Protocol primitives for agent coordination and lifecycle.",
+    "domain_spanning": "Cross-cutting lifecycle and control-plane operations."
+  },
+  "methods": {
+    "QUERY": {
+      "categories": [
+        "discovery",
+        "mechanics"
+      ],
+      "description": "Structured request for matching records or state."
+    },
+    "DISCOVER": {
+      "categories": [
+        "discovery",
+        "mechanics"
+      ],
+      "description": "Surface available resources, agents, or capabilities."
+    },
+    "DESCRIBE": {
+      "categories": [
+        "mechanics",
+        "discovery"
+      ],
+      "description": "Return a structured self-description."
+    },
+    "SUMMARIZE": {
+      "categories": [
+        "analysis",
+        "mechanics"
+      ],
+      "description": "Produce a condensed account of input."
+    },
+    "PLAN": {
+      "categories": [
+        "mechanics",
+        "creation"
+      ],
+      "description": "Produce a sequence of intended actions."
+    },
+    "EXECUTE": {
+      "categories": [
+        "transaction",
+        "mechanics"
+      ],
+      "description": "Perform a planned action."
+    },
+    "DELEGATE": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Assign work to another agent."
+    },
+    "CONFIRM": {
+      "categories": [
+        "notification",
+        "mechanics"
+      ],
+      "description": "Affirm a stated fact or intent."
+    },
+    "SUSPEND": {
+      "categories": [
+        "domain_spanning",
+        "mechanics"
+      ],
+      "description": "Pause an entity reversibly."
+    },
+    "PROPOSE": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Offer a tentative action for review."
+    },
+    "NOTIFY": {
+      "categories": [
+        "notification",
+        "mechanics"
+      ],
+      "description": "Inform a recipient of an event or fact."
+    },
+    "ASCERTAIN": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Establish a fact with confidence."
+    },
+    "BROWSE": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Traverse a hierarchy or listing without a target."
+    },
+    "CRAWL": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Recursively traverse linked resources."
+    },
+    "DETECT": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Recognize the presence of a signal or condition."
+    },
+    "DETERMINE": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Conclude a value through inquiry."
+    },
+    "ENUMERATE": {
+      "categories": [
+        "discovery",
+        "retrieval"
+      ],
+      "description": "List every member of a defined set."
+    },
+    "ENVISION": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Project a hypothetical state for inspection."
+    },
+    "EXAMINE": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Investigate the details of an item."
+    },
+    "EXPLORE": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Open-ended traversal to map an unknown space."
+    },
+    "EXPOSE": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Make an internal state available externally."
+    },
+    "FIND": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Locate an item matching given criteria."
+    },
+    "FOLLOW": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Move along a path or feed of items."
+    },
+    "IDENTIFY": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Determine the identity or class of an entity."
+    },
+    "INDEX": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Build a lookup structure over a corpus."
+    },
+    "INSPECT": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Closely examine an item's structure or contents."
+    },
+    "INTROSPECT": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Examine internal state of self or another agent."
+    },
+    "INVESTIGATE": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Pursue a question through evidence-gathering."
+    },
+    "LIST": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Return the members of a collection."
+    },
+    "LISTEN": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Wait for inbound events on a channel."
+    },
+    "LOCATE": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Determine the position or address of a known entity."
+    },
+    "LOOKUP": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Resolve a key against a known mapping."
+    },
+    "MATCH": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Test whether items satisfy a pattern."
+    },
+    "MONITOR": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Continuously observe for changes or thresholds."
+    },
+    "OBSERVE": {
+      "categories": [
+        "discovery",
+        "mechanics"
+      ],
+      "description": "Passively watch state without acting on it."
+    },
+    "PEEK": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Inspect without consuming or committing."
+    },
+    "PINPOINT": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Narrow a location or cause to a precise point."
+    },
+    "POLL": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Repeatedly query for state at intervals."
+    },
+    "PROBE": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Send a controlled stimulus to elicit a response."
+    },
+    "RECOGNIZE": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Identify a known pattern within input."
+    },
+    "RESOLVE": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Translate a reference to a concrete entity."
+    },
+    "REVEAL": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Make a previously hidden value visible."
+    },
+    "SAMPLE": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Take a representative subset for inspection."
+    },
+    "SCAN": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Systematically inspect a range of items."
+    },
+    "SEARCH": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Scan a corpus or index for matches."
+    },
+    "SENSE": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Acquire a low-level signal from the environment."
+    },
+    "SPOT": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Notice an item of interest among many."
+    },
+    "SURVEY": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Sample broadly to characterize a population."
+    },
+    "TRACE": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Follow a chain of causes or references."
+    },
+    "TRACK": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Follow an entity's state across time."
+    },
+    "UNCOVER": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Reveal something previously hidden or missed."
+    },
+    "WATCH": {
+      "categories": [
+        "discovery"
+      ],
+      "description": "Observe a target for change events."
+    },
+    "ACCESS": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Obtain authorized use of a resource."
+    },
+    "ACQUIRE": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Take ownership or possession of an asset."
+    },
+    "ASSEMBLE": {
+      "categories": [
+        "retrieval",
+        "creation"
+      ],
+      "description": "Combine fetched parts into a whole."
+    },
+    "BUFFER": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Hold incoming data temporarily before use."
+    },
+    "CACHE": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Store a copy for faster subsequent access."
+    },
+    "CAPTURE": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Record a transient signal to durable form."
+    },
+    "CHECKIN": {
+      "categories": [
+        "retrieval",
+        "modification"
+      ],
+      "description": "Return a checked-out item with updates."
+    },
+    "CHECKOUT": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Acquire an item from shared storage for use."
+    },
+    "COLLECT": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Aggregate items into a single set."
+    },
+    "COMPILE": {
+      "categories": [
+        "retrieval",
+        "creation"
+      ],
+      "description": "Build a composite from constituent inputs."
+    },
+    "DOWNLOAD": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Copy a remote artifact to local storage."
+    },
+    "DUMP": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Emit a complete byte-level copy of state."
+    },
+    "EXPORT": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Render and emit data for external use."
+    },
+    "EXTRACT": {
+      "categories": [
+        "retrieval",
+        "analysis"
+      ],
+      "description": "Pull a substructure out of a larger artifact."
+    },
+    "FETCH": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Retrieve a resource by identifier or location."
+    },
+    "GATHER": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Collect items from multiple sources."
+    },
+    "HARVEST": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Systematically collect items from sources."
+    },
+    "IMPORT": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Bring external data into the system."
+    },
+    "INGEST": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Accept and prepare external input for use."
+    },
+    "LOAD": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Bring data into memory or runtime state."
+    },
+    "MIRROR": {
+      "categories": [
+        "retrieval",
+        "modification"
+      ],
+      "description": "Maintain a synchronized copy of a source."
+    },
+    "OBTAIN": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Acquire possession or access to an item."
+    },
+    "OPEN": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Establish a handle or session over a resource."
+    },
+    "PREFETCH": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Retrieve in advance of expected use."
+    },
+    "PULL": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Initiate transfer from a remote source."
+    },
+    "READ": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Read content from a source."
+    },
+    "RECEIVE": {
+      "categories": [
+        "retrieval",
+        "domain_spanning"
+      ],
+      "description": "Accept inbound delivery of an item."
+    },
+    "REPLICATE": {
+      "categories": [
+        "retrieval",
+        "creation"
+      ],
+      "description": "Produce a duplicate of an existing artifact."
+    },
+    "RETRIEVE": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Recover a stored item into working context."
+    },
+    "SCRAPE": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Extract data from unstructured surfaces."
+    },
+    "SNAPSHOT": {
+      "categories": [
+        "retrieval"
+      ],
+      "description": "Capture a point-in-time copy of state."
+    },
+    "STREAM": {
+      "categories": [
+        "retrieval",
+        "notification"
+      ],
+      "description": "Deliver content in a continuous flow."
+    },
+    "SUBSCRIBE": {
+      "categories": [
+        "retrieval",
+        "notification",
+        "mechanics"
+      ],
+      "description": "Open a continuous read against a feed."
+    },
+    "ABSTRACT": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Produce a higher-level representation."
+    },
+    "AGGREGATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Combine multiple values into a summary."
+    },
+    "ANALYZE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Break input into components and assess them."
+    },
+    "ANNOTATE": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Attach commentary or metadata to an item."
+    },
+    "APPROXIMATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Produce a close-enough value cheaply."
+    },
+    "ASSESS": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Form a judgment about quality or risk."
+    },
+    "ATTRIBUTE": {
+      "categories": [
+        "analysis",
+        "notification"
+      ],
+      "description": "Assign provenance or causation to an item."
+    },
+    "AUDIT": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Examine for compliance or correctness."
+    },
+    "BENCHMARK": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Measure performance against a reference."
+    },
+    "BUCKET": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Place items into discrete bins."
+    },
+    "CALCULATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Apply arithmetic to derive a value."
+    },
+    "CALIBRATE": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Adjust a model to match a reference."
+    },
+    "CATEGORIZE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Place an item into a taxonomic group."
+    },
+    "CHECK": {
+      "categories": [
+        "analysis",
+        "discovery"
+      ],
+      "description": "Test a condition or property."
+    },
+    "CLASSIFY": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Assign an item to a defined class."
+    },
+    "CLUSTER": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Group similar items by inherent structure."
+    },
+    "COMPARE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Determine differences between items."
+    },
+    "COMPUTE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Produce a result through calculation."
+    },
+    "CONVERT": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Translate between representations."
+    },
+    "CORRELATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Find statistical relationships between series."
+    },
+    "COUNT": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Determine the cardinality of a set."
+    },
+    "DECODE": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Recover content from an encoded form."
+    },
+    "DECONSTRUCT": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Break an artifact into its components."
+    },
+    "DEDUCE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Reach a conclusion by formal reasoning."
+    },
+    "DIAGNOSE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Identify the cause of an observed condition."
+    },
+    "DIFFERENTIATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Articulate distinctions between items."
+    },
+    "DISTINGUISH": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Separate items by identifying differences."
+    },
+    "ENCODE": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Convert into an encoded representation."
+    },
+    "ESTIMATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Approximate a value under uncertainty."
+    },
+    "EVALUATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Compute the value of an expression or condition."
+    },
+    "EXTRAPOLATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Project values beyond the known range."
+    },
+    "FILTER": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Retain items matching a predicate."
+    },
+    "FLAG": {
+      "categories": [
+        "analysis",
+        "notification"
+      ],
+      "description": "Mark an item for attention."
+    },
+    "FORECAST": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Project values across a time horizon."
+    },
+    "GENERALIZE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Extend a pattern beyond observed cases."
+    },
+    "GRADE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Assign a level of quality or correctness."
+    },
+    "GROUP": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Partition items by a chosen attribute."
+    },
+    "HASH": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Reduce input to a fixed-size digest."
+    },
+    "INFER": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Derive a conclusion from premises."
+    },
+    "INTERPOLATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Estimate values between known points."
+    },
+    "INTERPRET": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Assign meaning to ambiguous input."
+    },
+    "JUDGE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Render a decision based on criteria."
+    },
+    "MEASURE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Quantify a property against a unit."
+    },
+    "MODEL": {
+      "categories": [
+        "analysis",
+        "creation"
+      ],
+      "description": "Construct a representation of a system."
+    },
+    "NORMALIZE": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Bring values to a standard form."
+    },
+    "OPTIMIZE": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Improve a metric under constraints."
+    },
+    "PARSE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Convert serialized input into structured form."
+    },
+    "PREDICT": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Forecast a future value or event."
+    },
+    "PRIORITIZE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Order items by importance or urgency."
+    },
+    "PROFILE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Characterize the behavior of an artifact."
+    },
+    "PROJECT": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Extend a trend forward in time."
+    },
+    "QUANTIFY": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Express a property as a number."
+    },
+    "RANK": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Order items by a criterion."
+    },
+    "RATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Assign a qualitative grade."
+    },
+    "REASON": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Derive conclusions from available information."
+    },
+    "RECOMPUTE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Recalculate a value after change."
+    },
+    "RECONCILE": {
+      "categories": [
+        "analysis",
+        "domain_spanning"
+      ],
+      "description": "Resolve discrepancies between sources."
+    },
+    "REDUCE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Fold a sequence into a single result."
+    },
+    "REVIEW": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Examine for quality or approval."
+    },
+    "SCORE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Assign a numeric judgment to an item."
+    },
+    "SEGMENT": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Divide a population by criteria."
+    },
+    "SIMULATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Run a model to produce hypothetical outcomes."
+    },
+    "SORT": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Reorder items by a defined key."
+    },
+    "STANDARDIZE": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Apply a uniform format across items."
+    },
+    "SYNTHESIZE": {
+      "categories": [
+        "analysis",
+        "creation"
+      ],
+      "description": "Combine sources into a new coherent whole."
+    },
+    "TALLY": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Accumulate counts across events."
+    },
+    "TOKENIZE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Split input into atomic units."
+    },
+    "TRANSFORM": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Convert input from one form to another."
+    },
+    "TUNE": {
+      "categories": [
+        "analysis",
+        "modification"
+      ],
+      "description": "Adjust parameters for performance."
+    },
+    "VALIDATE": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Confirm conformance to a specification."
+    },
+    "VERIFY": {
+      "categories": [
+        "analysis"
+      ],
+      "description": "Confirm a claim through evidence."
+    },
+    "ACCEPT": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Agree to a presented offer."
+    },
+    "ALLOCATE": {
+      "categories": [
+        "transaction",
+        "domain_spanning"
+      ],
+      "description": "Earmark resources for a purpose."
+    },
+    "APPROVE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Authorize a pending action."
+    },
+    "ASSIGN": {
+      "categories": [
+        "transaction",
+        "domain_spanning"
+      ],
+      "description": "Designate a resource to a target."
+    },
+    "AUCTION": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Run a competitive sale process."
+    },
+    "BARGAIN": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Discuss to reach mutually acceptable terms."
+    },
+    "BID": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Submit a price in an auction."
+    },
+    "BILL": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Charge a party for goods or services."
+    },
+    "BOOK": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Reserve a slot or resource."
+    },
+    "BORROW": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Take an asset under obligation to return."
+    },
+    "BUY": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Exchange value for goods or services."
+    },
+    "CHARGE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Apply a debit against an account."
+    },
+    "CHARGEBACK": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Reverse a posted charge."
+    },
+    "CLAIM": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Assert a right to compensation or benefit."
+    },
+    "CLEAR": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Confirm and complete a pending exchange."
+    },
+    "CLOSE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Finalize a deal or transaction."
+    },
+    "COMMIT": {
+      "categories": [
+        "transaction",
+        "mechanics"
+      ],
+      "description": "Finalize a tentative change."
+    },
+    "COUNTERSIGN": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Add a confirming signature."
+    },
+    "CREDIT": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Apply a positive entry to an account."
+    },
+    "DEALLOCATE": {
+      "categories": [
+        "transaction",
+        "domain_spanning"
+      ],
+      "description": "Release earmarked resources."
+    },
+    "DEBIT": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Apply a negative entry to an account."
+    },
+    "DECLINE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Refuse a presented offer."
+    },
+    "DEPOSIT": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Add funds to an account."
+    },
+    "DISBURSE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Pay out funds from a holding."
+    },
+    "DIVEST": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Withdraw capital from a holding."
+    },
+    "ESCROW": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Hold value pending conditions."
+    },
+    "EXCHANGE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Swap items of comparable value."
+    },
+    "FUND": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Provide capital to a target."
+    },
+    "GRANT": {
+      "categories": [
+        "transaction",
+        "domain_spanning"
+      ],
+      "description": "Confer a right or permission."
+    },
+    "HIRE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Engage a party for paid work."
+    },
+    "INVEST": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Allocate capital expecting a return."
+    },
+    "INVOICE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Issue a request for payment."
+    },
+    "ISSUE": {
+      "categories": [
+        "transaction",
+        "creation"
+      ],
+      "description": "Produce and release an instrument."
+    },
+    "LEASE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Grant temporary use for payment."
+    },
+    "LEND": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Provide an asset under expected return."
+    },
+    "LICENSE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Grant conditional use rights."
+    },
+    "NEGOTIATE": {
+      "categories": [
+        "transaction",
+        "mechanics"
+      ],
+      "description": "Reach agreement on disputed terms."
+    },
+    "NOTARIZE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Attest to a document's authenticity."
+    },
+    "ORDER": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Submit a request for goods or services."
+    },
+    "PAY": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Render value owed."
+    },
+    "PLEDGE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Bind value as collateral or commitment."
+    },
+    "PRICE": {
+      "categories": [
+        "transaction",
+        "analysis"
+      ],
+      "description": "Determine the value to charge."
+    },
+    "PROCESS": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Apply standard handling to an item."
+    },
+    "PURCHASE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Acquire an item by paying for it."
+    },
+    "QUOTE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Provide a price for goods or services."
+    },
+    "REDEEM": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Exchange an instrument for value."
+    },
+    "REFUND": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Return previously transferred value."
+    },
+    "REIMBURSE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Compensate a party for an expense."
+    },
+    "REJECT": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Refuse a pending request."
+    },
+    "REMIT": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Send payment to a recipient."
+    },
+    "RENT": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Take temporary use for payment."
+    },
+    "REQUEST": {
+      "categories": [
+        "transaction",
+        "mechanics"
+      ],
+      "description": "Ask another party to perform an action."
+    },
+    "RESERVE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Hold a resource against future use."
+    },
+    "RETIRE": {
+      "categories": [
+        "transaction",
+        "modification"
+      ],
+      "description": "Permanently remove an instrument from use."
+    },
+    "REVOKE": {
+      "categories": [
+        "transaction",
+        "domain_spanning"
+      ],
+      "description": "Withdraw a previously granted right."
+    },
+    "SELL": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Transfer goods or services for value."
+    },
+    "SETTLE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Finalize a payment or trade."
+    },
+    "SIGN": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Apply an authenticating mark."
+    },
+    "SPONSOR": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Underwrite an activity or party."
+    },
+    "SUBMIT": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Send work or input for processing."
+    },
+    "TENDER": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Offer payment or a bid."
+    },
+    "TRADE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Engage in a market exchange."
+    },
+    "TRANSFER": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Move value or ownership between parties."
+    },
+    "UNDERWRITE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Assume risk for a financial instrument."
+    },
+    "VOID": {
+      "categories": [
+        "transaction",
+        "modification"
+      ],
+      "description": "Cancel an instrument before settlement."
+    },
+    "WAIVE": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Forgo a claim or fee."
+    },
+    "WITHDRAW": {
+      "categories": [
+        "transaction"
+      ],
+      "description": "Remove funds from an account."
+    },
+    "ADJUST": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Make small corrective changes."
+    },
+    "ALTER": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Change a property of an entity."
+    },
+    "AMEND": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Add corrections to an existing record."
+    },
+    "ANONYMIZE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Strip identifying information from records."
+    },
+    "APPEND": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Add content to the end of an item."
+    },
+    "ARCHIVE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Move to long-term inactive storage."
+    },
+    "BRANCH": {
+      "categories": [
+        "modification",
+        "creation"
+      ],
+      "description": "Create a parallel line of changes."
+    },
+    "CHANGE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Replace one state with another."
+    },
+    "COMBINE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Bring items together as one."
+    },
+    "COMPRESS": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Reduce the size of content."
+    },
+    "CONFIGURE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Set parameters that govern behavior."
+    },
+    "DECOMPRESS": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Restore content to its uncompressed form."
+    },
+    "DECRYPT": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Recover plaintext using a key."
+    },
+    "DOWNGRADE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Move to a lower version or tier."
+    },
+    "DUPLICATE": {
+      "categories": [
+        "modification",
+        "creation"
+      ],
+      "description": "Produce a copy of an existing item."
+    },
+    "EDIT": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Alter content in place."
+    },
+    "ENCRYPT": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Render content unreadable without a key."
+    },
+    "EXTEND": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Lengthen the duration or scope of an item."
+    },
+    "FIX": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Correct an identified defect."
+    },
+    "FORK": {
+      "categories": [
+        "modification",
+        "creation"
+      ],
+      "description": "Create a divergent copy for separate evolution."
+    },
+    "INSERT": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Place content at a specified position."
+    },
+    "JOIN": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Combine items by a relationship."
+    },
+    "MASK": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Hide sensitive values for display."
+    },
+    "MERGE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Combine multiple items into one."
+    },
+    "MIGRATE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Move data or workload to a new substrate."
+    },
+    "MODIFY": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Change one or more attributes of an item."
+    },
+    "OBFUSCATE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Render content harder to interpret."
+    },
+    "OVERRIDE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Supersede a default with a specific value."
+    },
+    "OVERWRITE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Replace existing content without merging."
+    },
+    "PREPEND": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Add content to the beginning of an item."
+    },
+    "PURGE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Permanently and unrecoverably delete."
+    },
+    "REASSIGN": {
+      "categories": [
+        "modification",
+        "domain_spanning"
+      ],
+      "description": "Change the designation of a resource."
+    },
+    "REBASE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Replay changes onto a new base state."
+    },
+    "RECONFIGURE": {
+      "categories": [
+        "modification",
+        "domain_spanning"
+      ],
+      "description": "Change configuration of a running system."
+    },
+    "REDACT": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Obscure sensitive content while retaining structure."
+    },
+    "REDO": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Reapply a previously undone change."
+    },
+    "REFACTOR": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Restructure code without changing behavior."
+    },
+    "REFRESH": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Reload to incorporate the latest state."
+    },
+    "RELABEL": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Change a non-identifying label."
+    },
+    "REMOVE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Eliminate an item from a collection."
+    },
+    "RENAME": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Assign a new identifier to an existing item."
+    },
+    "RENEW": {
+      "categories": [
+        "modification",
+        "transaction",
+        "domain_spanning"
+      ],
+      "description": "Extend the validity of an instrument."
+    },
+    "REORDER": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Change the sequence of items."
+    },
+    "REORGANIZE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Restructure the layout of a collection."
+    },
+    "REPAIR": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Fix damage to an artifact."
+    },
+    "REPATH": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Change the location reference of an item."
+    },
+    "REPLACE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Substitute new content for old."
+    },
+    "REROUTE": {
+      "categories": [
+        "modification",
+        "domain_spanning"
+      ],
+      "description": "Send traffic via a new path."
+    },
+    "RESCHEDULE": {
+      "categories": [
+        "modification",
+        "domain_spanning"
+      ],
+      "description": "Move a planned event to a new time."
+    },
+    "RESET": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Restore to a defined initial state."
+    },
+    "RESIZE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Change the size of a resource."
+    },
+    "RESTORE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Recover a prior state from backup."
+    },
+    "RESTRUCTURE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Change the shape or schema of an item."
+    },
+    "RETAG": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Replace tags on an item."
+    },
+    "REVERT": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Undo recent changes to a known state."
+    },
+    "REVISE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Produce an improved version of content."
+    },
+    "ROLLBACK": {
+      "categories": [
+        "modification",
+        "mechanics",
+        "domain_spanning"
+      ],
+      "description": "Revert to a prior committed state."
+    },
+    "ROTATE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Cycle items through positions."
+    },
+    "SET": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Assign a value to a named slot."
+    },
+    "SPLIT": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Divide an item into multiple parts."
+    },
+    "SWAP": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Exchange the positions of two items."
+    },
+    "TRUNCATE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Cut an item to a shorter length."
+    },
+    "UNARCHIVE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Restore an archived item to active use."
+    },
+    "UNASSIGN": {
+      "categories": [
+        "modification",
+        "domain_spanning"
+      ],
+      "description": "Remove a resource designation."
+    },
+    "UNDO": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Reverse the most recent change."
+    },
+    "UPDATE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Replace an existing value with a new one."
+    },
+    "UPGRADE": {
+      "categories": [
+        "modification"
+      ],
+      "description": "Move to a higher version or tier."
+    },
+    "AUTHOR": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Write original content."
+    },
+    "BUILD": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Construct an artifact from sources."
+    },
+    "COMPOSE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Build a structured artifact from parts."
+    },
+    "CONSTRUCT": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Assemble parts into a whole."
+    },
+    "CRAFT": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Make with deliberate care."
+    },
+    "CREATE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Bring a new entity into existence."
+    },
+    "DECLARE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "State the existence or value of an item."
+    },
+    "DEFINE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Establish the meaning or shape of a term."
+    },
+    "DESIGN": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Specify the form and behavior of an artifact."
+    },
+    "DRAFT": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Produce a preliminary version."
+    },
+    "ESTABLISH": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Found or set up an entity or rule."
+    },
+    "FABRICATE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Manufacture from raw materials."
+    },
+    "FORGE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Form an artifact through deliberate work."
+    },
+    "FORMULATE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Express precisely as a definition or plan."
+    },
+    "GENERATE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Produce output from input or parameters."
+    },
+    "INSTANTIATE": {
+      "categories": [
+        "creation",
+        "mechanics"
+      ],
+      "description": "Create an instance from a definition."
+    },
+    "MINT": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Produce a new instance of an instrument."
+    },
+    "ORIGINATE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Bring something into being for the first time."
+    },
+    "PRODUCE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Bring forth an output from a process."
+    },
+    "PROTOTYPE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Build an early working model."
+    },
+    "PROVISION": {
+      "categories": [
+        "creation",
+        "domain_spanning"
+      ],
+      "description": "Bring a new resource into existence and ready it."
+    },
+    "RENDER": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Produce a presentation form from a model."
+    },
+    "SCAFFOLD": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Generate baseline structure for an artifact."
+    },
+    "SEED": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Populate initial state for a new entity."
+    },
+    "SPAWN": {
+      "categories": [
+        "creation",
+        "mechanics"
+      ],
+      "description": "Initiate a new process or agent."
+    },
+    "TEMPLATE": {
+      "categories": [
+        "creation"
+      ],
+      "description": "Generate from a parameterized form."
+    },
+    "ACKNOWLEDGE": {
+      "categories": [
+        "notification",
+        "mechanics"
+      ],
+      "description": "Confirm receipt of a message."
+    },
+    "ADVISE": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Recommend a course of action."
+    },
+    "ALERT": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Notify with elevated urgency."
+    },
+    "ANNOUNCE": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Publicly state new information."
+    },
+    "BEACON": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Emit a periodic identification signal."
+    },
+    "BROADCAST": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Send a message to all recipients."
+    },
+    "COMMENT": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Attach a remark to an item."
+    },
+    "DISCLOSE": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Reveal information formally."
+    },
+    "ECHO": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Return a copy of received input."
+    },
+    "EMIT": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Produce an outbound event."
+    },
+    "FORWARD": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Relay a message to another recipient."
+    },
+    "GREET": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Send an opening salutation."
+    },
+    "INFORM": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Convey a fact to a recipient."
+    },
+    "INVITE": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Offer participation to a recipient."
+    },
+    "MESSAGE": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Send a directed communication."
+    },
+    "PING": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Send a minimal liveness probe."
+    },
+    "PROMPT": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Solicit input from a counterparty."
+    },
+    "PUBLISH": {
+      "categories": [
+        "notification",
+        "mechanics"
+      ],
+      "description": "Emit content to subscribers."
+    },
+    "RELAY": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Pass a signal through an intermediary."
+    },
+    "REMIND": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Prompt about a previously known item."
+    },
+    "REPLY": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Send a return message in a thread."
+    },
+    "REPORT": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Provide a structured account of state."
+    },
+    "RESPOND": {
+      "categories": [
+        "notification",
+        "mechanics"
+      ],
+      "description": "Reply to a received message."
+    },
+    "SIGNAL": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Convey a discrete state to listeners."
+    },
+    "SOLICIT": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Request submissions or input."
+    },
+    "SUMMON": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Call a party to attend or respond."
+    },
+    "UNSUBSCRIBE": {
+      "categories": [
+        "notification",
+        "mechanics"
+      ],
+      "description": "Remove a previously registered interest."
+    },
+    "WARN": {
+      "categories": [
+        "notification"
+      ],
+      "description": "Caution about a possible problem."
+    },
+    "ABORT": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "End an operation before completion."
+    },
+    "ALLOW": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Let a request proceed."
+    },
+    "ATTEST": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Provide signed evidence of a fact."
+    },
+    "AUDITLOG": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Record an action in an immutable log."
+    },
+    "AUTHENTICATE": {
+      "categories": [
+        "mechanics",
+        "domain_spanning"
+      ],
+      "description": "Establish the identity of a party."
+    },
+    "AUTHORIZE": {
+      "categories": [
+        "mechanics",
+        "domain_spanning"
+      ],
+      "description": "Determine permission for an action."
+    },
+    "AWAIT": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Pause until a condition or event."
+    },
+    "BLOCK": {
+      "categories": [
+        "mechanics",
+        "modification"
+      ],
+      "description": "Prevent a request from proceeding."
+    },
+    "CHALLENGE": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Require proof from a counterparty."
+    },
+    "CHECKPOINT": {
+      "categories": [
+        "mechanics",
+        "domain_spanning"
+      ],
+      "description": "Record state for possible later resumption."
+    },
+    "DENY": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Refuse an action under policy."
+    },
+    "DEREGISTER": {
+      "categories": [
+        "mechanics",
+        "domain_spanning"
+      ],
+      "description": "Remove presence from a registry."
+    },
+    "DISPATCH": {
+      "categories": [
+        "mechanics",
+        "domain_spanning"
+      ],
+      "description": "Route a request to a handler."
+    },
+    "ENFORCE": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Compel adherence to a policy."
+    },
+    "FALLBACK": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Switch to an alternative when primary fails."
+    },
+    "GOVERN": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Apply policy to constrain an action."
+    },
+    "HANDOFF": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Transfer ownership of a task to another agent."
+    },
+    "HEARTBEAT": {
+      "categories": [
+        "mechanics",
+        "notification"
+      ],
+      "description": "Periodically signal liveness."
+    },
+    "INVOKE": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Call a named capability or method."
+    },
+    "PERMIT": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Allow an action under policy."
+    },
+    "QUARANTINE": {
+      "categories": [
+        "mechanics",
+        "modification"
+      ],
+      "description": "Isolate a suspect artifact pending review."
+    },
+    "REGISTER": {
+      "categories": [
+        "mechanics",
+        "domain_spanning"
+      ],
+      "description": "Record presence in a registry."
+    },
+    "RETRY": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Reattempt a failed operation."
+    },
+    "ROUTE": {
+      "categories": [
+        "mechanics",
+        "domain_spanning"
+      ],
+      "description": "Choose a path for a request or message."
+    },
+    "YIELD": {
+      "categories": [
+        "mechanics"
+      ],
+      "description": "Voluntarily release control to another party."
+    },
+    "ACTIVATE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Bring an entity into an operational state."
+    },
+    "ATTACH": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Connect a peripheral or accessory to a host."
+    },
+    "BIND": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Associate a name with an endpoint."
+    },
+    "BOOTSTRAP": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Initialize a system from minimal inputs."
+    },
+    "CANCEL": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Withdraw a pending or future action."
+    },
+    "COMMISSION": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Place into operational service."
+    },
+    "CONNECT": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Open a session between parties."
+    },
+    "CORDON": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Block new work on a node without stopping it."
+    },
+    "CUTOVER": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Switch traffic from old system to new."
+    },
+    "DEACTIVATE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Take an entity out of operational state."
+    },
+    "DECOMMISSION": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Retire from operational service."
+    },
+    "DELIVER": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Transfer an item to a recipient."
+    },
+    "DEMOTE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Move an artifact to a lower environment."
+    },
+    "DEPLOY": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Place a build into a runtime environment."
+    },
+    "DEPROVISION": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Tear down and release a provisioned resource."
+    },
+    "DETACH": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Disconnect a peripheral from a host."
+    },
+    "DISABLE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Turn off a feature or capability."
+    },
+    "DISCONNECT": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Close a session between parties."
+    },
+    "DRAIN": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Bleed traffic off a node before stop."
+    },
+    "ENABLE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Turn on a feature or capability."
+    },
+    "ENROLL": {
+      "categories": [
+        "domain_spanning",
+        "transaction"
+      ],
+      "description": "Register a party in a program."
+    },
+    "EVICT": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Forcibly remove a workload from a host."
+    },
+    "EXPIRE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Mark an item as past validity."
+    },
+    "FAILBACK": {
+      "categories": [
+        "domain_spanning",
+        "mechanics"
+      ],
+      "description": "Return to primary after recovery."
+    },
+    "FAILOVER": {
+      "categories": [
+        "domain_spanning",
+        "mechanics"
+      ],
+      "description": "Switch to a standby on primary failure."
+    },
+    "INITIATE": {
+      "categories": [
+        "domain_spanning",
+        "mechanics"
+      ],
+      "description": "Begin a defined procedure."
+    },
+    "INSTALL": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Set up software for use."
+    },
+    "LINK": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Establish a relationship between items."
+    },
+    "MOUNT": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Attach a storage volume to a runtime."
+    },
+    "OFFBOARD": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Remove a party from operational status."
+    },
+    "ONBOARD": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Bring a party into operational readiness."
+    },
+    "PAIR": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Form a trusted association between devices."
+    },
+    "PAUSE": {
+      "categories": [
+        "domain_spanning",
+        "mechanics"
+      ],
+      "description": "Temporarily halt an ongoing process."
+    },
+    "PROMOTE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Advance an artifact to a higher environment."
+    },
+    "REBOOK": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Replace an existing booking with a new one."
+    },
+    "REBOOT": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Restart a host system."
+    },
+    "RECOVER": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Restore service after a failure."
+    },
+    "RESTART": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Stop and immediately start a service."
+    },
+    "RESUME": {
+      "categories": [
+        "domain_spanning",
+        "mechanics"
+      ],
+      "description": "Continue a suspended entity."
+    },
+    "ROLLOUT": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Progressively deliver a change."
+    },
+    "SCHEDULE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Place an item on a future timeline."
+    },
+    "SHIP": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Send goods to a destination."
+    },
+    "SHUTDOWN": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Bring a system to an off state in order."
+    },
+    "START": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Begin a process or service."
+    },
+    "STOP": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Halt a process or service."
+    },
+    "TERMINATE": {
+      "categories": [
+        "domain_spanning",
+        "mechanics"
+      ],
+      "description": "End a process definitively."
+    },
+    "UNBIND": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Dissociate a name from an endpoint."
+    },
+    "UNCORDON": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Restore acceptance of new work on a node."
+    },
+    "UNDEPLOY": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Remove a build from a runtime environment."
+    },
+    "UNINSTALL": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Remove installed software."
+    },
+    "UNLINK": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Remove a relationship between items."
+    },
+    "UNMOUNT": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Detach a mounted storage volume."
+    },
+    "UNPAIR": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Dissolve a trusted device association."
+    }
+  }
+}

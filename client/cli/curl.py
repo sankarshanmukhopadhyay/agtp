@@ -9,7 +9,7 @@ Usage:
   agtp-curl QUERY    agtp://localhost:4480 -d '{"intent":"weather"}'
   agtp-curl DISCOVER agtp://localhost:4480/methods
   agtp-curl -X DESCRIBE agtp://{agent-id}
-  agtp-curl -H "Target-Agent: {id}" DESCRIBE agtp://localhost:4480
+  agtp-curl -H "Agent-ID: {id}" DESCRIBE agtp://localhost:4480
   agtp-curl -i DISCOVER agtp://localhost:4480/methods   # include headers
 
 Two URI shapes are accepted:
@@ -150,13 +150,15 @@ def _send(
             preview = body[:256].decode("utf-8", errors="replace")
             print(f"> body ({len(body)} bytes): {preview}", file=sys.stderr)
 
-    # core_client.send_method derives Target-Agent / Accept / Host /
+    # core_client.send_method derives Agent-ID / Accept / Host /
     # Content-Type from its arguments and merges extra_headers last.
     # curl already built a complete header dict, so we pass it
     # wholesale via extra_headers and supply blank "intrinsic" values
     # so the merge resolves to exactly what the user asked for.
     accept = headers.get("Accept", "application/json")
-    target_agent = headers.get("Target-Agent")
+    # §10: prefer Agent-ID, but accept the legacy Target-Agent value
+    # for users following pre-§10 docs / cheat sheets.
+    target_agent = headers.get("Agent-ID") or headers.get("Target-Agent")
     body_content_type = headers.get("Content-Type")
     return core_client.send_method(
         target_agent,
@@ -170,7 +172,9 @@ def _send(
         insecure_skip_verify=not verify_tls,
         extra_headers={
             k: v for k, v in headers.items()
-            if k not in ("Accept", "Target-Agent", "Host", "Content-Type")
+            if k not in (
+                "Accept", "Agent-ID", "Target-Agent", "Host", "Content-Type",
+            )
         } or None,
         verbose=False,  # curl already printed its own verbose trace above
     )
@@ -229,7 +233,7 @@ def run(args: argparse.Namespace) -> int:
 
     headers: Dict[str, str] = {"Host": host}
     if target_id is not None:
-        headers["Target-Agent"] = target_id
+        headers["Agent-ID"] = target_id
 
     # Curl-style sugar: agtp://host:port/methods on DISCOVER auto-fills
     # the body with `{"target": "methods"}`. Any explicit -d/-H wins.

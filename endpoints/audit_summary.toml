@@ -1,0 +1,59 @@
+# Sample: an endpoint whose handler binds to a synthesis recipe.
+#
+# AUDIT is a documented composition: AUDIT(subject) =
+# QUERY(subject) -> SUMMARIZE(query_result). Declaring it as a
+# `composition` handler tells the dispatcher to route incoming
+# `AUDIT /reviews/{subject_id}` calls to the synthesis runtime,
+# which threads the inputs through the named recipe's plan. The
+# recipe lives in agtp-recipes.toml and ships with the demo server.
+#
+# Phase-3 wires the resolution end-to-end: the handler closure
+# materializes a SynthesisPlan from the recipe at registration,
+# captures it, and on each invocation the runtime executes it
+# against the live agent's identity. Authority is preserved —
+# every step goes through the same dispatcher external invocations
+# do, so an agent that lacks QUERY in its requires.methods will
+# get a 403 from the QUERY step (and the composition handler
+# surfaces that as a `composition_failed` EndpointError).
+#
+# `composition_failed` is the canonical step-failure error code
+# every composition-bound endpoint must declare; the resolver
+# refuses to register an endpoint that omits it.
+
+[endpoint]
+method = "AUDIT"
+path = "/reviews/{subject_id}"
+description = "Audits the named subject by querying the records and summarizing the findings."
+namespace = "reviews"
+
+[endpoint.semantic]
+intent = "Audit the named subject and return a structured assessment."
+actor = "agent"
+outcome = "An audit summary covering the subject's current state and any flags is returned."
+capability = "analysis"
+confidence = 0.80
+impact = "informational"
+is_idempotent = true
+
+[[endpoint.input.required]]
+name = "subject"
+type = "string"
+description = "The entity to audit (e.g., an order id, a customer id)."
+
+[[endpoint.input.optional]]
+name = "length"
+type = "string"
+description = "Desired summary length."
+enum = ["short", "medium", "long"]
+
+[[endpoint.output]]
+name = "summary"
+type = "string"
+description = "Synthesized audit summary the SUMMARIZE step produced."
+
+[endpoint.errors]
+list = ["subject_not_found", "composition_failed"]
+
+[endpoint.handler]
+type = "composition"
+recipe = "audit-via-query-and-summarize"

@@ -33,7 +33,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
-from server.amg.grammar import AMGMethodSpec
+from core.endpoint import EndpointSpec
 from server.synthesis.errors import SynthesisError
 from server.synthesis.plan import (
     CompositionStep,
@@ -163,6 +163,7 @@ class SynthesisRuntime:
         policies: Optional[List[CompositionPolicy]] = None,
         step_dispatcher: Optional[StepDispatcher] = None,
         legacy_registry: Optional[SynthesisRegistry] = None,
+        max_synthesis_depth: int = 10,
     ) -> None:
         self.policies: List[CompositionPolicy] = list(policies or [])
         # Always honor the v1 passthrough behavior as the final
@@ -174,13 +175,26 @@ class SynthesisRuntime:
         self.active: Dict[str, SynthesisPlan] = {}
         self.legacy_registry = legacy_registry or SYNTHESES
         self._lock = threading.Lock()
+        #: Maximum number of plan steps a composition may produce.
+        #: Plans with more steps are refused as a defense against
+        #: unbounded synthesis depth. Mirrors
+        #: :attr:`server.config.ServerPolicy.max_synthesis_depth`.
+        self.max_synthesis_depth: int = int(max_synthesis_depth)
+        #: §7 expiration tracking. ``_expires_at[id]`` is the UTC
+        #: datetime past which :meth:`get` evicts the synthesis;
+        #: missing key means "no hard expiration". ``_persistent`` is
+        #: the set of synthesis_ids the agent marked as persistent
+        #: (advisory; affects only the manifest shape, not
+        #: dispatcher semantics).
+        self._expires_at: Dict[str, Any] = {}
+        self._persistent: set = set()
 
     # ---- composition ----
 
     def attempt_synthesis(
         self,
-        proposal: AMGMethodSpec,
-        available_methods: List[AMGMethodSpec],
+        proposal: EndpointSpec,
+        available_methods: List[EndpointSpec],
     ) -> Optional[SynthesisPlan]:
         """
         Walk the policy list and return the first plan a policy
@@ -212,22 +226,53 @@ class SynthesisRuntime:
                 if missing:
                     # Policy bug: refuse the plan; try the next policy.
                     continue
+                # Depth bound (agtp-api §7 policies.max_synthesis_depth).
+                # Plans deeper than the configured limit are refused
+                # as a defense against runaway composition; the
+                # negotiator falls through to counter-proposal or
+                # plain refusal.
+                if (
+                    self.max_synthesis_depth > 0
+                    and len(plan.steps) > self.max_synthesis_depth
+                ):
+                    continue
                 return plan
         return None
 
     # ---- instantiation ----
 
-    def instantiate(self, plan: SynthesisPlan) -> str:
+    def instantiate(
+        self,
+        plan: SynthesisPlan,
+        *,
+        expires_at: Optional[Any] = None,
+        persistent: bool = False,
+    ) -> str:
         """
         Register a plan as an active synthesis. Returns the
         synthesis_id. Also writes a backward-compat
         :class:`Synthesis` into the legacy registry so existing
         callers (the ``_maybe_redirect_via_synthesis`` rewrite path,
         for example) see the synthesis exists.
+
+        §7 fields:
+
+          * ``expires_at`` — UTC ``datetime`` past which
+            :meth:`get` returns ``None`` and the synthesis is
+            evicted. ``None`` means "no hard expiration" (the v1
+            behavior).
+          * ``persistent`` — whether this synthesis is persistent
+            (true) or session-scoped (false). Persistent syntheses
+            survive their originating agent's session up to
+            ``expires_at``.
         """
         synthesis_id = new_synthesis_id()
         with self._lock:
             self.active[synthesis_id] = plan
+            if expires_at is not None:
+                self._expires_at[synthesis_id] = expires_at
+            if persistent:
+                self._persistent.add(synthesis_id)
         # Backward-compat shim: write a legacy Synthesis entry whose
         # target_method/parameter_mapping reflect the plan's first step
         # (good enough for existing callers; multi-step plans always
@@ -249,11 +294,74 @@ class SynthesisRuntime:
         return synthesis_id
 
     def get(self, synthesis_id: str) -> Optional[SynthesisPlan]:
-        with self._lock:
-            return self.active.get(synthesis_id)
+        """
+        Return the active plan for ``synthesis_id``, or ``None`` if
+        the id is unknown or the synthesis has expired.
 
-    def expire(self, synthesis_id: str) -> bool:
-        """Remove a synthesis. Returns True iff it existed."""
+        §7 expiration check: if ``expires_at`` was set at
+        :meth:`instantiate` time and the current time has passed it,
+        the synthesis is evicted (a "lazy sweep" at lookup) before
+        the ``None`` return — subsequent calls keep returning ``None``.
+        """
+        with self._lock:
+            plan = self.active.get(synthesis_id)
+            if plan is None:
+                return None
+            expires_at = self._expires_at.get(synthesis_id)
+        if expires_at is not None:
+            from datetime import datetime, timezone
+            if datetime.now(tz=timezone.utc) >= expires_at:
+                self.expire(synthesis_id, reason="expired")
+                return None
+        return plan
+
+    def is_expired(self, synthesis_id: str) -> bool:
+        """True when ``synthesis_id`` is gone from the runtime
+        (either never existed or has been expired). Useful for
+        clients that want the dispatcher to distinguish
+        ``not-found`` from ``expired-synthesis``."""
+        with self._lock:
+            return synthesis_id not in self.active
+
+    def is_persistent(self, synthesis_id: str) -> bool:
+        with self._lock:
+            return synthesis_id in self._persistent
+
+    def expires_at(self, synthesis_id: str) -> Optional[Any]:
+        with self._lock:
+            return self._expires_at.get(synthesis_id)
+
+    def sweep_expired(self) -> List[str]:
+        """Walk active syntheses and expire any past their
+        ``expires_at``. Returns the list of expired ids. Called at
+        startup by ``server.main`` alongside the catalog-evolution
+        invalidation sweep."""
+        from datetime import datetime, timezone
+        now = datetime.now(tz=timezone.utc)
+        with self._lock:
+            expired_ids = [
+                sid for sid, ts in list(self._expires_at.items())
+                if ts is not None and now >= ts
+            ]
+        for sid in expired_ids:
+            self.expire(sid, reason="expired")
+        return expired_ids
+
+    def expire(
+        self,
+        synthesis_id: str,
+        *,
+        reason: str = "",
+    ) -> bool:
+        """
+        Remove a synthesis. Returns True iff it existed.
+
+        ``reason`` is a structured tag describing why the synthesis
+        was expired. Phase-6 introduces this for catalog-evolution
+        cleanups (``"catalog-evolution-removed-verb"``); pre-Phase-6
+        callers continue to call ``expire(synthesis_id)`` and the
+        reason rides as the empty string.
+        """
         existed = False
         with self._lock:
             if synthesis_id in self.active:
@@ -262,12 +370,91 @@ class SynthesisRuntime:
         # Mirror to the legacy registry.
         if self.legacy_registry.remove(synthesis_id):
             existed = True
+        if existed and reason:
+            # Stderr matches the rest of the boot logging in this
+            # repo — once a structured logger lands this becomes a
+            # ``logger.info`` with the same fields.
+            import sys as _sys
+            print(
+                f"[server] synthesis {synthesis_id} expired ({reason})",
+                file=_sys.stderr,
+            )
         return existed
+
+    # ---- catalog evolution (Phase 6) ----
+
+    def invalidate_against_catalog(self) -> List[str]:
+        """
+        Walk active syntheses; expire any whose plans reference a
+        verb the current catalog no longer admits.
+
+        Called at server startup (after the runtime has been
+        constructed but before the listener accepts requests) so
+        in-flight plans don't fail mid-execution after a catalog
+        upgrade. Returns the list of expired synthesis IDs so the
+        boot sequence can log a count.
+
+        Reason tag on expiry: ``catalog-evolution-removed-verb``.
+        """
+        from core.methods import is_approved_verb
+
+        expired: List[str] = []
+        with self._lock:
+            ids = list(self.active.keys())
+        for synthesis_id in ids:
+            plan = self.get(synthesis_id)
+            if plan is None:
+                continue
+            if not all(
+                is_approved_verb(step.method_name) for step in plan.steps
+            ):
+                self.expire(
+                    synthesis_id,
+                    reason="catalog-evolution-removed-verb",
+                )
+                expired.append(synthesis_id)
+        return expired
 
     def clear(self) -> None:
         with self._lock:
             self.active.clear()
         self.legacy_registry.clear()
+
+    # ---- recipe introspection (Phase-3 composition-binding helpers) ----
+
+    def list_recipes(self) -> List[str]:
+        """
+        Return the names of every recipe currently loaded into a
+        :class:`RecipeBasedPolicy` on this runtime, in declaration
+        order. Composition-bound endpoints reference recipes by name;
+        this helper surfaces what's available so a misconfiguration
+        can be diagnosed at startup with a clean ``InvalidHandlerError``
+        message.
+        """
+        names: List[str] = []
+        for policy in self.policies:
+            recipes = getattr(policy, "recipes", None)
+            if recipes is None:
+                continue
+            for r in recipes:
+                if r.name not in names:
+                    names.append(r.name)
+        return names
+
+    def has_recipe(self, name: str) -> bool:
+        """True iff ``name`` matches a loaded recipe."""
+        return self.get_recipe(name) is not None
+
+    def get_recipe(self, name: str) -> Optional[Any]:
+        """Return the :class:`Recipe` named ``name``, or ``None``."""
+        for policy in self.policies:
+            recipes = getattr(policy, "recipes", None)
+            if recipes is None:
+                continue
+            for r in recipes:
+                if r.name == name:
+                    return r
+        return None
 
     # ---- execution ----
 
@@ -279,20 +466,12 @@ class SynthesisRuntime:
         agent_doc: "AgentDocument",
     ) -> "wire.AGTPResponse":
         """
-        Execute a plan against an incoming request.
+        Execute the plan registered under ``synthesis_id``.
 
-        ``server_state`` and ``agent_doc`` are passed unchanged into
-        the step dispatcher so each step's authority check uses the
-        same agent identity as the original request.
-
-        Failures are surfaced as a 500 with a structured body
-        identifying which step failed; capability/scope failures
-        inside steps surface as 4xx with body fields naming the
-        failed step.
+        Looks the plan up from the active dict and forwards to
+        :meth:`execute_plan`. Used by the Synthesis-Id rewrite path
+        in the dispatcher.
         """
-        from core import wire as wire_mod
-        from core.identity import CONTENT_TYPE_JSON
-
         plan = self.get(synthesis_id)
         if plan is None:
             return _build_error_response(
@@ -302,14 +481,45 @@ class SynthesisRuntime:
                 f"synthesis {synthesis_id!r} is not active on this server",
                 extra={"synthesis_id": synthesis_id},
             )
+        return self.execute_plan(
+            plan, request, server_state, agent_doc,
+            synthesis_id=synthesis_id,
+        )
 
+    def execute_plan(
+        self,
+        plan: SynthesisPlan,
+        request: "wire.AGTPRequest",
+        server_state: Any,
+        agent_doc: "AgentDocument",
+        *,
+        synthesis_id: str = "",
+    ) -> "wire.AGTPResponse":
+        """
+        Execute a :class:`SynthesisPlan` against an incoming request.
+
+        ``server_state`` and ``agent_doc`` are passed unchanged into
+        the step dispatcher so each step's authority check uses the
+        same agent identity as the original request — that's the
+        runtime's "authority preservation" guarantee.
+
+        ``synthesis_id`` is included in the response body when set;
+        composition-bound endpoints (Phase 3) use this method
+        directly without ever instantiating an active synthesis, so
+        they pass an empty string.
+
+        Failures are surfaced as a non-200 with a structured body
+        identifying which step failed; capability/scope failures
+        inside steps surface as the underlying status code with body
+        fields naming the failed step.
+        """
         if self.step_dispatcher is None:
             return _build_error_response(
                 500,
                 "Internal Server Error",
                 "synthesis-runtime-misconfigured",
                 "synthesis runtime has no step dispatcher configured",
-                extra={"synthesis_id": synthesis_id},
+                extra={"synthesis_id": synthesis_id} if synthesis_id else None,
             )
 
         # Parse the proposal's parameters from the incoming request body.
@@ -324,6 +534,12 @@ class SynthesisRuntime:
                 )
             except KeyError as exc:
                 # A previous-step reference that wasn't captured.
+                extra = {
+                    "failed_step": i,
+                    "method": step.method_name,
+                }
+                if synthesis_id:
+                    extra["synthesis_id"] = synthesis_id
                 return _build_error_response(
                     500,
                     "Internal Server Error",
@@ -332,11 +548,7 @@ class SynthesisRuntime:
                         f"step {i + 1} ({step.method_name}) references "
                         f"undefined output {str(exc).strip(chr(39))!r}"
                     ),
-                    extra={
-                        "synthesis_id": synthesis_id,
-                        "failed_step": i,
-                        "method": step.method_name,
-                    },
+                    extra=extra,
                 )
 
             step_request = self._build_step_request(

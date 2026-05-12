@@ -29,7 +29,7 @@ Media types
     application/vnd.agtp.identity+yaml    human-editable form
     application/vnd.agtp.manifest+json    server-level manifest
                                           (returned by DISCOVER without
-                                           a Target-Agent header)
+                                           an Agent-ID header)
 """
 
 from __future__ import annotations

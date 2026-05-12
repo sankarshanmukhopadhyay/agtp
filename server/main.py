@@ -38,7 +38,7 @@ from core.identity import (
     from_dict,
 )
 from server.manifest import generate as generate_manifest
-from server.methods import REGISTRY, dispatch, error_response, spec_to_amg_spec
+from server.methods import REGISTRY, dispatch, error_response
 from server.negotiation import SYNTHESES
 from server.synthesis import (
     PassthroughPolicy,
@@ -154,7 +154,8 @@ def soft_deny_check(
     if method_upper not in REGISTRY:
         return None
 
-    is_embedded = REGISTRY[method_upper].source == "agtp/1.0"
+    from core.methods import EMBEDDED_VERBS
+    is_embedded = method_upper in EMBEDDED_VERBS
 
     # Step 1: wildcards refusal (highest precedence).
     if (
@@ -179,6 +180,7 @@ def soft_deny_check(
 
 DEFAULT_PORT = 4480
 DEFAULT_AGENTS_DIR = "agents"
+DEFAULT_ENDPOINTS_DIR = "endpoints"
 
 # Hosts that bind to the loopback interface only. When the server is
 # listening on one of these, plaintext is the convenient default for
@@ -206,7 +208,163 @@ class AgentRegistry:
         self.synthesis_runtime: Optional[SynthesisRuntime] = (
             self._make_default_runtime()
         )
+        # Per-server method policy. ``configure_methods_policy()``
+        # replaces it from a loaded ServerConfig at startup; the
+        # default is allow-all so a fresh checkout boots without
+        # operator intervention.
+        from server.config import default_methods_policy as _default_methods_policy
+        self.methods_policy = _default_methods_policy()
+        # §7 asynchronous PROPOSE evaluation store. Always present so
+        # the dispatcher / built-in lookup paths don't have to guard
+        # against ``None``; whether the PROPOSE handler routes through
+        # it depends on ``policies.synthesis.async_evaluation_enabled``.
+        from server.proposal_store import ProposalStore as _ProposalStore
+        self.proposal_store = _ProposalStore()
+        # The dispatcher reads ``config`` for synthesis durations,
+        # async opt-in, and audit-log routing. Boot fills this from
+        # the actual config; default is None so unit-test fixtures
+        # that build a bare AgentRegistry still work.
+        self.config = None
+        # Phase-2 endpoint registry. Empty by default; populated by
+        # ``configure_endpoints()`` during startup when a directory of
+        # ``*.toml`` endpoint declarations is present. Attached
+        # directly so ``server.methods.dispatch`` and
+        # ``serve_manifest`` can reach it through the ServerState.
+        from server.endpoint_registry import EndpointRegistry as _ER
+        self.endpoint_registry = _ER()
         self._load()
+
+    def configure_methods_policy(self, policy: "MethodsPolicy") -> None:
+        """
+        Attach a :class:`MethodsPolicy` instance loaded from the
+        server's ``[policies.methods]`` config block.
+
+        Pre-§6 servers loaded this from a separate ``methods.txt``
+        file; that file format is retired (see ``agtp-api §8``).
+        The policy now lives in ``agtp-server.toml`` under
+        ``[policies.methods]`` and is parsed by
+        :func:`server.config.methods_policy_from_table`.
+        """
+        self.methods_policy = policy
+
+    def configure_endpoints(self, endpoints_dir: Path) -> None:
+        """
+        Phase-2 startup hook: load every ``*.toml`` file in
+        ``endpoints_dir``, resolve each declaration's handler, and
+        register it on this server's :class:`EndpointRegistry`.
+
+        Behavior on failure:
+
+          * Loader errors (parse / validation / io) are logged to
+            stderr; the offending files are skipped, the rest of
+            the directory continues to load.
+          * Handler resolution failures are logged similarly.
+            ``composition`` and ``external_service`` bindings raise
+            :class:`NotImplementedError` (Phases 3 & 4); we log the
+            skip and continue rather than aborting startup so an
+            operator authoring future-phase TOML against today's
+            server gets a clear pointer instead of a crash.
+          * Registry insertion failures (duplicates, validator
+            refusals after handler resolution) are likewise logged.
+
+        The boot sequence does NOT abort startup unless every
+        endpoint failed AND there was at least one to begin with —
+        the latter is almost always a misconfigured directory worth
+        surfacing.
+        """
+        from server.endpoint_loader import load_endpoints
+        from server.endpoint_registry import (
+            DuplicateEndpointError, InvalidEndpointError,
+        )
+        from server.handler_resolution import (
+            InvalidHandlerError, resolve_handler,
+        )
+
+        if not endpoints_dir.exists():
+            print(
+                f"[server] no endpoints directory at {endpoints_dir}; "
+                f"endpoint registry remains empty",
+                file=sys.stderr,
+            )
+            return
+
+        specs, load_errors = load_endpoints(endpoints_dir)
+        for err in load_errors:
+            print(
+                f"[server] endpoint load error ({err.error_type}) at "
+                f"{err.file_path}: {err.message}",
+                file=sys.stderr,
+            )
+
+        registered = 0
+        skipped = 0
+        for spec in specs:
+            try:
+                handler = resolve_handler(
+                    spec.handler, server_state=self, spec=spec,
+                )
+            except NotImplementedError as exc:
+                print(
+                    f"[server] endpoint ({spec.name}, {spec.path}) skipped: "
+                    f"{exc}",
+                    file=sys.stderr,
+                )
+                skipped += 1
+                continue
+            except InvalidHandlerError as exc:
+                print(
+                    f"[server] endpoint ({spec.name}, {spec.path}) skipped: "
+                    f"{exc}",
+                    file=sys.stderr,
+                )
+                skipped += 1
+                continue
+            try:
+                self.endpoint_registry.register(spec, handler)
+                registered += 1
+            except (InvalidEndpointError, DuplicateEndpointError) as exc:
+                print(
+                    f"[server] endpoint ({spec.name}, {spec.path}) "
+                    f"refused at registration: {exc}",
+                    file=sys.stderr,
+                )
+                skipped += 1
+
+        total = len(specs) + len(load_errors)
+        if total > 0 and registered == 0:
+            print(
+                f"[server] WARNING: every endpoint in {endpoints_dir} "
+                f"failed to load — check the errors above",
+                file=sys.stderr,
+            )
+        if registered:
+            print(
+                f"[server] loaded {registered} endpoint(s) from "
+                f"{endpoints_dir}"
+                + (f" ({skipped} skipped)" if skipped else ""),
+                file=sys.stderr,
+            )
+
+    def register_builtins(self) -> None:
+        """
+        Register the server-internal built-in endpoints
+        (``DISCOVER /methods``, ``QUERY /proposals/{proposal_id}``,
+        and any future additions). Call this AFTER
+        :meth:`configure_endpoints` so operator-authored TOML can
+        override a built-in's ``(method, path)`` by declaring it
+        first.
+        """
+        from server.builtins import register_builtins as _reg
+        count = _reg(
+            self.endpoint_registry,
+            proposal_store=self.proposal_store,
+        )
+        if count:
+            print(
+                f"[server] registered {count} built-in endpoint(s) "
+                f"(DISCOVER /methods, QUERY /proposals/{{proposal_id}}, ...)",
+                file=sys.stderr,
+            )
 
     def _make_default_runtime(self) -> SynthesisRuntime:
         """
@@ -254,6 +412,11 @@ class AgentRegistry:
             for p in self.synthesis_runtime.policies
         ):
             self.synthesis_runtime.policies.append(PassthroughPolicy())
+        # Mirror policies.max_synthesis_depth into the runtime so
+        # the depth bound takes effect on every composition attempt.
+        self.synthesis_runtime.max_synthesis_depth = int(
+            config.policy.max_synthesis_depth
+        )
 
     def _load(self) -> None:
         if not self.agents_dir.exists():
@@ -281,10 +444,11 @@ def _select_target(
     Resolve which AgentDocument the request is addressing.
 
     Returns (doc, None) on success or (None, error_response) on failure.
-    Target-Agent header is honored. With no header, a single-agent server
-    selects its sole agent for caller convenience.
+    The ``Agent-ID`` header (legacy ``Target-Agent``) names the agent.
+    With neither header set, a single-agent server selects its sole
+    agent for caller convenience.
     """
-    target = wire.header(request, "Target-Agent")
+    target = wire.read_agent_id(request)
     if not target:
         ids = registry.list_ids()
         if len(ids) == 1:
@@ -292,8 +456,8 @@ def _select_target(
         return None, error_response(
             400,
             "Bad Request",
-            "missing-target-agent",
-            "Target-Agent header required when server hosts multiple agents",
+            "missing-agent-id",
+            "Agent-ID header required when server hosts multiple agents",
         )
 
     doc = registry.lookup(target)
@@ -317,10 +481,18 @@ def serve_manifest(
 
     Server-level DISCOVER does not require an agent target; it does not
     consult any per-agent capability list. The disclosure policy in the
-    config decides how openly the agents.list reflects the server's
-    hosted agents.
+    config decides how openly the ``hosted_agents`` field reflects the
+    server's hosted agents.
+
+    Phase-2 servers expose their endpoint registry under the
+    manifest's ``endpoints`` key; the embedded methods continue to
+    surface under ``embedded_methods`` so older readers keep working.
     """
-    manifest = generate_manifest(config, registry.agents)
+    manifest = generate_manifest(
+        config,
+        registry.agents,
+        endpoint_registry=getattr(registry, "endpoint_registry", None),
+    )
     body = manifest.to_json(pretty=True).encode("utf-8")
     return wire.AGTPResponse(
         status_code=200,
@@ -331,6 +503,67 @@ def serve_manifest(
         },
         body_bytes=body,
     )
+
+
+def _finalize_response(
+    response: wire.AGTPResponse,
+    request: Optional[wire.AGTPRequest],
+    config: Optional[ServerConfig],
+) -> None:
+    """Apply §10 response-header policy to every outbound response.
+
+    Three concerns:
+
+      * **Server-ID** (mandatory) — every response identifies which
+        server produced it. Value comes from
+        ``config.server.server_id``.
+      * **Task-ID** echo — when the request carried a ``Task-ID``
+        header the response echoes it back so the client can
+        correlate (and so audit logs can trace the operation
+        across multiple requests).
+      * **Attribution-Record** (optional) — when the server's
+        ``[audit] attribution_records_enabled = true``, the
+        response carries a JSON-encoded attestation. The v00
+        attestation is a structural placeholder; future revisions
+        replace the payload with a JWS-signed compact serialization
+        once §5 manifest signing lands.
+    """
+    if response is None:
+        return
+    headers = dict(response.headers or {})
+    # Mandatory Server-ID.
+    if config is not None and getattr(config, "server", None) is not None:
+        server_id = getattr(config.server, "server_id", "") or ""
+        if server_id and "Server-ID" not in headers:
+            headers["Server-ID"] = server_id
+    # Task-ID echo.
+    if request is not None:
+        task_id = wire.header(request, "Task-ID")
+        if task_id and "Task-ID" not in headers:
+            headers["Task-ID"] = task_id
+    # Attribution-Record (opt-in placeholder).
+    audit = getattr(config, "audit", None) if config is not None else None
+    if audit is not None and getattr(
+        audit, "attribution_records_enabled", False
+    ):
+        import json as _json
+        from datetime import datetime as _dt, timezone as _tz
+        server_id = (
+            getattr(config.server, "server_id", "") or ""
+            if config and getattr(config, "server", None) is not None
+            else ""
+        )
+        attestation = _json.dumps({
+            "server_id": server_id,
+            "issued_at": _dt.now(tz=_tz.utc)
+                .isoformat().replace("+00:00", "Z"),
+            "status": response.status_code,
+            # v00 placeholder: future revisions replace this dict
+            # with a JWS compact serialization once §5 signing lands.
+            "signature": "placeholder",
+        }, separators=(",", ":"))
+        headers["Attribution-Record"] = attestation
+    response.headers = headers
 
 
 def handle_connection(
@@ -347,18 +580,125 @@ def handle_connection(
         reader = conn.makefile("rb")
         request = wire.parse_request(reader)
         method_name = request.method.upper()
-        target_header = wire.header(request, "Target-Agent")
+        # ``Agent-ID`` is the §10 canonical name; ``Target-Agent`` is
+        # accepted for back-compat (read_agent_id emits a deprecation
+        # warning when it falls through).
+        target_header = wire.read_agent_id(request)
 
-        # Server-level DISCOVER: no Target-Agent header, method is
+        # §10 delegation-chain gate. The header is reserved for v01;
+        # v00 implementations refuse with 501 Not Implemented before
+        # any other dispatch logic so the rejection cost is uniform
+        # across endpoints.
+        if wire.header(request, "Delegation-Chain"):
+            from core import status as _status
+            from core.wire import AGTPResponse as _Resp
+            import json as _json
+            body = _json.dumps({
+                "error": {
+                    "code": "delegation-not-supported",
+                    "message": (
+                        "the Delegation-Chain header is reserved for "
+                        "future AGTP revisions; this server (v00) does "
+                        "not support delegated authority. The header "
+                        "is documented in agtp §10 Future Work."
+                    ),
+                }
+            }, indent=2).encode("utf-8")
+            response = _Resp(
+                status_code=501,
+                status_text="Not Implemented",
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                },
+                body_bytes=body,
+            )
+            _finalize_response(response, request, config)
+            conn.sendall(response.serialize())
+            return
+
+        # §11 Forms 3 / 4: domain-anchored agent addressing. When the
+        # request path matches ``/agents/{name}``, the server looks
+        # the local name up against ``registry.agents`` (by the
+        # AgentDocument's ``name`` field) and resolves to the
+        # canonical Agent-ID. The path is then rewritten to ``/`` so
+        # downstream dispatch sees the effective resource path. If
+        # the request also carries an ``Agent-ID`` header that
+        # disagrees, the server refuses with 400
+        # ``agent-identity-mismatch``.
+        import re as _re
+        _FORM_3_4_RE = _re.compile(
+            r"^/agents/(?P<handle>[A-Za-z0-9][A-Za-z0-9._\-]*)$",
+        )
+        path_match = _FORM_3_4_RE.match(getattr(request, "path", "") or "")
+        if path_match:
+            handle = path_match.group("handle")
+            resolved = None
+            for doc in registry.agents.values():
+                if doc.name.lower() == handle.lower():
+                    resolved = doc
+                    break
+            if resolved is None:
+                resp = error_response(
+                    404,
+                    "Not Found",
+                    "agent-handle-not-found",
+                    f"no agent with name {handle!r} hosted at this server",
+                    extra={"handle": handle},
+                )
+                _finalize_response(resp, request, config)
+                conn.sendall(resp.serialize())
+                return
+            if target_header and target_header != resolved.agent_id:
+                resp = error_response(
+                    400,
+                    "Bad Request",
+                    "agent-identity-mismatch",
+                    (
+                        f"Agent-ID header {target_header!r} does not "
+                        f"match the agent resolved from path "
+                        f"/agents/{handle} ({resolved.agent_id!r})"
+                    ),
+                )
+                _finalize_response(resp, request, config)
+                conn.sendall(resp.serialize())
+                return
+            # Inject the resolved Agent-ID and rewrite the path so
+            # downstream dispatch follows the standard agent-targeting
+            # flow. The mutation is contained to this connection.
+            target_header = resolved.agent_id
+            request.headers["Agent-ID"] = resolved.agent_id
+            request.path = "/"
+
+        # Server-level DISCOVER: no Agent-ID header, method is
         # DISCOVER. Returns the Server Manifest. Does not require any
         # agent to advertise DISCOVER in its requires.methods.
+        #
+        # §7 anonymous-discovery gate: if the server's
+        # ``policies.anonymous_discovery`` is false and the request
+        # carries no agent identity, refuse with 262
+        # Authorization Required (type=anonymous-discovery-disabled).
+        # This is the dispatcher's authoritative enforcement of the
+        # config flag the manifest already advertises.
         if method_name == "DISCOVER" and not target_header:
+            agent_identity_header = wire.header(request, "Agent-Identity")
+            if (
+                not config.policy.anonymous_discovery
+                and not agent_identity_header
+            ):
+                from core import status as _status
+                response = _status.anonymous_discovery_disabled()
+                _finalize_response(response, request, config)
+                conn.sendall(response.serialize())
+                return
             response = serve_manifest(request, registry, config)
+            _finalize_response(response, request, config)
             conn.sendall(response.serialize())
             return
 
         agent_doc, target_err = _select_target(request, registry)
         if target_err is not None:
+            _finalize_response(target_err, request, config)
             conn.sendall(target_err.serialize())
             return
 
@@ -376,18 +716,20 @@ def handle_connection(
         if soft_deny_enabled and not via_synthesis:
             denial = soft_deny_check(method_name, agent_doc, config)
             if denial is not None:
+                _finalize_response(denial, request, config)
                 conn.sendall(denial.serialize())
                 return
 
         response = dispatch(request, registry, agent_doc, config=config)
+        _finalize_response(response, request, config)
         conn.sendall(response.serialize())
     except wire.WireFormatError as exc:
         try:
-            conn.sendall(
-                error_response(
-                    400, "Bad Request", "invalid-wire-format", str(exc)
-                ).serialize()
+            err_resp = error_response(
+                400, "Bad Request", "invalid-wire-format", str(exc),
             )
+            _finalize_response(err_resp, None, config)
+            conn.sendall(err_resp.serialize())
         except OSError:
             pass
     except OSError:
@@ -409,6 +751,7 @@ def run(
     config: Optional[ServerConfig] = None,
     *,
     soft_deny_enabled: bool = True,
+    endpoints_dir: Optional[Path] = None,
 ) -> None:
     registry = AgentRegistry(agents_dir)
     if not registry.agents:
@@ -419,20 +762,78 @@ def run(
 
     if config is None:
         config = default_config(host)
+    # The registry holds a config reference so the dispatcher and
+    # PROPOSE handler can read synthesis durations, audit-log
+    # routing, etc. without an extra plumbing argument.
+    registry.config = config
+    # Mirror the configured async-evaluation timeout into the
+    # ProposalStore so 261 responses carry the correct deadline
+    # bound and the sweep_expired pass uses the same value.
+    try:
+        from server.synthesis_duration import parse_duration
+        registry.proposal_store.max_evaluation_seconds = parse_duration(
+            config.synthesis.max_evaluation_duration
+        )
+    except (ValueError, AttributeError):  # pragma: no cover - defensive
+        pass
     if config.is_default:
         print(
             f"[server] no {CONFIG_FILENAME} found; using default manifest "
-            f"identity (issuer={config.server.issuer!r})",
+            f"identity (server_id={config.server.server_id!r})",
             file=sys.stderr,
         )
     else:
         print(
-            f"[server] manifest identity: {config.server.issuer} "
+            f"[server] manifest identity: {config.server.server_id} "
             f"(operator: {config.server.operator})"
         )
 
     # Configure the synthesis runtime per [synthesis] in the config.
     registry.configure_synthesis(config)
+
+    # Per-§6 the method policy lives in the config object under
+    # ``policies.methods``; no separate file to load.
+    registry.configure_methods_policy(config.policy.methods)
+    mp = config.policy.methods
+    print(
+        f"[server] method policy: "
+        f"allow={'*' if mp.allow_all else len(mp.allow)}, "
+        f"disallow={len(mp.disallow)}, "
+        f"legacy={len(mp.legacy)}, "
+        f"redirects={len(mp.redirects)}",
+        file=sys.stderr,
+    )
+
+    # Phase-2 endpoint registry. Resolved relative to the config's
+    # source path. ``--endpoints-dir`` overrides the default for
+    # ad-hoc deployments.
+    if endpoints_dir is None:
+        endpoints_dir = (
+            config.source_path.parent / DEFAULT_ENDPOINTS_DIR
+            if config.source_path is not None
+            else Path(DEFAULT_ENDPOINTS_DIR)
+        )
+    registry.configure_endpoints(endpoints_dir)
+
+    # Server-internal built-ins (DISCOVER /methods exposing the
+    # lightweight method+path inventory). Registered after operator
+    # TOML so an operator can override a built-in's (method, path) by
+    # declaring it themselves.
+    registry.register_builtins()
+
+    # Phase-6 catalog-evolution invalidation. If the catalog
+    # changed since the last boot and an in-memory synthesis
+    # references a removed verb, expire it cleanly here rather
+    # than failing mid-execution at first traffic.
+    if registry.synthesis_runtime is not None:
+        expired = registry.synthesis_runtime.invalidate_against_catalog()
+        if expired:
+            print(
+                f"[server] catalog-evolution invalidation expired "
+                f"{len(expired)} synthesis/syntheses referencing "
+                f"removed verbs",
+                file=sys.stderr,
+            )
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -543,6 +944,17 @@ def main() -> int:
             "deployments should leave this on."
         ),
     )
+    parser.add_argument(
+        "--endpoints-dir",
+        metavar="PATH",
+        help=(
+            f"Directory of *.toml endpoint declarations to load at "
+            f"startup. Defaults to ./{DEFAULT_ENDPOINTS_DIR} "
+            f"resolved relative to the config file (or cwd when no "
+            f"config is loaded). Pass an empty string or a path "
+            f"that doesn't exist to skip endpoint loading."
+        ),
+    )
     args = parser.parse_args()
 
     if args.port_pos is not None and args.port_flag is not None:
@@ -599,6 +1011,10 @@ def main() -> int:
         print(f"[server] config error: {exc}", file=sys.stderr)
         return 2
 
+    endpoints_path: Optional[Path] = None
+    if args.endpoints_dir is not None:
+        endpoints_path = normalize(args.endpoints_dir)
+
     run(
         args.host,
         port,
@@ -607,6 +1023,7 @@ def main() -> int:
         args.key,
         config=config,
         soft_deny_enabled=not args.no_soft_deny,
+        endpoints_dir=endpoints_path,
     )
     return 0
 

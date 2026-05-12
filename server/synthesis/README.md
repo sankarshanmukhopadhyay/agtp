@@ -53,7 +53,7 @@ outputs into one object), or `list` (ordered list of all step outputs).
 Starter recipes ship in [`server/agtp-recipes.toml`](../agtp-recipes.toml):
 
   * `EVALUATE` — `QUERY` then `SUMMARIZE` with output threading
-    (canonical AMG composition example).
+    (canonical composition example).
   * `AUDIT` — `QUERY` + `SUMMARIZE` with merge aggregation.
   * `INSPECT` — `DISCOVER` + `DESCRIBE` with list aggregation.
 
@@ -118,7 +118,7 @@ import SYNTHESES`) keep working.
 ## Future work
 
   * Capability-graph composition policy (auto-find compositions over
-    the AMG semantic block).
+    the semantic block).
   * LLM-driven composition policy.
   * Persistent syntheses surviving restart.
   * Synthesis promotion to the catalog (a useful synthesized method

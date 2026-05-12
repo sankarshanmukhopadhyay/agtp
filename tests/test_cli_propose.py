@@ -1,25 +1,15 @@
 """
-Tests for the interactive PROPOSE CLI flow (``client/cli/propose.py``)
-and the new flags it adds to ``client/cli/main.py``.
+Tests for the catalog-aware ``--propose`` flow in
+``client/cli/propose.py``.
 
-The flow has three entry shapes:
+Covers the endpoint editor:
 
-  * ``--propose --interactive``    walkthrough
-  * ``--propose -d '<json>'``      inline body
-  * ``--propose --params-file F``  JSON or YAML file
-
-Tests cover:
-
-  * argparse: --propose / --interactive parse correctly,
-    mutex with positional method, requirement of one of
-    -d / --params-file / --interactive, .yaml/.json extension
-    handling on --params-file.
-  * Non-interactive: valid -d, malformed JSON, validation
-    failure, successful compose.
-  * Interactive: mocked stdin scripts walk through the
-    prompts, edit-mode preserves defaults, save writes file.
-  * Response handling: 200 (synthesis), 422 negotiation-refused,
-    422 counter-proposal, counter-acceptance re-issues PROPOSE.
+  * Per-field validators (verb / path / intent / actor / capability
+    / param triple).
+  * Non-interactive submission (``-d`` and ``--params-file``).
+  * Interactive walkthrough (mocked stdin script).
+  * Response rendering for 200 / 422 negotiation-refused / 422
+    counter-proposal / 459 method-grammar-violation.
 """
 
 from __future__ import annotations
@@ -27,9 +17,10 @@ from __future__ import annotations
 import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -37,7 +28,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from client.cli import main as cli_main
 from client.cli import propose as cli_propose
-from client.amg import AMGMethodSpec, compose_method
 from client.core_client import FetchResult
 
 
@@ -46,11 +36,7 @@ from client.core_client import FetchResult
 # ---------------------------------------------------------------------------
 
 
-FIXTURES = REPO_ROOT / "tests" / "fixtures" / "amg"
-
-
 def _make_args(**overrides) -> Any:
-    """Minimal namespace mirroring argparse output for the propose flow."""
     base = dict(
         uri="agtp://abc123",
         method=None,
@@ -59,6 +45,7 @@ def _make_args(**overrides) -> Any:
         params_file=None,
         propose=True,
         interactive=False,
+        grammar_check=False,
         json=False,
         yaml=False,
         html=False,
@@ -91,32 +78,88 @@ def _ok_result(parsed: Dict[str, Any], status: int = 200) -> FetchResult:
 
 
 def _interactive_inputs() -> List[str]:
-    """Default valid input script for the interactive walkthrough.
-
-    Object/array params would require a JSON Schema (which the
-    walkthrough does not yet prompt for); we use scalar types
-    throughout so the composition succeeds at preview time.
-    """
+    """Default valid input script for the walkthrough."""
     return [
-        "EVALUATE",                                      # name
-        "Evaluates the input against a declared ruleset",   # intent
-        "agent",                                          # actor
-        "A structured assessment with pass/fail per rule is returned",  # outcome
-        "analysis",                                       # capability
-        "0.85",                                           # confidence
-        "informational",                                  # impact tier
-        "y",                                              # idempotent
-        "input:string:The data to evaluate",              # required param 1
-        "ruleset:string:Identifier of the ruleset",       # required param 2
-        "",                                               # end required
-        "",                                               # no optional
-        "acme-quality",                                   # namespace
-        "",                                               # no substitutes_for
+        "RECONCILE",                                       # verb
+        "/orders/{order_id}",                              # path
+        "Reconciles transactions for the named account",   # intent
+        "agent",                                           # actor
+        "A reconciliation summary listing matched and unmatched entries is returned",  # outcome
+        "analysis",                                        # capability
+        "account_id:string:the ledger account",            # required #1
+        "period:string:time window like 2026-Q1",          # required #2
+        "",                                                # end required
+        "tolerance:number:rounding tolerance",             # optional #1
+        "",                                                # end optional
+        "acme-finance",                                    # namespace
     ]
 
 
 # ===========================================================================
-# Argparse
+# Per-field validators
+# ===========================================================================
+
+
+class FieldValidatorTests(unittest.TestCase):
+
+    def test_verb_in_catalog_passes(self):
+        self.assertTrue(cli_propose._check_verb("RECONCILE").ok)
+        self.assertTrue(cli_propose._check_verb("query").ok)  # case-insensitive
+
+    def test_verb_not_in_catalog_fails_with_suggestions(self):
+        out = cli_propose._check_verb("PROPOSEX")
+        self.assertFalse(out.ok)
+        self.assertIn("PROPOSE", out.suggestions)
+
+    def test_legacy_verb_fails_with_preferred_first(self):
+        out = cli_propose._check_verb("GET")
+        self.assertFalse(out.ok)
+        # find_close_matches surfaces the legacy preferred replacement first.
+        self.assertIn("FETCH", out.suggestions)
+
+    def test_path_root_is_valid(self):
+        self.assertTrue(cli_propose._check_path("/").ok)
+
+    def test_path_simple_is_valid(self):
+        self.assertTrue(cli_propose._check_path("/orders").ok)
+
+    def test_path_with_trailing_slash_fails(self):
+        self.assertFalse(cli_propose._check_path("/orders/").ok)
+
+    def test_path_with_verb_token_fails(self):
+        self.assertFalse(cli_propose._check_path("/fetch/x").ok)
+
+    def test_path_empty_is_optional(self):
+        # Empty path is allowed — paths are optional in the editor.
+        self.assertTrue(cli_propose._check_path("").ok)
+
+    def test_intent_too_short_fails(self):
+        self.assertFalse(cli_propose._check_intent("short").ok)
+
+    def test_actor_freeform_accepted(self):
+        # Per agtp-api §6, ``actor`` is a free-form identifier — only
+        # the empty string is rejected. Values outside the suggested
+        # vocabulary (``agent`` / ``human`` / ``system`` / etc.) pass.
+        self.assertTrue(cli_propose._check_actor("agent").ok)
+        self.assertTrue(cli_propose._check_actor("merchant").ok)
+        self.assertTrue(cli_propose._check_actor("robot").ok)
+        self.assertFalse(cli_propose._check_actor("").ok)
+        self.assertFalse(cli_propose._check_actor("   ").ok)
+
+    def test_capability_optional(self):
+        self.assertTrue(cli_propose._check_capability("").ok)
+        self.assertTrue(cli_propose._check_capability("analysis").ok)
+        self.assertFalse(cli_propose._check_capability("bogus").ok)
+
+    def test_param_triple_validates_shape(self):
+        self.assertFalse(cli_propose._check_param_triple("name").ok)
+        self.assertFalse(cli_propose._check_param_triple("Name:string:desc").ok)
+        self.assertFalse(cli_propose._check_param_triple("name:bogus:desc").ok)
+        self.assertTrue(cli_propose._check_param_triple("name:string:desc").ok)
+
+
+# ===========================================================================
+# Argparse + dispatch
 # ===========================================================================
 
 
@@ -129,150 +172,91 @@ class ArgparseTests(unittest.TestCase):
         ns = self.parser.parse_args(["agtp://abc", "--propose", "-i"])
         self.assertTrue(ns.propose)
         self.assertTrue(ns.interactive)
-        self.assertIsNone(ns.method)
 
-    def test_propose_with_data(self):
+    def test_propose_with_data_parses(self):
         ns = self.parser.parse_args([
             "agtp://abc", "--propose", "-d", '{"name":"X"}',
         ])
-        self.assertTrue(ns.propose)
         self.assertEqual(ns.data, '{"name":"X"}')
 
-    def test_propose_with_yaml_params_file(self):
-        ns = self.parser.parse_args([
-            "agtp://abc", "--propose",
-            "--params-file", "fixture.yaml",
-        ])
-        self.assertTrue(ns.propose)
-        self.assertEqual(ns.params_file, Path("fixture.yaml"))
-
-    def test_propose_with_positional_method_is_rejected_at_run(self):
-        # Argparse accepts the combo; main.run rejects it.
-        ns = self.parser.parse_args([
-            "agtp://abc", "QUERY", "--propose", "-i",
-        ])
-        rc = cli_main.run(ns)
-        self.assertEqual(rc, 2)
-
-    def test_propose_without_input_source_is_rejected(self):
+    def test_propose_without_input_source_rejected(self):
         ns = self.parser.parse_args(["agtp://abc", "--propose"])
         rc = cli_main.run(ns)
         self.assertEqual(rc, 2)
 
-    def test_interactive_without_propose_is_rejected(self):
-        ns = self.parser.parse_args(["agtp://abc", "-i"])
+    def test_propose_with_positional_method_rejected(self):
+        ns = self.parser.parse_args(["agtp://abc", "QUERY", "--propose", "-i"])
         rc = cli_main.run(ns)
         self.assertEqual(rc, 2)
 
 
 # ===========================================================================
-# Non-interactive PROPOSE
+# Non-interactive submission
 # ===========================================================================
 
 
 class NonInteractiveProposeTests(unittest.TestCase):
 
-    def test_inline_data_ok(self):
+    def test_inline_data_with_approved_verb_submits(self):
         body = {
-            "name": "EVALUATE",
-            "semantic": {
-                "intent": "Evaluates the input against a declared ruleset",
-                "actor": "agent",
-                "outcome": "A structured assessment per rule is returned",
-                "capability": "analysis",
-                "confidence_guidance": 0.8,
-                "impact_tier": "informational",
-                "is_idempotent": True,
-            },
-            "description": "Run a ruleset against the input and report.",
-            "category": "transact",
-            "required_params": [
-                {"name": "input", "type": "object",
-                 "description": "data to evaluate",
-                 "schema": {"type": "object"}},
-                {"name": "ruleset", "type": "string",
-                 "description": "ruleset id"},
-            ],
-            "error_codes": [400, 422],
-            "source": "amg/1.0",
-            "namespace": "acme-quality",
+            "name": "RECONCILE",
+            "parameters": {"account_id": "string"},
+            "outcome": "A reconciliation summary is returned",
         }
         args = _make_args(data=json.dumps(body))
-        out = io.StringIO()
         with mock.patch.object(
             cli_propose.core_client, "invoke_method",
             return_value=_ok_result({
-                "synthesis": {
-                    "synthesis_id": "S-123",
-                    "target_method": "QUERY",
-                    "parameter_mapping": {"input": "q"},
-                }
+                "synthesis": {"synthesis_id": "S-1", "target_method": "QUERY"}
             }),
         ) as mocked:
-            rc = cli_propose.run_propose(args, out=out)
-        self.assertEqual(rc, 0, msg=out.getvalue())
-        self.assertEqual(mocked.call_count, 1)
-        self.assertIn("Synthesis", out.getvalue())
+            rc = cli_propose.run_propose(args, out=io.StringIO())
+        self.assertEqual(rc, 0)
+        self.assertEqual(mocked.call_args.args[1], "PROPOSE")
 
-    def test_inline_data_invalid_json(self):
-        args = _make_args(data="{not json}")
-        rc = cli_propose.run_propose(args, out=io.StringIO())
-        self.assertEqual(rc, 2)
-
-    def test_inline_data_local_validation_refusal(self):
-        # lowercase name fails Pass 1 -> CompositionError before the wire.
+    def test_inline_data_with_unknown_verb_refused_locally(self):
         body = {
-            "name": "evaluate",
-            "semantic": {
-                "intent": "Evaluates the input against a declared ruleset",
-                "actor": "agent",
-                "outcome": "A structured assessment is returned",
-            },
-            "description": "Run a ruleset against the input and report.",
-            "category": "transact",
-            "required_params": [
-                {"name": "input", "type": "string", "description": "x"},
-            ],
-            "error_codes": [400, 422],
-            "source": "amg/1.0",
-            "namespace": "acme-quality",
+            "name": "FROBNICATE",
+            "parameters": {},
+            "outcome": "x",
         }
         args = _make_args(data=json.dumps(body))
         with mock.patch.object(
-            cli_propose.core_client, "invoke_method"
+            cli_propose.core_client, "invoke_method",
+        ) as mocked:
+            rc = cli_propose.run_propose(args, out=io.StringIO())
+        self.assertEqual(rc, 1)
+        # The local catalog gate refused before any wire call.
+        mocked.assert_not_called()
+
+    def test_inline_data_with_bad_path_refused_locally(self):
+        body = {
+            "name": "RECONCILE",
+            "path": "/fetch/x",  # verb-in-path
+            "parameters": {},
+            "outcome": "x",
+        }
+        args = _make_args(data=json.dumps(body))
+        with mock.patch.object(
+            cli_propose.core_client, "invoke_method",
         ) as mocked:
             rc = cli_propose.run_propose(args, out=io.StringIO())
         self.assertEqual(rc, 1)
         mocked.assert_not_called()
 
-    def test_params_file_yaml(self):
-        args = _make_args(params_file=FIXTURES / "reconcile_propose.method.yaml")
-        out = io.StringIO()
-        with mock.patch.object(
-            cli_propose.core_client, "invoke_method",
-            return_value=_ok_result({
-                "synthesis": {
-                    "synthesis_id": "S-y1",
-                    "target_method": "QUERY",
-                }
-            }),
-        ) as mocked:
-            rc = cli_propose.run_propose(args, out=out)
-        self.assertEqual(rc, 0, msg=out.getvalue())
-        self.assertEqual(mocked.call_count, 1)
-        # Ensure the body posted contains the AMG semantic block.
-        sent_body = mocked.call_args.kwargs["body"]
-        self.assertEqual(sent_body["name"], "RECONCILE")
-        self.assertIn("semantic", sent_body)
+    def test_malformed_inline_json_returns_2(self):
+        args = _make_args(data="{not json}")
+        rc = cli_propose.run_propose(args, out=io.StringIO())
+        self.assertEqual(rc, 2)
 
-    def test_params_file_missing(self):
+    def test_missing_params_file_returns_2(self):
         args = _make_args(params_file=Path("/no/such/file.json"))
         rc = cli_propose.run_propose(args, out=io.StringIO())
         self.assertEqual(rc, 2)
 
 
 # ===========================================================================
-# Interactive PROPOSE
+# Interactive walkthrough
 # ===========================================================================
 
 
@@ -280,106 +264,67 @@ class InteractiveProposeTests(unittest.TestCase):
 
     def test_walkthrough_happy_path_submits(self):
         args = _make_args(interactive=True)
-        out = io.StringIO()
-        scripted = _interactive_inputs() + ["y"]   # confirm submission
+        scripted = _interactive_inputs() + ["y"]   # confirm
         with mock.patch("builtins.input", side_effect=scripted), \
              mock.patch.object(
                 cli_propose.core_client, "invoke_method",
                 return_value=_ok_result({
-                    "synthesis": {
-                        "synthesis_id": "S-int",
-                        "target_method": "QUERY",
-                    }
+                    "synthesis": {"synthesis_id": "S-int"}
                 }),
             ) as mocked:
-            rc = cli_propose.run_propose(args, out=out)
-        self.assertEqual(rc, 0, msg=out.getvalue())
-        self.assertEqual(mocked.call_count, 1)
+            rc = cli_propose.run_propose(args, out=io.StringIO())
+        self.assertEqual(rc, 0)
+        sent_body = mocked.call_args.kwargs["body"]
+        self.assertEqual(sent_body["name"], "RECONCILE")
+        self.assertEqual(sent_body["path"], "/orders/{order_id}")
+        self.assertIn("semantic", sent_body)
+        self.assertEqual(sent_body["semantic"]["actor"], "agent")
 
-    def test_walkthrough_invalid_then_valid_name_retries(self):
+    def test_walkthrough_invalid_then_valid_verb_retries(self):
         args = _make_args(interactive=True)
-        out = io.StringIO()
         scripted = (
-            ["evaluate"]                       # invalid (lowercase)
+            ["FROBNICATE"]                  # invalid (not in catalog)
             + _interactive_inputs()
             + ["y"]
         )
         with mock.patch("builtins.input", side_effect=scripted), \
              mock.patch.object(
                 cli_propose.core_client, "invoke_method",
-                return_value=_ok_result({
-                    "synthesis": {"synthesis_id": "S-1"},
-                }),
+                return_value=_ok_result({"synthesis": {"synthesis_id": "S-r"}}),
             ):
-            rc = cli_propose.run_propose(args, out=out)
-        self.assertEqual(rc, 0, msg=out.getvalue())
-        # The validator's lowercase suggestion should have surfaced.
-        self.assertIn("EVALUATE", out.getvalue())
+            rc = cli_propose.run_propose(args, out=io.StringIO())
+        self.assertEqual(rc, 0)
 
     def test_walkthrough_decline_does_not_submit(self):
         args = _make_args(interactive=True)
         scripted = _interactive_inputs() + ["n"]   # decline
         with mock.patch("builtins.input", side_effect=scripted), \
              mock.patch.object(
-                cli_propose.core_client, "invoke_method"
+                cli_propose.core_client, "invoke_method",
             ) as mocked:
             rc = cli_propose.run_propose(args, out=io.StringIO())
         self.assertEqual(rc, 1)
         mocked.assert_not_called()
 
     def test_walkthrough_save_writes_yaml(self):
+        try:
+            import yaml  # noqa: F401
+        except ImportError:
+            self.skipTest("pyyaml not installed")
         args = _make_args(interactive=True)
-        with mock.patch.object(
-            cli_propose.core_client, "invoke_method"
-        ) as mocked:
-            import tempfile
-            with tempfile.TemporaryDirectory() as tmp:
-                target = Path(tmp) / "evaluate.method.yaml"
-                scripted = (
-                    _interactive_inputs()
-                    + ["s", str(target)]   # save then path
-                )
-                with mock.patch("builtins.input", side_effect=scripted):
-                    try:
-                        import yaml  # noqa: F401
-                        rc = cli_propose.run_propose(args, out=io.StringIO())
-                    except ImportError:
-                        self.skipTest("pyyaml not installed")
-                self.assertEqual(rc, 1)   # save returns 1 (no submit)
-                self.assertTrue(target.exists())
-                text = target.read_text(encoding="utf-8")
-                self.assertIn("EVALUATE", text)
-                self.assertIn("intent:", text)
-        mocked.assert_not_called()
-
-    def test_walkthrough_edit_mode_preserves_defaults(self):
-        args = _make_args(interactive=True)
-        out = io.StringIO()
-        # First pass: full inputs. Then user picks 'e' to edit. Edit
-        # round: press Enter (accept defaults) for every prompt.
-        scripted = (
-            _interactive_inputs()
-            + ["e"]                          # edit
-            + [""] * 8                       # name, intent, actor, outcome,
-                                             # capability, confidence,
-                                             # impact_tier, idempotent
-            + [""]                           # required params (keep prior)
-            + [""]                           # optional params (keep prior)
-            + [""]                           # namespace
-            + [""]                           # substitutes_for
-            + ["y"]                          # confirm
-        )
-        with mock.patch("builtins.input", side_effect=scripted), \
-             mock.patch.object(
-                cli_propose.core_client, "invoke_method",
-                return_value=_ok_result({"synthesis": {"synthesis_id": "S-e"}}),
-            ) as mocked:
-            rc = cli_propose.run_propose(args, out=out)
-        self.assertEqual(rc, 0, msg=out.getvalue())
-        sent_body = mocked.call_args.kwargs["body"]
-        self.assertEqual(sent_body["name"], "EVALUATE")
-        # Required params from first pass survived edit-mode default-keep.
-        self.assertEqual(len(sent_body["required_params"]), 2)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "reconcile.endpoint.yaml"
+            scripted = _interactive_inputs() + ["s", str(target)]
+            with mock.patch("builtins.input", side_effect=scripted), \
+                 mock.patch.object(
+                    cli_propose.core_client, "invoke_method",
+                ) as mocked:
+                rc = cli_propose.run_propose(args, out=io.StringIO())
+            self.assertEqual(rc, 1)  # save → no submit
+            self.assertTrue(target.exists())
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("RECONCILE", text)
+            mocked.assert_not_called()
 
 
 # ===========================================================================
@@ -387,103 +332,52 @@ class InteractiveProposeTests(unittest.TestCase):
 # ===========================================================================
 
 
-class ResponseRenderTests(unittest.TestCase):
+class ResponseRenderingTests(unittest.TestCase):
 
-    def _spec(self) -> AMGMethodSpec:
-        return compose_method(
-            "EVALUATE",
-            intent="Evaluates the input against a declared ruleset",
+    def _draft(self):
+        return cli_propose._Draft(
+            verb="RECONCILE",
+            path="/orders",
+            intent="reconciles orders against the ledger",
             actor="agent",
-            outcome="A structured assessment with pass/fail per rule is returned",
+            outcome="A reconciliation summary is returned",
             capability="analysis",
-            confidence_guidance=0.85,
-            impact_tier="informational",
-            is_idempotent=True,
-            namespace="acme-quality",
-            required_params=[
-                {"name": "ruleset", "type": "string",
-                 "description": "ruleset id"},
-            ],
         )
 
-    def test_200_renders_synthesis(self):
+    def test_200_renders_synthesis_id(self):
         out = io.StringIO()
         rc = cli_propose._render_propose_response(
             _ok_result({
-                "synthesis": {
-                    "synthesis_id": "S-7",
-                    "target_method": "QUERY",
-                    "parameter_mapping": {"input": "q"},
-                }
+                "synthesis": {"synthesis_id": "S-7", "target_method": "QUERY"}
             }, status=200),
             "agtp://abc",
-            spec=self._spec(),
+            draft=self._draft(),
             out=out,
         )
         self.assertEqual(rc, 0)
-        text = out.getvalue()
-        self.assertIn("S-7", text)
-        self.assertIn("QUERY", text)
-        # Mapping reads "QUERY -> q mapped from 'input'" (target param
-        # filled FROM proposal param). Sanity-check both halves appear
-        # in the right order on a single line.
-        mapping_line = next(
-            (ln for ln in text.splitlines() if "mapped from" in ln), ""
-        )
-        self.assertIn("q", mapping_line)
-        self.assertIn("'input'", mapping_line)
-        self.assertLess(mapping_line.index("q"), mapping_line.index("'input'"))
+        self.assertIn("S-7", out.getvalue())
 
-    def test_422_counter_renders_differences(self):
-        out = io.StringIO()
-        with mock.patch("builtins.input", return_value="n"):
-            cli_propose._render_propose_response(
-                _ok_result({
-                    "counter_proposal": {
-                        "name": "ASSESS",
-                        "description": "ASSESS is canonical",
-                        "required_params": [
-                            {"name": "ruleset", "type": "string",
-                             "description": "ruleset id"},
-                        ],
-                        "idempotent": True,
-                    }
-                }, status=422),
-                "agtp://abc",
-                spec=self._spec(),
-                out=out,
-            )
-        text = out.getvalue()
-        self.assertIn("Differences:", text)
-        self.assertIn("EVALUATE", text)
-        self.assertIn("ASSESS", text)
-
-    def test_422_renders_refusal(self):
-        # PROPOSE refusal now rides 422 with error.code='negotiation-refused'.
+    def test_422_negotiation_refused_renders(self):
         out = io.StringIO()
         rc = cli_propose._render_propose_response(
             _ok_result({
                 "error": {
                     "code": "negotiation-refused",
-                    "reason": "ambiguous",
-                    "explanation": "intent overlaps with QUERY",
+                    "reason": "out_of_scope",
+                    "explanation": "no close match for ZBLARGON",
                 }
             }, status=422),
             "agtp://abc",
-            spec=self._spec(),
+            draft=self._draft(),
             out=out,
         )
         self.assertEqual(rc, 1)
-        text = out.getvalue()
-        self.assertIn("ambiguous", text)
+        self.assertIn("out_of_scope", out.getvalue())
 
-    def test_422_counter_accept_reproposes(self):
-        # Counter-acceptance issues a second PROPOSE under the
-        # suggested name, not a method invocation: the user is
-        # composing, so they have a spec but no parameter values.
+    def test_422_counter_proposal_accepts_reproposes(self):
         out = io.StringIO()
         synth_response = _ok_result(
-            {"synthesis": {"synthesis_id": "S-c1", "target_method": "QUERY"}},
+            {"synthesis": {"synthesis_id": "S-c", "target_method": "QUERY"}},
             status=200,
         )
         with mock.patch("builtins.input", return_value="y"), \
@@ -495,80 +389,34 @@ class ResponseRenderTests(unittest.TestCase):
                 _ok_result({
                     "counter_proposal": {
                         "name": "ASSESS",
-                        "description": "ASSESS is the canonical verb here",
+                        "description": "ASSESS is canonical",
                     }
                 }, status=422),
                 "agtp://abc",
-                spec=self._spec(),
+                draft=self._draft(),
                 out=out,
             )
-        self.assertEqual(rc, 0, msg=out.getvalue())
-        self.assertEqual(mocked.call_count, 1)
-        # Second call is a PROPOSE carrying the suggested name in the body.
-        self.assertEqual(mocked.call_args.args[1], "PROPOSE")
+        self.assertEqual(rc, 0)
         self.assertEqual(mocked.call_args.kwargs["body"]["name"], "ASSESS")
 
-    def test_422_counter_decline_returns_1(self):
+    def test_459_renders_suggestions(self):
         out = io.StringIO()
-        with mock.patch("builtins.input", return_value="n"), \
-             mock.patch.object(
-                cli_propose.core_client, "invoke_method"
-            ) as mocked:
-            rc = cli_propose._render_propose_response(
-                _ok_result({
-                    "counter_proposal": {"name": "QUERY", "description": "x"}
-                }, status=422),
-                "agtp://abc",
-                spec=self._spec(),
-                out=out,
-            )
+        rc = cli_propose._render_propose_response(
+            _ok_result({
+                "error": {
+                    "code": "method-grammar-violation",
+                    "method": "FROBNICATE",
+                    "message": "'FROBNICATE' is not a recognized AGTP verb.",
+                    "suggestions": ["FETCH"],
+                }
+            }, status=459),
+            "agtp://abc",
+            draft=self._draft(),
+            out=out,
+        )
         self.assertEqual(rc, 1)
-        mocked.assert_not_called()
-
-
-# ===========================================================================
-# Per-field validators
-# ===========================================================================
-
-
-class FieldValidatorTests(unittest.TestCase):
-
-    def test_check_name_lowercase_suggests_uppercase(self):
-        outcome = cli_propose._check_name("evaluate")
-        self.assertFalse(outcome.ok)
-        self.assertTrue(any("EVALUATE" in s for s in outcome.suggestions))
-
-    def test_check_name_http_method_rejected(self):
-        outcome = cli_propose._check_name("GET")
-        self.assertFalse(outcome.ok)
-        self.assertIn("HTTP", outcome.message or "")
-
-    def test_check_name_stoplist_rejected(self):
-        outcome = cli_propose._check_name("STATUS")
-        self.assertFalse(outcome.ok)
-
-    def test_check_name_valid_passes(self):
-        self.assertTrue(cli_propose._check_name("RECONCILE").ok)
-
-    def test_check_intent_too_short(self):
-        outcome = cli_propose._check_intent("short")
-        self.assertFalse(outcome.ok)
-
-    def test_check_actor_invalid(self):
-        self.assertFalse(cli_propose._check_actor("robot").ok)
-        self.assertTrue(cli_propose._check_actor("agent").ok)
-
-    def test_check_confidence_range(self):
-        self.assertFalse(cli_propose._check_confidence("1.5").ok)
-        self.assertFalse(cli_propose._check_confidence("not a number").ok)
-        self.assertTrue(cli_propose._check_confidence("0.7").ok)
-        self.assertTrue(cli_propose._check_confidence("").ok)
-
-    def test_check_param_triple(self):
-        self.assertFalse(cli_propose._check_param_triple("name").ok)
-        self.assertFalse(cli_propose._check_param_triple("Name:string:desc").ok)
-        self.assertFalse(cli_propose._check_param_triple("name:bogus:desc").ok)
-        self.assertTrue(cli_propose._check_param_triple("name:string:desc").ok)
+        self.assertIn("459", out.getvalue())
+        self.assertIn("FETCH", out.getvalue())
 
 
 if __name__ == "__main__":

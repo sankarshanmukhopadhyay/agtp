@@ -5,15 +5,48 @@
 # scenarios produce stable, recognizable output.
 
 [server]
-issuer       = "agents.agtp.io"
-operator     = "AGTP demo runner"
-contact      = "help@agtp.io"
-amg_version  = "1.0"
+server_id = "agents.agtp.io"
+operator  = "AGTP demo runner"
+contact   = "help@agtp.io"
+# domain  = "agents.agtp.io"     # optional: distinct operational host
 
-[policy]
+[policies]
 wildcards_accepted             = true
 anonymous_discovery            = true
 scope_required_for_invocation  = true
+synthesis_enabled              = true
+max_synthesis_depth            = 10
+
+# Per-server method policy (agtp-api §8). Replaces the pre-§6
+# methods.txt file. The demo's defaults are permissive: every
+# approved AGTP method is admitted. Production deployments
+# typically list specific methods and opt out of legacy verbs:
+#
+#   [policies.methods]
+#   allow  = ["QUERY", "DISCOVER", "RECONCILE", "AUDIT", "EVALUATE"]
+#   legacy = "NONE"
+#
+# Servers that bridge HTTP-style traffic during a migration may opt
+# into specific legacy HTTP verbs and redirect them to canonical
+# AGTP methods:
+#
+#   [policies.methods]
+#   allow  = "*"
+#   legacy = ["GET", "POST"]
+#
+#   [[policies.methods.redirects]]
+#   from_method = "GET"
+#   from_path   = "/orders"
+#   to_method   = "FETCH"
+#   to_path     = "/orders"
+#
+#   [[policies.methods.redirects]]
+#   from_method = "POST"
+#   from_path   = "/orders"
+#   to_method   = "CREATE"
+#   to_path     = "/orders"
+[policies.methods]
+allow = "*"
 
 [agents]
 disclosure = "public"
@@ -24,9 +57,42 @@ disclosure = "public"
 # automatically becomes a one-step identity plan. Custom policies
 # (graph, llm, etc.) can be registered by deployments that need
 # smarter composition.
+#
+# §7 duration fields control how long an accepted synthesis lives:
+#   - session_duration:            TTL for non-persistent syntheses.
+#   - persistent_default_duration: granted when an agent requests
+#                                  persistent=true without naming a
+#                                  duration.
+#   - persistent_max_duration:     hard cap for persistent requests.
+#
+# §7 async PROPOSE: when async_evaluation_enabled = true the server
+# returns 261 Negotiation In Progress with a proposal_id; agents
+# poll QUERY /proposals with {"proposal_id": "..."} to retrieve the
+# final outcome. Default false (every PROPOSE resolves synchronously).
 [synthesis]
-policies     = ["recipes"]
-recipes_file = "agtp-recipes.toml"
+policies                     = ["recipes"]
+recipes_file                 = "agtp-recipes.toml"
+session_duration             = "24h"
+persistent_default_duration  = "7d"
+persistent_max_duration      = "30d"
+async_evaluation_enabled     = false
+max_evaluation_duration      = "10m"
+
+# §7 audit log. ``path = "stderr"`` (default) writes JSONL to stderr;
+# any other string is a filesystem path; ``"none"`` disables logging.
+# Each PROPOSE outcome (accepted / rejected / pending / malformed)
+# produces one line with timestamp, agent_id, proposal_hash,
+# decision, and (when relevant) synthesis_id / proposal_id / reason.
+#
+# §10 attribution_records_enabled: when true, every response carries
+# an ``Attribution-Record`` header containing a JSON-encoded
+# attestation of the response's origin (server_id + timestamp +
+# status + signature). The v00 signature is a placeholder; a future
+# revision replaces it with a JWS compact serialization once §5
+# manifest signing lands. Default false.
+[audit]
+path                         = "stderr"
+attribution_records_enabled  = false
 
 # APIs: resource-scoped endpoints the workplace exposes. Servers with
 # multi-resource architectures populate this. Each entry lists the
@@ -44,13 +110,13 @@ description = "Free-form notes; QUERY for retrieval, SUMMARIZE for digest."
 # Hosted protocols: non-AGTP applications this server bridges. The
 # elemen browser surfaces these as tabs (MCP gets a tool-catalog view;
 # OpenAPI / GraphQL get stub tabs pending future work).
-[[hosts_protocols]]
+[[hosted_protocols]]
 protocol = "mcp"
 version  = "0.1"
 endpoint = "https://mcp.agtp.io"
 catalog  = "https://mcp.agtp.io/.well-known/mcp/tools.json"
 
-[[hosts_protocols]]
+[[hosted_protocols]]
 protocol = "openapi"
 version  = "3.1"
 endpoint = "https://api.agtp.io"

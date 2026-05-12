@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Protocol
 
-from server.amg.grammar import AMGMethodSpec
+from core.endpoint import EndpointSpec
 from server.synthesis.plan import (
     CompositionStep,
     ParameterSource,
@@ -38,8 +38,8 @@ class CompositionPolicy(Protocol):
 
     def can_fulfill(
         self,
-        proposal: AMGMethodSpec,
-        available_methods: List[AMGMethodSpec],
+        proposal: EndpointSpec,
+        available_methods: List[EndpointSpec],
     ) -> bool:
         """
         Quick check: can this policy plausibly fulfill the proposal?
@@ -50,8 +50,8 @@ class CompositionPolicy(Protocol):
 
     def compose(
         self,
-        proposal: AMGMethodSpec,
-        available_methods: List[AMGMethodSpec],
+        proposal: EndpointSpec,
+        available_methods: List[EndpointSpec],
     ) -> Optional[SynthesisPlan]:
         """
         Build a synthesis plan, or return None if no composition is
@@ -79,16 +79,16 @@ class PassthroughPolicy:
 
     def can_fulfill(
         self,
-        proposal: AMGMethodSpec,
-        available_methods: List[AMGMethodSpec],
+        proposal: EndpointSpec,
+        available_methods: List[EndpointSpec],
     ) -> bool:
         names = {m.name for m in available_methods}
         return proposal.name in names
 
     def compose(
         self,
-        proposal: AMGMethodSpec,
-        available_methods: List[AMGMethodSpec],
+        proposal: EndpointSpec,
+        available_methods: List[EndpointSpec],
     ) -> Optional[SynthesisPlan]:
         target = next(
             (m for m in available_methods if m.name == proposal.name), None

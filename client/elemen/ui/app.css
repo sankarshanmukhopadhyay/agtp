@@ -624,8 +624,7 @@ button.section-head:hover { background: var(--panel-3); }
 .badge.cat-other     { background: var(--panel-3); color: var(--text-dim); }
 
 .badge.src-agtp      { background: rgba(106, 166, 255, 0.10); color: var(--accent); }
-.badge.src-amg       { background: rgba(230, 181, 106, 0.16); color: #f0c98e; }
-.badge.src-experimental { background: rgba(239, 90, 90, 0.16); color: var(--err); }
+.badge.src-custom    { background: rgba(230, 181, 106, 0.16); color: #f0c98e; }
 
 .badge.idemp { background: rgba(87, 201, 122, 0.14); color: var(--ok); }
 .badge.muts  { background: rgba(224, 163, 90, 0.16); color: var(--warn); }
@@ -2031,6 +2030,79 @@ button.section-head:hover { background: var(--panel-3); }
   text-decoration: underline;
 }
 
+/* Verb-name autocomplete dropdown — anchored under the name input.
+   Catalog-driven (core/methods.json), filtered by typed prefix. */
+.compose-field { position: relative; }
+.compose-autocomplete {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  margin-top: 2px;
+}
+.compose-autocomplete.hidden { display: none; }
+.compose-autocomplete-row {
+  display: grid;
+  grid-template-columns: minmax(110px, max-content) max-content 1fr;
+  gap: 10px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  align-items: baseline;
+  border-bottom: 1px solid var(--panel-3);
+}
+.compose-autocomplete-row:last-child { border-bottom: none; }
+.compose-autocomplete-row:hover,
+.compose-autocomplete-row.active {
+  background: var(--panel-3);
+}
+.compose-autocomplete-row .ac-name {
+  font-family: var(--mono);
+  color: var(--accent);
+  font-weight: 600;
+}
+.compose-autocomplete-row .ac-cat {
+  font-size: 10px;
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 6px;
+  color: var(--text-faint);
+  text-transform: lowercase;
+}
+.compose-autocomplete-row .ac-desc {
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Phase-6: deprecated verbs render with italic name + a small
+   "deprecated" pill so the migration prompt is visible at author
+   time. Hovering surfaces the full "deprecated in / successor /
+   removed_in" detail via the row's title attribute. */
+.compose-autocomplete-row.deprecated .ac-name {
+  font-style: italic;
+  color: var(--warn);
+}
+.compose-autocomplete-row.deprecated .ac-deprecated {
+  font-size: 9.5px;
+  background: rgba(224, 163, 90, 0.18);
+  border: 1px solid var(--warn);
+  border-radius: 3px;
+  padding: 0 5px;
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .compose-radios {
   display: flex;
   gap: 14px;
@@ -2174,33 +2246,6 @@ button.section-head:hover { background: var(--panel-3); }
   background: rgba(106, 166, 255, 0.15);
   border-color: var(--accent);
   color: var(--accent);
-}
-
-.compose-subs {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.compose-sub-row {
-  display: grid;
-  grid-template-columns: 140px 1fr 24px;
-  gap: 6px;
-  align-items: center;
-}
-.compose-sub-row input {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 4px 6px;
-  font-size: 11.5px;
-  font-family: var(--mono);
-  color: var(--text);
-}
-.compose-sub-del {
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  cursor: pointer;
 }
 
 .compose-warnings {
@@ -2438,4 +2483,89 @@ button.section-head:hover { background: var(--panel-3); }
   font-size: 11px;
   color: var(--text-dim);
   margin-right: 6px;
+}
+
+/* ============================================================
+   Active syntheses panel — populated by the Compose drawer's
+   accept handler. Sits at the bottom of the Server Overview's
+   Methods section, surfacing one pill per active synthesis with
+   an inline Try-It form that fires through the synthesis runtime.
+   ============================================================ */
+
+.active-syntheses-panel {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.active-syntheses-head {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin: 0 0 8px 0;
+  font-weight: 600;
+}
+.active-syntheses-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.synthesis-pill {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+.synthesis-pill-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.synthesis-pill-title {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.synthesis-pill-id {
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.synthesis-pill-plan {
+  background: rgba(106, 166, 255, 0.10);
+  border: 1px solid rgba(106, 166, 255, 0.30);
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  font-family: var(--mono);
+}
+.synthesis-pill-clear {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.synthesis-pill-clear:hover {
+  color: var(--err);
+  background: var(--panel-3);
+}
+.synthesis-pill .try-it {
+  margin-top: 4px;
 }

@@ -223,33 +223,46 @@ is 720px when first opened.
 
 ### Compose Method
 
-The Compose tab is Elemen's authoring surface for new agent methods.
+The Compose tab is Elemen's authoring surface for new agent endpoints.
 Use it to:
 
-- Draft a new method specification with live AMG grammar feedback.
+- Draft an endpoint (verb + path + semantic block + parameters)
+  with live, catalog-driven feedback.
 - Save drafts to a local library for iteration.
 - Submit proposals to agent servers via PROPOSE.
 - Receive synthesis IDs when servers accept proposals.
 
-The composer enforces AMG (Agent Method Grammar) validation
-continuously as you type. The **name** field validates on every
-keystroke after the third character — stoplist warnings,
-HTTP-method conflicts, and embedded-method clashes surface inline
-with substitution catalog suggestions you can click to apply. Other
-fields validate on blur (200ms debounced).
+Validation is two cheap checks against the AGTP catalog:
 
-Cross-field warnings (irreversible methods with low confidence
-guidance, descriptions that match the intent verbatim) collect in a
-sticky amber footer at the bottom of the form. Click a warning to
-scroll to the field it concerns.
+- **Verb** — checked against `core/methods.json` (~423 approved
+  verbs). Typos and legacy HTTP names get close-match suggestions
+  from `core.methods.find_close_matches`. Validation fires on every
+  keystroke after the second character, with a catalog-backed
+  autocomplete dropdown that shows category badges and the verb's
+  one-line description. Up/Down + Enter pick a match; Escape
+  dismisses; clicking a row picks it.
+- **Path** — optional; when present, checked against
+  `core.path_grammar.validate_path`. Refuses paths that don't
+  begin with `/`, have a trailing slash (except the root), or
+  embed a verb token in any segment.
+
+Other fields (intent, outcome, namespace) validate on blur with a
+200ms debounce. Cross-field warnings reduce to the
+irreversible-low-confidence nudge.
 
 When a server is loaded in the URL bar, the **Submit PROPOSE**
 button sends the proposal to that server and renders the response
 inline:
 
 - **200** — proposal accepted; the synthesis ID, target method,
-  and parameter mapping appear in a green banner. The library entry
-  flips to `accepted`.
+  and parameter mapping appear in a green banner with an **Invoke
+  this synthesis** button. Clicking it stashes the synthesis under
+  the current tab, closes the drawer, and surfaces an *Active
+  Syntheses* pill at the bottom of the Server Overview's Methods
+  section — pre-filled Try-It form included. Subsequent invocations
+  through that pill ride the synthesis runtime, so multi-step
+  recipe plans (e.g. AUDIT = QUERY + SUMMARIZE) execute end-to-end
+  from a single click. The library entry flips to `accepted`.
 - **422 `negotiation-refused`** — server refused; reason and
   detail appear in a red banner. The library entry flips to `refused`.
 - **422 with `counter_proposal` body** — counter-proposal offered;
@@ -302,17 +315,24 @@ The drawer talks to Python via `window.pywebview.api`:
 
 | Method | Purpose |
 |---|---|
-| `validate_compose(draft)`     | Per-field validation with completion summary. |
-| `get_substitution_catalog()`  | The AMG substitution catalog as a list of dicts. |
+| `validate_compose(draft)`     | Catalog + path-grammar validation. Returns `{valid, errors, warnings, completion, suggestions}`. |
+| `get_verb_catalog()`          | The AGTP method catalog (`core/methods.json`) as a list of `{name, categories, description}` dicts. Drives the autocomplete dropdown. |
 | `save_method_yaml(spec, fn)`  | Native save dialog → YAML file. |
 | `export_library(library)`     | Native save dialog → JSON library. |
 | `import_library()`            | Native open dialog → parsed library JSON. |
 | `invoke(uri, "PROPOSE", body)`| The existing invocation surface, used to ship the proposal. |
 
-`validate_compose` is a thin wrapper around
-[`client.amg.composer.validate_partial`](../amg/composer.py); both
-sides of the AMG drift gate ship the same function so a UI authored
-against either tree behaves identically.
+`validate_compose` checks two things and surfaces the errors keyed
+to the form fields the JS knows about:
+
+- The verb name is in the curated catalog
+  ([`core/methods.is_approved_verb`](../../core/methods.py)). Legacy
+  HTTP names get a structured refusal (servers admit them only via
+  `Legacy:` opt-in); typos get a close-match list.
+- The optional path satisfies
+  [`core/path_grammar.validate_path`](../../core/path_grammar.py).
+  Refusal carries a stable `code` (`invalid-format` /
+  `verb-in-path`) and the offending segment.
 
 ---
 

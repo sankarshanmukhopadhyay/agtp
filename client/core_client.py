@@ -203,15 +203,21 @@ def send_method(
     use_tls: bool = True,
     insecure_skip_verify: bool = False,
     extra_headers: Optional[Dict[str, str]] = None,
+    path: str = "/",
     verbose: bool = False,
 ) -> wire.AGTPResponse:
     """
     Open a TCP/TLS connection, send one AGTP method, return the response.
 
     ``agent_id`` is None for server-level requests (Form 2 URIs); the
-    Target-Agent header is then omitted, which is what server.main
-    uses to route DISCOVER to the manifest path. ``extra_headers``
+    Agent-ID header is then omitted, which is what server.main uses
+    to route DISCOVER to the manifest path. ``extra_headers``
     (e.g., ``Synthesis-Id``) merge in last and may override defaults.
+
+    ``path`` rides on the request line as the third token (Phase-2
+    extension). The default ``"/"`` preserves the pre-Phase-2
+    two-token wire form on the network, so older servers and
+    transcripts keep working byte-identically.
     """
     if verbose:
         import sys
@@ -232,7 +238,10 @@ def send_method(
 
     headers: Dict[str, str] = {"Accept": accept, "Host": host}
     if agent_id is not None:
-        headers["Target-Agent"] = agent_id
+        # §10 canonical header. Pre-§10 servers expected
+        # ``Target-Agent``; the server-side back-compat fallback
+        # reads either, so this client always emits the §10 name.
+        headers["Agent-ID"] = agent_id
     if body and body_content_type:
         headers["Content-Type"] = body_content_type
     if extra_headers:
@@ -244,6 +253,7 @@ def send_method(
             method=method_name,
             headers=headers,
             body_bytes=body,
+            path=path,
         )
         sock.sendall(request.serialize())
         # Don't half-close on TLS sockets; close_notify ends the session.
@@ -423,6 +433,7 @@ def invoke_method(
     insecure: bool = False,
     insecure_skip_verify: bool = False,
     synthesis_id: Optional[str] = None,
+    path: str = "/",
     verbose: bool = False,
 ) -> FetchResult:
     """
@@ -431,6 +442,17 @@ def invoke_method(
     ``body`` is an optional JSON-serializable dict. ``synthesis_id``
     when set adds a ``Synthesis-Id`` header so the server rewrites the
     request onto the synthesis's underlying method.
+
+    ``path`` is the URI path the server should route on. Defaults to
+    ``"/"``, which matches the wire shape pre-Phase-2 servers expect;
+    callers targeting a Phase-2 endpoint registry pass the bound
+    path (e.g. ``"/room"``).
+
+    There is no separate probe header for verb admission. The catalog
+    gate at the top of the dispatcher does the admission check
+    unconditionally, so callers that want to probe a verb just send
+    an ordinary request and read the status code (200/400 → admitted,
+    459 → catalog refusal, 405 → no handler, 403 → forbidden).
     """
     try:
         parsed = parse_uri(uri)
@@ -469,6 +491,7 @@ def invoke_method(
             use_tls=not insecure,
             insecure_skip_verify=insecure_skip_verify,
             extra_headers=extra or None,
+            path=path,
             verbose=verbose,
         )
     except (OSError, wire.WireFormatError) as exc:

@@ -199,7 +199,9 @@ class FullStackSubprocessTests(unittest.TestCase):
         self.assertIn("embedded", payload)
         self.assertGreaterEqual(payload["summary"]["embedded_count"], 1)
 
-    def test_unknown_method_returns_501(self) -> None:
+    def test_unknown_method_returns_459(self) -> None:
+        # Catalog-based dispatcher: unknown verbs surface as 459
+        # Method Grammar Violation.
         out = self._run(
             "client",
             f"agtp://{LAUREN_ID}@127.0.0.1:{self.srv_port}",
@@ -208,7 +210,7 @@ class FullStackSubprocessTests(unittest.TestCase):
             "--insecure",
         )
         self.assertNotEqual(out.returncode, 0)
-        self.assertIn("method-not-implemented", out.stdout)
+        self.assertIn("method-grammar-violation", out.stdout)
 
 
 class PlatformDetectionTests(unittest.TestCase):

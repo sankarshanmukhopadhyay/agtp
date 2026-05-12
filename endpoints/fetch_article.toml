@@ -1,0 +1,93 @@
+# Sample: an external_service endpoint that wraps a public mock API.
+#
+# FETCH /article/{article_id} wraps the JSONPlaceholder posts
+# endpoint at https://jsonplaceholder.typicode.com/posts. The
+# upstream returns a JSON object with `userId`, `id`, `title`, and
+# `body`; the binding's output_transform renames those into AGTP shape.
+#
+# This is the canonical wrap-and-expose pattern: an existing HTTPS
+# API is surfaced as an AGTP endpoint without rewriting the
+# implementation. The request body's AGTP field names get renamed
+# to the upstream's expected shape via input_transform; the response
+# fields get renamed back via output_transform; HTTP status codes
+# translate to AGTP error codes via error_map.
+#
+# Phase 4 implements the resolver. The handler issues one HTTPS
+# call per invocation, translates the response, and surfaces
+# upstream failures as structured EndpointErrors. The agent's
+# identity is NOT propagated to the upstream by default.
+
+[endpoint]
+method = "FETCH"
+path = "/article/{article_id}"
+description = "Fetches an article by id from the JSONPlaceholder demo API."
+namespace = "articles"
+
+[endpoint.semantic]
+intent = "Retrieve the article identified by the given id from the upstream service."
+actor = "agent"
+outcome = "An article record with title, body, and author fields is returned."
+capability = "retrieval"
+confidence = 0.95
+impact = "informational"
+is_idempotent = true
+
+[[endpoint.input.required]]
+name = "article_id"
+type = "integer"
+description = "The article identifier (1 to 100 in the JSONPlaceholder demo dataset)."
+
+[[endpoint.output]]
+name = "id"
+type = "integer"
+description = "Article identifier."
+
+[[endpoint.output]]
+name = "author_id"
+type = "integer"
+description = "The article's author id."
+
+[[endpoint.output]]
+name = "title"
+type = "string"
+description = "Article title."
+
+[[endpoint.output]]
+name = "body"
+type = "string"
+description = "Article body."
+
+[endpoint.errors]
+list = [
+  "article_not_found",
+  "upstream_timeout",
+  "upstream_connection_error",
+  "upstream_malformed_response",
+  "upstream_authentication_failed",
+  "upstream_error",
+]
+
+[endpoint.handler]
+type = "external_service"
+url = "https://jsonplaceholder.typicode.com/posts/1"
+method = "GET"
+timeout_seconds = 15
+
+[endpoint.handler.headers]
+"Accept" = "application/json"
+"User-Agent" = "agtp-server/0.4 (sample-fetch-article)"
+
+[endpoint.handler.input_transform]
+# Empty: this endpoint takes its identifier from the path; no body
+# fields ride upstream. Listed here for parity with other samples.
+
+[endpoint.handler.output_transform]
+# AGTP-name → HTTP-name. The handler inverts this map at
+# response-time so HTTP fields come back as their AGTP names.
+author_id = "userId"
+
+[endpoint.handler.error_map]
+# Upstream HTTP status → AGTP error code. The handler refuses to
+# register error_map entries whose target isn't in the endpoint's
+# errors list above.
+"404" = "article_not_found"

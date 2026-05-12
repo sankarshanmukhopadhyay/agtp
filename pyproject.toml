@@ -9,6 +9,10 @@ description = "Agent Transfer Protocol reference implementation"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
+dependencies = [
+  # Phase 2 endpoint-input/output validation rides on Draft 2020-12.
+  "jsonschema>=4",
+]
 authors = [{ name = "Chris Hood", email = "chris@nomotic.ai" }]
 keywords = ["agtp", "agent", "protocol", "ietf"]
 classifiers = [
@@ -27,29 +31,29 @@ Homepage = "https://agtp.io"
 Repository = "https://github.com/nomoticai/agtp"
 
 # The repo is a monorepo of products. Each top-level Python directory
-# (core, server, client, registry) is a standalone package; the AMG
-# validator is duplicated under server/amg and client/amg per the
-# SMTP-style client/server split (the same protocol, two distinct
+# (core, server, client, registry) is a standalone package, following
+# the SMTP-style client/server split (the same protocol, two distinct
 # user agents).
 [project.scripts]
-agtp           = "client.cli.main:main"
-agtp-server    = "server.main:main"
-agtp-registry  = "registry.main:main"
-agtp-curl      = "client.cli.curl:main"
-agtp-migrate   = "client.cli.migrate:main"
-agtp-amg       = "client.amg.cli:main"
-elemen         = "client.elemen.app:main"
+agtp                = "client.cli.main:main"
+agtp-server         = "server.main:main"
+agtp-registry       = "registry.main:main"
+agtp-curl           = "client.cli.curl:main"
+agtp-migrate        = "client.cli.migrate:main"
+agtp-import-openapi = "tools.openapi_import:main"
+agtp-catalog-diff   = "tools.catalog_diff:main"
+elemen              = "client.elemen.app:main"
 
 [project.optional-dependencies]
-# jsonschema enables AMG Pass 8 to use the Draft 7 metaschema
-# validator rather than the structural fallback. Optional; the
-# package degrades gracefully when absent.
-amg-schemas = ["jsonschema>=4"]
-# pyyaml enables ``compose_from_yaml`` and the agtp-amg compose CLI's
-# YAML output. Without it, JSON-only round-trips still work.
+# pyyaml enables YAML-formatted method specs in the CLI's
+# --params-file flow and the elemen drawer's "Save as File"
+# button. Without it, JSON-only round-trips still work.
 yaml = ["pyyaml>=6"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core*", "server*", "client*", "registry*"]
+include = [
+  "core*", "server*", "client*", "registry*",
+  "agtp*", "samples*", "tools*",
+]
 exclude = ["tests*", "elemen*", "ietf*", "docs*", "scripts*", "mcp-on-agtp*"]

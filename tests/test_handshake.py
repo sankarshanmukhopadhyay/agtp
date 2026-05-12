@@ -50,7 +50,7 @@ class MatchHandshakeTests(unittest.TestCase):
         cls.orch = _read_agent("orchestrator.agent.json")
         cls.config = ServerConfig(
             server=ServerInfo(
-                issuer="t.local", operator="x", contact="", amg_version="1.0"
+                server_id="t.local", operator="x", contact=""
             ),
             policy=ServerPolicy(),
             agents=AgentsConfig(disclosure="public"),
@@ -176,7 +176,7 @@ class _Server:
 
 def _send(server: _Server, target: str, method: str, body=None):
     headers = {
-        "Target-Agent": target,
+        "Agent-ID": target,
         "Accept": "application/json",
         "Host": server.host,
     }
@@ -213,7 +213,7 @@ class SoftDenyEnforcementTests(unittest.TestCase):
 
         cls.config_default = ServerConfig(
             server=ServerInfo(
-                issuer="t.local", operator="x", contact="", amg_version="1.0"
+                server_id="t.local", operator="x", contact=""
             ),
             policy=ServerPolicy(wildcards_accepted=True),
             agents=AgentsConfig(disclosure="public"),
@@ -260,9 +260,14 @@ class SoftDenyEnforcementTests(unittest.TestCase):
         payload = json.loads(resp.body_bytes.decode("utf-8"))
         self.assertEqual(payload["error"]["code"], "method-not-in-requires")
 
-    def test_unknown_method_passes_soft_deny_to_dispatch_501(self):
+    def test_unknown_method_passes_soft_deny_to_dispatch_459(self):
+        # FAKEMETHOD bypasses soft-deny (the gate exempts unknown
+        # methods so the response surfaces "verb unrecognized"
+        # rather than "agent doesn't declare X"). With the new
+        # catalog-based validator the dispatcher then returns 459
+        # Method Grammar Violation; older revisions returned 501.
         resp = _send(self.server, LAUREN_ID, "FAKEMETHOD", body={"x": 1})
-        self.assertEqual(resp.status_code, 501)
+        self.assertEqual(resp.status_code, 459)
 
     def test_no_soft_deny_flag_disables_403(self):
         cfg = self.config_default
@@ -302,7 +307,7 @@ class WildcardsEnforcementTests(unittest.TestCase):
     def _server(self, *, wildcards_accepted: bool) -> _Server:
         cfg = ServerConfig(
             server=ServerInfo(
-                issuer="t.local", operator="x", contact="", amg_version="1.0"
+                server_id="t.local", operator="x", contact=""
             ),
             policy=ServerPolicy(wildcards_accepted=wildcards_accepted),
             agents=AgentsConfig(disclosure="public"),
@@ -320,7 +325,10 @@ class WildcardsEnforcementTests(unittest.TestCase):
         finally:
             srv.stop()
 
-    def test_403_when_wildcard_agent_invokes_custom_method_without_accept(self):
+    def test_262_when_wildcard_agent_invokes_custom_method_without_accept(self):
+        # §7: wildcards-refused consolidates under 262 Authorization
+        # Required (error.type='wildcards-required'). Pre-§7 wire
+        # status was 403.
         from server.examples import custom_methods
         custom_methods.install()
         srv = self._server(wildcards_accepted=False)
@@ -329,9 +337,10 @@ class WildcardsEnforcementTests(unittest.TestCase):
                 srv, ORCH_ID, "RECONCILE",
                 body={"account_id": "x", "period": "Q1"},
             )
-            self.assertEqual(resp.status_code, 403)
+            self.assertEqual(resp.status_code, 262)
             payload = json.loads(resp.body_bytes.decode("utf-8"))
-            self.assertEqual(payload["error"]["code"], "wildcards-refused")
+            self.assertEqual(payload["error"]["code"], "authorization-required")
+            self.assertEqual(payload["error"]["type"], "wildcards-required")
         finally:
             srv.stop()
             from server.methods import unregister

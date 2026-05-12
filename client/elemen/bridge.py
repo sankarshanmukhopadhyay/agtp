@@ -372,41 +372,133 @@ class Api:
 
     def validate_compose(self, draft: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validate a partial composition draft. Returns per-field errors,
-        warnings, and section completion status. The Compose drawer
-        calls this on every keystroke (for the name field) and on blur
-        for other fields.
+        Catalog-based partial validation for the Compose drawer.
+
+        Validation reduces to two cheap checks against
+        :mod:`core.methods` (the verb name) and
+        :mod:`core.path_grammar` (the optional path). Returns the
+        shape the drawer's JS consumes (errors / warnings /
+        completion).
+
+        Per-field result keys:
+
+          * ``name``  — the verb. Refuses unknown / legacy verbs and
+            offers close-match suggestions.
+          * ``path``  — the URI path. Optional; when present, must
+            satisfy ``core.path_grammar.validate_path``.
         """
-        from client.amg.composer import validate_partial
+        from core.methods import (
+            find_close_matches, is_approved_verb, is_legacy_verb,
+        )
+        from core.path_grammar import PathGrammarError, validate_path
         if not isinstance(draft, dict):
             draft = {}
-        return validate_partial(draft)
+        errors: Dict[str, str] = {}
+        warnings: Dict[str, str] = {}
+        completion: Dict[str, str] = {}
+        suggestions_out: Dict[str, list] = {}
 
-    def get_substitution_catalog(self) -> list:
+        name = (draft.get("name") or "").strip().upper()
+        if name:
+            if not is_approved_verb(name):
+                if is_legacy_verb(name):
+                    suggestions = find_close_matches(name)
+                    errors["name"] = (
+                        f"{name!r} is a legacy HTTP method; servers admit "
+                        f"it only by Legacy: opt-in. Try "
+                        f"{', '.join(suggestions) or '(no close matches)'}."
+                    )
+                    if suggestions:
+                        suggestions_out["name"] = list(suggestions)
+                else:
+                    suggestions = find_close_matches(name)
+                    if suggestions:
+                        errors["name"] = (
+                            f"{name!r} is not a recognized AGTP verb. "
+                            f"Did you mean {', '.join(suggestions)}?"
+                        )
+                        suggestions_out["name"] = list(suggestions)
+                    else:
+                        errors["name"] = (
+                            f"{name!r} is not a recognized AGTP verb."
+                        )
+            completion["name"] = "complete" if not errors.get("name") else "error"
+        else:
+            completion["name"] = "untouched"
+
+        path = (draft.get("path") or "").strip()
+        if path:
+            try:
+                validate_path(path)
+            except PathGrammarError as exc:
+                errors["path"] = exc.message
+            completion["path"] = "complete" if not errors.get("path") else "error"
+        else:
+            completion["path"] = "untouched"
+
+        return {
+            "valid": not errors,
+            "errors": errors,
+            "warnings": warnings,
+            "completion": completion,
+            "suggestions": suggestions_out,
+        }
+
+    def get_verb_catalog(self) -> list:
         """
-        Return the AMG substitution catalog as a list of plain dicts
-        for the UI's autocomplete and "Show all matches" panels.
+        Surface the AGTP verb catalog for the drawer's autocomplete.
 
-        Each entry has the shape::
+        Each entry is one approved verb with its categories and a
+        one-line description. The drawer groups them by primary
+        category for the dropdown.
 
-            {
-              "members": ["CHECK", "PROBE", "POLL"],
-              "intent": "verification of state or existence",
-              "conditions": "..."  # optional
-            }
+        Shape (one-per-verb)::
+
+            {"name": "RECONCILE",
+             "categories": ["transaction", "analysis"],
+             "description": "Reconciles ledger entries...",
+             "deprecated": false,
+             "successor": null,
+             "removed_in": null}
+
+        Phase-6 fields ``deprecated`` / ``successor`` / ``removed_in``
+        let the drawer render a visible marker on deprecated verbs
+        (italics + tooltip) so users see the migration prompt at
+        author time, not first-traffic time.
         """
-        from client.amg.substitution import DEFAULT_SUBSTITUTIONS
+        from core.methods import _METHODS_DOC
         out: list = []
-        for ec in DEFAULT_SUBSTITUTIONS:
-            entry: Dict[str, Any] = {
-                "name": getattr(ec, "name", ""),
-                "members": sorted(ec.members),
+        for name, data in _METHODS_DOC["methods"].items():
+            entry: dict = {
+                "name": name,
+                "categories": list(data.get("categories", [])),
+                "description": str(data.get("description", "")),
             }
-            conditions = getattr(ec, "conditions", None)
-            if conditions:
-                entry["conditions"] = conditions
+            if "deprecated_in" in data:
+                entry["deprecated"] = True
+                entry["deprecated_in"] = str(data["deprecated_in"])
+                if data.get("successor"):
+                    entry["successor"] = str(data["successor"]).upper()
+                if data.get("removed_in"):
+                    entry["removed_in"] = str(data["removed_in"])
+            else:
+                entry["deprecated"] = False
             out.append(entry)
         return out
+
+    def get_catalog_version(self) -> dict:
+        """Phase-6: surface the loaded catalog's version + the list
+        of versions this server validates against. The drawer
+        compares this to its own (cached) version on first DESCRIBE
+        so users see major-version mismatches as an advisory toast.
+        """
+        from core.methods import (
+            catalog_version, catalog_versions_supported,
+        )
+        return {
+            "version": catalog_version(),
+            "supported": list(catalog_versions_supported()),
+        }
 
     def save_method_yaml(
         self,

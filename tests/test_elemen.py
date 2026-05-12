@@ -203,8 +203,8 @@ class ElemenBridgeTests(unittest.TestCase):
         self.assertEqual(result["kind"], "manifest")
         self.assertIsInstance(result["manifest"], dict)
         self.assertIn("server", result["manifest"])
-        self.assertIn("methods", result["manifest"])
-        self.assertIn("agents", result["manifest"])
+        self.assertIn("embedded_methods", result["manifest"])
+        self.assertIn("hosted_agents", result["manifest"])
 
     def test_fetch_manifest_helper_returns_same_shape(self):
         result = elemen_client.fetch_manifest(
@@ -212,7 +212,9 @@ class ElemenBridgeTests(unittest.TestCase):
         )
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["kind"], "manifest")
-        self.assertEqual(result["manifest"]["agents"]["disclosure"], "public")
+        self.assertEqual(
+            result["manifest"]["agent_disclosure"], "public",
+        )
 
     # ---- v2 agent fetch shape ----
 
@@ -234,7 +236,7 @@ class ElemenBridgeTests(unittest.TestCase):
     #
     # Tab visibility in the JS UI is data-driven: agent fetches
     # produce result.kind == "agent" (no Methods/APIs/Tools tabs) and
-    # manifest fetches expose apis / hosts_protocols arrays that
+    # manifest fetches expose apis / hosted_protocols arrays that
     # control the APIs and protocol-specific tabs. These tests pin
     # the bridge contract; the JS toggles tabs from these fields.
 
@@ -242,17 +244,17 @@ class ElemenBridgeTests(unittest.TestCase):
         result = elemen_client.fetch(self._uri(LAUREN_ID), insecure=True)
         self.assertEqual(result["kind"], "agent")
         # An agent payload is a v2 Agent Document; it must not surface
-        # apis or hosts_protocols (those are server concepts).
+        # apis or hosted_protocols (those are server concepts).
         body = json.loads(result["body"])
         self.assertNotIn("apis", body)
-        self.assertNotIn("hosts_protocols", body)
+        self.assertNotIn("hosted_protocols", body)
         # The wire envelope itself only exposes manifest data on
         # manifest fetches; agent fetches lack the manifest field.
         self.assertNotIn("manifest", result)
 
     def test_manifest_fetch_exposes_apis_and_protocols_when_configured(self):
         # Re-create a server with the demo config so apis +
-        # hosts_protocols flow through.
+        # hosted_protocols flow through.
         from server.config import load as load_config
         from server.main import AgentRegistry
         cfg = load_config(REPO_ROOT / "server" / "agtp-server.toml")
@@ -265,9 +267,9 @@ class ElemenBridgeTests(unittest.TestCase):
         manifest = gen(cfg, registry.agents)
         d = manifest.to_dict()
         self.assertIn("apis", d)
-        self.assertIn("hosts_protocols", d)
+        self.assertIn("hosted_protocols", d)
         self.assertEqual(d["apis"][0]["path"], "/calendar")
-        protos = [p["protocol"] for p in d["hosts_protocols"]]
+        protos = [p["protocol"] for p in d["hosted_protocols"]]
         self.assertIn("mcp", protos)
 
     def test_manifest_omits_apis_when_unconfigured(self):
@@ -281,7 +283,7 @@ class ElemenBridgeTests(unittest.TestCase):
         self.assertEqual(result["kind"], "manifest")
         body = json.loads(result["body"])
         self.assertNotIn("apis", body)
-        self.assertNotIn("hosts_protocols", body)
+        self.assertNotIn("hosted_protocols", body)
 
     # ---- MCP catalog fetcher ----
 
@@ -340,6 +342,65 @@ class ElemenBridgeTests(unittest.TestCase):
         names = [t["name"] for t in result["tools"]]
         self.assertEqual(names, ["calendar.create", "calendar.list"])
 
+    # ---- Compose drawer bridge (validate_compose / verb catalog) ----
+    #
+    # The drawer's catalog-driven validator and verb-catalog feed are
+    # called from JS via window.pywebview.api. These tests pin the
+    # Python-side contract: the same function the JS consumes.
+
+    def test_validate_compose_accepts_known_verb(self):
+        result = _API.validate_compose({"name": "RECONCILE"})
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["errors"], {})
+        self.assertEqual(result["completion"]["name"], "complete")
+
+    def test_validate_compose_rejects_unknown_verb_with_suggestions(self):
+        # FROBNICATE is not in the catalog; the validator surfaces a
+        # close-match list under suggestions["name"].
+        result = _API.validate_compose({"name": "RECONCIL"})
+        self.assertFalse(result["valid"])
+        self.assertIn("name", result["errors"])
+        self.assertEqual(result["completion"]["name"], "error")
+        # find_close_matches is Levenshtein-based; RECONCILE should
+        # surface for RECONCIL.
+        self.assertIn("RECONCILE", result["suggestions"].get("name", []))
+
+    def test_validate_compose_flags_legacy_verb(self):
+        result = _API.validate_compose({"name": "GET"})
+        self.assertFalse(result["valid"])
+        self.assertIn("legacy", result["errors"]["name"].lower())
+
+    def test_validate_compose_path_grammar_rejects_verb_in_path(self):
+        # /get/orders embeds GET — the path grammar refuses it.
+        result = _API.validate_compose({
+            "name": "RECONCILE",
+            "path": "/get/orders",
+        })
+        self.assertFalse(result["valid"])
+        self.assertIn("path", result["errors"])
+        self.assertEqual(result["completion"]["path"], "error")
+
+    def test_validate_compose_path_grammar_accepts_clean_path(self):
+        result = _API.validate_compose({
+            "name": "RECONCILE",
+            "path": "/orders/{order_id}",
+        })
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["completion"]["path"], "complete")
+
+    def test_get_verb_catalog_returns_full_catalog(self):
+        catalog = _API.get_verb_catalog()
+        self.assertIsInstance(catalog, list)
+        self.assertGreater(len(catalog), 100)  # ~423 in core/methods.json
+        names = {entry["name"] for entry in catalog}
+        # Sample a few that are guaranteed to be in the catalog.
+        for known in ("RECONCILE", "DISCOVER", "QUERY"):
+            self.assertIn(known, names)
+        # Each entry has the expected shape for the autocomplete UI.
+        sample = catalog[0]
+        for key in ("name", "categories", "description"):
+            self.assertIn(key, sample)
+
     def test_invoke_via_synthesis_id_passes_header(self):
         # Establish a synthesis on the orchestrator.
         propose = elemen_client.invoke_method(
@@ -352,8 +413,8 @@ class ElemenBridgeTests(unittest.TestCase):
             },
             insecure=True,
         )
-        self.assertEqual(propose["status_code"], 200)
-        synth_id = json.loads(propose["body"])["synthesis"]["synthesis_id"]
+        self.assertEqual(propose["status_code"], 263)
+        synth_id = json.loads(propose["body"])["synthesis_id"]
 
         # Re-invoke under any method name with the synthesis_id; the
         # server rewrites to the synthesis target (QUERY).

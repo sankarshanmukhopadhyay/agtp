@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from server.amg.grammar import AMGMethodSpec
+from core.endpoint import EndpointSpec
 from server.synthesis.plan import (
     CompositionStep,
     ParameterSource,
@@ -47,7 +47,7 @@ class RecipePattern:
     category: Optional[str] = None
     has_parameters: Optional[List[str]] = None
 
-    def matches(self, proposal: AMGMethodSpec) -> bool:
+    def matches(self, proposal: EndpointSpec) -> bool:
         if self.name_exact is not None and proposal.name != self.name_exact:
             return False
         if self.name_regex is not None:
@@ -113,15 +113,15 @@ class RecipeBasedPolicy:
 
     def can_fulfill(
         self,
-        proposal: AMGMethodSpec,
-        available_methods: List[AMGMethodSpec],
+        proposal: EndpointSpec,
+        available_methods: List[EndpointSpec],
     ) -> bool:
         return any(r.pattern.matches(proposal) for r in self.recipes)
 
     def compose(
         self,
-        proposal: AMGMethodSpec,
-        available_methods: List[AMGMethodSpec],
+        proposal: EndpointSpec,
+        available_methods: List[EndpointSpec],
     ) -> Optional[SynthesisPlan]:
         available_names = {m.name for m in available_methods}
         for recipe in self.recipes:

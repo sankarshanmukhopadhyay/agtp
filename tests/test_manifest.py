@@ -103,12 +103,16 @@ class URIFormTests(unittest.TestCase):
             parse_uri("agtp://has_underscore")
 
     def test_format_uri_form_2(self):
+        # §11: format_uri never emits port. Canonical Form 2 URIs are
+        # port-less; the default 4480 is implicit (mirroring how HTTPS
+        # omits :443 from canonical URIs).
         self.assertEqual(format_uri(host="example.com"), "agtp://example.com")
+        # Even when a non-default port is requested, format_uri drops
+        # it from the canonical output.
         self.assertEqual(
             format_uri(host="example.com", port=8443),
-            "agtp://example.com:8443",
+            "agtp://example.com",
         )
-        # Default port omitted.
         self.assertEqual(
             format_uri(host="example.com", port=4480),
             "agtp://example.com",
@@ -133,7 +137,7 @@ class ConfigLoaderTests(unittest.TestCase):
             try:
                 cfg = load_config(None, host="127.0.0.1")
                 self.assertTrue(cfg.is_default)
-                self.assertEqual(cfg.server.issuer, "127.0.0.1")
+                self.assertEqual(cfg.server.server_id, "127.0.0.1")
                 self.assertEqual(cfg.agents.disclosure, "public")
                 self.assertTrue(cfg.policy.wildcards_accepted)
             finally:
@@ -144,15 +148,16 @@ class ConfigLoaderTests(unittest.TestCase):
             cfg_path = Path(tmp) / "agtp-server.toml"
             cfg_path.write_text(
                 "[server]\n"
-                'issuer = "agents.example.com"\n'
+                'server_id = "agents.example.com"\n'
                 'operator = "Example Inc."\n'
                 'contact = "ops@example.com"\n'
-                'amg_version = "1.0"\n'
                 "\n"
-                "[policy]\n"
+                "[policies]\n"
                 "wildcards_accepted = false\n"
                 "anonymous_discovery = true\n"
                 "scope_required_for_invocation = true\n"
+                "synthesis_enabled = true\n"
+                "max_synthesis_depth = 10\n"
                 "\n"
                 "[agents]\n"
                 'disclosure = "limited"\n',
@@ -160,9 +165,11 @@ class ConfigLoaderTests(unittest.TestCase):
             )
             cfg = load_config(cfg_path)
             self.assertFalse(cfg.is_default)
-            self.assertEqual(cfg.server.issuer, "agents.example.com")
+            self.assertEqual(cfg.server.server_id, "agents.example.com")
             self.assertEqual(cfg.server.operator, "Example Inc.")
             self.assertFalse(cfg.policy.wildcards_accepted)
+            self.assertTrue(cfg.policy.synthesis_enabled)
+            self.assertEqual(cfg.policy.max_synthesis_depth, 10)
             self.assertEqual(cfg.agents.disclosure, "limited")
 
     def test_explicit_path_must_exist(self):
@@ -173,7 +180,7 @@ class ConfigLoaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cfg_path = Path(tmp) / "agtp-server.toml"
             cfg_path.write_text(
-                "[server]\nissuer = \"x\"\n[agents]\ndisclosure = \"sneaky\"\n",
+                "[server]\nserver_id = \"x\"\n[agents]\ndisclosure = \"sneaky\"\n",
                 encoding="utf-8",
             )
             with self.assertRaises(ValueError):
@@ -231,7 +238,7 @@ class _Server:
 def _send_discover(server: _Server, *, target_agent: str = ""):
     headers = {"Accept": "application/json", "Host": server.host}
     if target_agent:
-        headers["Target-Agent"] = target_agent
+        headers["Agent-ID"] = target_agent
     req = wire.AGTPRequest(method="DISCOVER", headers=headers, body_bytes=b"")
     sock = socket.create_connection((server.host, server.port), timeout=5.0)
     try:
@@ -251,10 +258,9 @@ class ServerManifestTests(unittest.TestCase):
         cls.registry = AgentRegistry(agents_dir)
         cls.config = ServerConfig(
             server=ServerInfo(
-                issuer="test.agtp.local",
+                server_id="test.agtp.local",
                 operator="unit-tests",
                 contact="dev@local",
-                amg_version="1.0",
             ),
             policy=ServerPolicy(),
             agents=AgentsConfig(disclosure="public"),
@@ -271,12 +277,20 @@ class ServerManifestTests(unittest.TestCase):
     def test_manifest_has_expected_top_level_shape(self):
         m = generate(self.config, self.registry.agents)
         d = m.to_dict()
-        for key in ("agtp_version", "issued_at", "server", "methods", "agents", "policy"):
+        for key in (
+            "agtp_version", "agtp_api_version", "document_version",
+            "server", "embedded_methods",
+            "agent_disclosure", "hosted_agents", "policies",
+        ):
             self.assertIn(key, d)
+        # Server identity lives under the server block per agtp-api §7.
+        self.assertIn("server_id", d["server"])
+        self.assertIn("issued", d["server"])
+        self.assertIn("updated", d["server"])
 
     def test_manifest_lists_all_twelve_embedded_methods(self):
         m = generate(self.config, self.registry.agents)
-        names = {e["name"] for e in m.methods.embedded}
+        names = {e["name"] for e in m.embedded_methods}
         expected = {
             "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
             "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
@@ -288,16 +302,16 @@ class ServerManifestTests(unittest.TestCase):
         custom_methods.install()
         try:
             m = generate(self.config, self.registry.agents)
-            self.assertEqual([e["name"] for e in m.methods.custom], ["RECONCILE"])
+            self.assertEqual([e["name"] for e in m.custom_methods], ["RECONCILE"])
         finally:
             from server.methods import unregister
             unregister("RECONCILE")
 
     def test_manifest_lists_public_agents(self):
         m = generate(self.config, self.registry.agents)
-        names = sorted(e["name"] for e in m.agents.list)
+        names = sorted(e["name"] for e in m.hosted_agents)
         self.assertEqual(names, ["Lauren", "Orchestrator"])
-        for entry in m.agents.list:
+        for entry in m.hosted_agents:
             self.assertIn("skills_summary", entry)
             self.assertIn("methods_count", entry)
 
@@ -308,8 +322,8 @@ class ServerManifestTests(unittest.TestCase):
             agents=AgentsConfig(disclosure="private"),
         )
         m = generate(cfg, self.registry.agents)
-        self.assertEqual(m.agents.list, [])
-        self.assertIsNotNone(m.agents.notice)
+        self.assertEqual(m.hosted_agents, [])
+        self.assertIsNotNone(m.agent_disclosure_notice)
 
     def test_server_level_discover_returns_manifest(self):
         resp = _send_discover(self.server, target_agent="")
@@ -319,17 +333,25 @@ class ServerManifestTests(unittest.TestCase):
             wire.header(resp, "Content-Type"),
         )
         payload = json.loads(resp.body_bytes.decode("utf-8"))
-        self.assertEqual(payload["server"]["issuer"], "test.agtp.local")
-        self.assertEqual(payload["methods"]["summary"]["embedded_count"], 12)
-        self.assertEqual(payload["agents"]["disclosure"], "public")
+        self.assertEqual(payload["server"]["server_id"], "test.agtp.local")
+        self.assertEqual(len(payload["embedded_methods"]), 12)
+        self.assertEqual(payload["agent_disclosure"], "public")
+        # Policy block has the five operational toggles.
+        self.assertIn("policies", payload)
+        for key in (
+            "wildcards_accepted", "anonymous_discovery",
+            "scope_required_for_invocation",
+            "synthesis_enabled", "max_synthesis_depth",
+        ):
+            self.assertIn(key, payload["policies"])
 
     def test_per_agent_discover_still_works(self):
-        # With Target-Agent set, DISCOVER goes to the agent path. That
+        # With Agent-ID set, DISCOVER goes to the agent path. That
         # path requires a body with target=<methods|agents|...>.
         headers = {
             "Accept": "application/json",
             "Host": self.server.host,
-            "Target-Agent": LAUREN_ID,
+            "Agent-ID": LAUREN_ID,
             "Content-Type": "application/json",
         }
         body = json.dumps({"target": "methods"}).encode("utf-8")
@@ -349,12 +371,12 @@ class ServerManifestTests(unittest.TestCase):
 
 
 class APIsAndProtocolsTests(unittest.TestCase):
-    """Coverage for the apis and hosts_protocols manifest fields."""
+    """Coverage for the apis and hosted_protocols manifest fields."""
 
     def setUp(self):
         self.config = ServerConfig(
             server=ServerInfo(
-                issuer="t.local", operator="x", contact="", amg_version="1.0"
+                server_id="t.local", operator="x", contact=""
             ),
             policy=ServerPolicy(),
             agents=AgentsConfig(disclosure="public"),
@@ -364,7 +386,7 @@ class APIsAndProtocolsTests(unittest.TestCase):
         m = generate(self.config, {})
         d = json.loads(m.to_json())
         self.assertNotIn("apis", d)
-        self.assertNotIn("hosts_protocols", d)
+        self.assertNotIn("hosted_protocols", d)
 
     def test_populated_apis_round_trip(self):
         apis = [
@@ -384,7 +406,7 @@ class APIsAndProtocolsTests(unittest.TestCase):
         # Description-less entries omit the field.
         self.assertNotIn("description", d["apis"][1])
 
-    def test_populated_hosts_protocols_round_trip(self):
+    def test_populated_hosted_protocols_round_trip(self):
         protos = [
             HostedProtocol(
                 protocol="mcp",
@@ -398,12 +420,12 @@ class APIsAndProtocolsTests(unittest.TestCase):
                 endpoint="https://api.example.com",
             ),
         ]
-        m = generate(self.config, {}, hosts_protocols=protos)
+        m = generate(self.config, {}, hosted_protocols=protos)
         d = json.loads(m.to_json())
-        self.assertEqual(len(d["hosts_protocols"]), 2)
-        self.assertEqual(d["hosts_protocols"][0]["protocol"], "mcp")
-        self.assertIn("catalog", d["hosts_protocols"][0])
-        self.assertNotIn("catalog", d["hosts_protocols"][1])
+        self.assertEqual(len(d["hosted_protocols"]), 2)
+        self.assertEqual(d["hosted_protocols"][0]["protocol"], "mcp")
+        self.assertIn("catalog", d["hosted_protocols"][0])
+        self.assertNotIn("catalog", d["hosted_protocols"][1])
 
     def test_api_endpoint_validates_path_and_methods(self):
         with self.assertRaises(ValueError):
@@ -423,9 +445,9 @@ class APIsAndProtocolsTests(unittest.TestCase):
         demo_path = REPO_ROOT / "server" / "agtp-server.toml"
         cfg = load_config(demo_path)
         self.assertGreaterEqual(len(cfg.apis), 1)
-        self.assertGreaterEqual(len(cfg.hosts_protocols), 1)
+        self.assertGreaterEqual(len(cfg.hosted_protocols), 1)
         self.assertEqual(cfg.apis[0].path, "/calendar")
-        protocols = [p.protocol for p in cfg.hosts_protocols]
+        protocols = [p.protocol for p in cfg.hosted_protocols]
         self.assertIn("mcp", protocols)
 
 
@@ -460,6 +482,192 @@ class MethodNotPermittedVocabTests(unittest.TestCase):
             "principal has not authorized",
             body["error"]["explanation"].lower(),
         )
+
+
+class EndpointsInManifestTests(unittest.TestCase):
+    """Phase-2 coverage: the manifest exposes the endpoint registry's
+    contents under ``endpoints``. Embedded methods continue to ride
+    under top-level ``embedded_methods``."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        agents_dir = Path(cls.tmp.name)
+        _stage_agents(agents_dir)
+        cls.registry = AgentRegistry(agents_dir)
+        cls.config = ServerConfig(
+            server=ServerInfo(
+                server_id="test.agtp.local",
+                operator="unit-tests",
+                contact="dev@local",
+            ),
+            policy=ServerPolicy(),
+            agents=AgentsConfig(disclosure="public"),
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def _populated_registry(self):
+        from core.endpoint import (
+            EndpointSpec, HandlerBinding, ParamSpec, SemanticBlock,
+        )
+        from server.endpoint_registry import EndpointRegistry
+        reg = EndpointRegistry()
+        spec = EndpointSpec(
+            name="BOOK", path="/room",
+            description="Books a room.",
+            namespace="reservations",
+            semantic=SemanticBlock(
+                intent="Reserve a room for the named guest.",
+                actor="agent",
+                outcome="A confirmed reservation_id is returned.",
+                capability="transaction",
+                confidence=0.85,
+                impact="irreversible",
+                is_idempotent=False,
+            ),
+            required_params=[
+                ParamSpec(name="guest_id", type="string",
+                          description="guest id"),
+            ],
+            output=[
+                ParamSpec(name="reservation_id", type="string",
+                          description="server-assigned"),
+            ],
+            errors=["room_unavailable"],
+            handler=HandlerBinding(
+                type="registered_function",
+                reference="samples.handlers.book_room",
+            ),
+            required_scopes=["bookings:write"],
+        )
+        reg.register(spec)
+        return reg
+
+    def test_manifest_includes_endpoints_array_when_registry_populated(self):
+        reg = self._populated_registry()
+        m = generate(
+            self.config, self.registry.agents,
+            endpoint_registry=reg,
+        )
+        d = m.to_dict()
+        self.assertIn("endpoints", d)
+        self.assertEqual(len(d["endpoints"]), 1)
+        entry = d["endpoints"][0]
+        # Canonical AGTP-API manifest shape: input_schema /
+        # output_schema as JSON Schema docs, handler as
+        # {type: ...} object.
+        for key in (
+            "method", "path", "description",
+            "input_schema", "output_schema",
+            "errors", "semantic", "handler", "required_scopes",
+        ):
+            self.assertIn(key, entry)
+        # Historical alias keys + the parameter-list shape +
+        # ``handler_type`` flat string are NOT leaked into the
+        # manifest.
+        for leaked in (
+            "name", "required_params", "optional_params",
+            "category", "error_codes",
+            "input", "output", "handler_type",
+        ):
+            self.assertNotIn(leaked, entry)
+        # handler is an object, not a flat string.
+        self.assertEqual(entry["handler"], {"type": "registered_function"})
+
+    def test_manifest_omits_endpoints_when_registry_empty(self):
+        # Empty registry → no ``endpoints`` key on the wire (terse).
+        m = generate(self.config, self.registry.agents)
+        d = m.to_dict()
+        self.assertNotIn("endpoints", d)
+
+    def test_embedded_methods_still_listed_alongside_endpoints(self):
+        # Phase 2 doesn't take embedded primitives off the wire when
+        # endpoints are registered. Top-level ``embedded_methods``
+        # keeps its 12 entries.
+        reg = self._populated_registry()
+        m = generate(
+            self.config, self.registry.agents,
+            endpoint_registry=reg,
+        )
+        d = m.to_dict()
+        self.assertEqual(len(d["embedded_methods"]), 12)
+
+    def test_endpoint_section_surfaces_handler_block_with_type(self):
+        # ``handler: {type: ...}`` exposed; ``handler.reference``
+        # (Python dotted path) stays private to the server.
+        reg = self._populated_registry()
+        m = generate(
+            self.config, self.registry.agents,
+            endpoint_registry=reg,
+        )
+        entry = m.to_dict()["endpoints"][0]
+        self.assertEqual(entry["handler"], {"type": "registered_function"})
+        self.assertNotIn("handler_type", entry)
+        # Reference must NOT leak.
+        for key, value in entry["handler"].items():
+            self.assertNotIn("samples", str(value))
+        self.assertEqual(entry["required_scopes"], ["bookings:write"])
+
+    def test_composition_endpoint_surfaces_handler_object_with_composition_type(self):
+        # Phase-3 composition-bound endpoints surface
+        # ``handler_type: "composition"``; the recipe name (the
+        # binding's reference) stays private to the server.
+        from core.endpoint import (
+            EndpointSpec, HandlerBinding, ParamSpec, SemanticBlock,
+        )
+        from server.endpoint_registry import EndpointRegistry
+        reg = EndpointRegistry()
+        spec = EndpointSpec(
+            name="AUDIT", path="/reviews/{subject_id}",
+            description="Audit a subject.",
+            namespace="reviews",
+            semantic=SemanticBlock(
+                intent="Audit the named subject and return findings.",
+                actor="agent",
+                outcome="A summary is returned.",
+                capability="analysis",
+                confidence=0.80,
+                impact="informational",
+                is_idempotent=True,
+            ),
+            required_params=[
+                ParamSpec(name="subject", type="string",
+                          description="entity to audit"),
+            ],
+            output=[
+                ParamSpec(name="summary", type="string",
+                          description="audit summary"),
+            ],
+            errors=["composition_failed"],
+            handler=HandlerBinding(
+                type="composition",
+                reference="audit-via-query-and-summarize",
+            ),
+        )
+        reg.register(spec)
+        m = generate(
+            self.config, self.registry.agents,
+            endpoint_registry=reg,
+        )
+        entry = m.to_dict()["endpoints"][0]
+        self.assertEqual(entry["handler"], {"type": "composition"})
+        # The recipe name itself does NOT ride on the wire.
+        def _walk(value):
+            if isinstance(value, str):
+                self.assertNotIn(
+                    "audit-via-query-and-summarize", value,
+                    f"recipe reference leaked through value {value!r}",
+                )
+            elif isinstance(value, dict):
+                for v in value.values():
+                    _walk(v)
+            elif isinstance(value, list):
+                for v in value:
+                    _walk(v)
+        _walk(entry)
 
 
 if __name__ == "__main__":

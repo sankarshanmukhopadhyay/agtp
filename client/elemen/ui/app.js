@@ -494,10 +494,15 @@ function categoryClass(cat) {
   return KNOWN_CATEGORIES.has(cat) ? `cat-${cat}` : "cat-other";
 }
 
-function badgeForSource(source) {
-  if (source === "agtp/1.0") return { cls: "src-agtp", label: "AGTP standard" };
-  if (source === "amg/1.0")  return { cls: "src-amg", label: "AMG validated" };
-  return { cls: "src-experimental", label: "Experimental" };
+function badgeForSpec(spec) {
+  // The embedded-vs-custom distinction is signalled by namespace
+  // presence: embedded primitives carry none; custom methods
+  // require one. The badge label reflects which bucket the method
+  // belongs to.
+  if (spec && spec.namespace) {
+    return { cls: "src-custom", label: "Custom" };
+  }
+  return { cls: "src-agtp", label: "AGTP standard" };
 }
 
 function shouldUseTextarea(paramName) {
@@ -630,11 +635,11 @@ function renderMethodRow(tab, spec) {
   catBadge.textContent = spec.category || "other";
   badges.appendChild(catBadge);
 
-  const srcInfo = badgeForSource(spec.source);
+  const srcInfo = badgeForSpec(spec);
   const srcBadge = document.createElement("span");
   srcBadge.className = `badge ${srcInfo.cls}`;
   srcBadge.textContent = srcInfo.label;
-  srcBadge.title = spec.namespace ? `namespace: ${spec.namespace}` : spec.source;
+  srcBadge.title = spec.namespace ? `namespace: ${spec.namespace}` : "AGTP-standard embedded method";
   badges.appendChild(srcBadge);
 
   if (spec.idempotent) {
@@ -683,7 +688,7 @@ function buildMethodDetail(tab, spec) {
   grid.className = "detail-grid";
   const rows = [
     ["semantic", spec.semantic_class || ""],
-    ["source", spec.namespace ? `${spec.source} · ${spec.namespace}` : spec.source],
+    ["kind", spec.namespace ? `custom · ${spec.namespace}` : "AGTP embedded"],
     ["idempotent", spec.idempotent ? "yes" : "no"],
     ["state-modifying", spec.state_modifying ? "yes" : "no"],
     ["required", (spec.required_params || []).join(", ") || "(none)"],
@@ -703,6 +708,92 @@ function buildMethodDetail(tab, spec) {
   wrap.appendChild(buildTryItForm(tab, spec));
   return wrap;
 }
+
+// ---------- active syntheses panel ----------
+//
+// Populated by the Compose drawer's accept handler. Each accepted
+// PROPOSE pushes an entry onto ``tab.activeSyntheses`` keyed by
+// synthesis_id; this renderer surfaces them in the Server Overview
+// next to the manifest's methods inventory so the user can invoke
+// the proposed method without leaving the workplace view.
+
+function renderActiveSyntheses(tab) {
+  // Append a panel to the manifest's Methods section. The section's
+  // .innerHTML is rebuilt on each renderManifest call, so the panel
+  // we append here is naturally cleared on re-render — calling this
+  // function after the innerHTML assignment refreshes the panel.
+  const host = els.manifestMethodsSection;
+  if (!host) return;
+  // Clear any previous panel.
+  const prior = host.querySelector(".active-syntheses-panel");
+  if (prior) prior.remove();
+  const entries = tab.activeSyntheses || {};
+  const ids = Object.keys(entries).sort(
+    (a, b) => (entries[b].created_at || 0) - (entries[a].created_at || 0),
+  );
+  if (!ids.length) return;
+  const panel = document.createElement("div");
+  panel.className = "active-syntheses-panel";
+  panel.innerHTML = `<h4 class="active-syntheses-head">Active syntheses</h4>`;
+  const list = document.createElement("div");
+  list.className = "active-syntheses-list";
+  for (const id of ids) {
+    const entry = entries[id];
+    list.appendChild(_buildSynthesisPill(tab, id, entry));
+  }
+  panel.appendChild(list);
+  host.appendChild(panel);
+}
+
+function _buildSynthesisPill(tab, synthesisId, entry) {
+  const pill = document.createElement("div");
+  pill.className = "synthesis-pill";
+
+  const head = document.createElement("div");
+  head.className = "synthesis-pill-head";
+  const title = document.createElement("span");
+  title.className = "synthesis-pill-title";
+  title.textContent = entry.method;
+  head.appendChild(title);
+  const idBadge = document.createElement("code");
+  idBadge.className = "synthesis-pill-id";
+  idBadge.textContent = synthesisId;
+  idBadge.title = synthesisId;
+  head.appendChild(idBadge);
+  if (entry.plan && entry.plan.steps && entry.plan.steps.length) {
+    const planBadge = document.createElement("span");
+    planBadge.className = "synthesis-pill-plan";
+    planBadge.textContent = `${entry.plan.steps.length} step plan`;
+    head.appendChild(planBadge);
+  } else if (entry.target_method) {
+    const planBadge = document.createElement("span");
+    planBadge.className = "synthesis-pill-plan";
+    planBadge.textContent = `→ ${entry.target_method}`;
+    head.appendChild(planBadge);
+  }
+  const clearBtn = document.createElement("button");
+  clearBtn.type = "button";
+  clearBtn.className = "synthesis-pill-clear";
+  clearBtn.title = "Clear (forget locally; server retains until SUSPEND)";
+  clearBtn.textContent = "×";
+  clearBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (tab.activeSyntheses) delete tab.activeSyntheses[synthesisId];
+    if (tab.syntheses) delete tab.syntheses[entry.method];
+    renderActiveSyntheses(tab);
+  });
+  head.appendChild(clearBtn);
+  pill.appendChild(head);
+
+  // Inline try-it form re-using the existing builder. The form's
+  // invocation handler reads tab.syntheses[spec.name] for the
+  // Synthesis-Id header — the accept handler stashed the id under
+  // entry.method, so the request fires through the runtime.
+  const tryIt = buildTryItForm(tab, entry.spec);
+  pill.appendChild(tryIt);
+  return pill;
+}
+
 
 function buildTryItForm(tab, spec) {
   const form = document.createElement("div");
@@ -1392,8 +1483,12 @@ function renderManifestView(tab) {
   const m = r.manifest;
   if (!m) return false;
 
+  // Server identity is exposed under `server_id` post-§5; older
+  // manifests carry it as `issuer`. Accept either shape so the
+  // dashboard renders cleanly against rolling deployments.
+  const serverId = m.server?.server_id || m.server?.issuer || "(server)";
   els.manifestHeader.innerHTML =
-    `<h2>${escapeHtml(m.server?.issuer || "(server)")}</h2>` +
+    `<h2>${escapeHtml(serverId)}</h2>` +
     `<span class="endpoint">agtp://${escapeHtml(r.host)}:${escapeHtml(String(r.port))}</span>`;
 
   // Server section.
@@ -1401,37 +1496,55 @@ function renderManifestView(tab) {
   const features = (sv.supported_features || [])
     .map((f) => `<span class="feature-pill">${escapeHtml(f)}</span>`)
     .join("");
+  const issued = sv.issued || m.issued_at || "";
+  const updated = sv.updated || "";
   els.manifestServer.innerHTML =
     `<h3>Server</h3>` +
     `<div class="body">` +
     `<dl class="kv-grid">` +
     `<dt>Operator</dt><dd>${escapeHtml(sv.operator || "")}</dd>` +
     `<dt>Contact</dt><dd>${escapeHtml(sv.contact || "")}</dd>` +
+    (sv.domain
+      ? `<dt>Domain</dt><dd>${escapeHtml(sv.domain)}</dd>`
+      : "") +
     `<dt>AGTP version</dt><dd>${escapeHtml(m.agtp_version || "")}</dd>` +
-    `<dt>AMG version</dt><dd>${escapeHtml(sv.amg_version || "")}</dd>` +
-    `<dt>Document version</dt><dd>${escapeHtml(m.document_version || "v2")}</dd>` +
-    `<dt>Issued at</dt><dd>${escapeHtml(m.issued_at || "")}</dd>` +
+    `<dt>AGTP-API version</dt><dd>${escapeHtml(m.agtp_api_version || "")}</dd>` +
+    `<dt>Document version</dt><dd>${escapeHtml(m.document_version || "")}</dd>` +
+    `<dt>Issued</dt><dd>${escapeHtml(issued)}</dd>` +
+    (updated
+      ? `<dt>Updated</dt><dd>${escapeHtml(updated)}</dd>`
+      : "") +
     `</dl>` +
     (features
       ? `<div style="margin-top:10px">${features}</div>`
       : "") +
     `</div>`;
 
-  // Methods section.
-  const meth = m.methods || {};
-  const summary = meth.summary || {};
-  const embedded = meth.embedded || [];
-  const custom = meth.custom || [];
+  // Methods section. Post-§5: top-level embedded_methods /
+  // custom_methods. Pre-§5: nested methods.{embedded,custom}.
+  const embedded = m.embedded_methods
+    || (m.methods && m.methods.embedded)
+    || [];
+  const custom = m.custom_methods
+    || (m.methods && m.methods.custom)
+    || [];
+  const totalMethods = embedded.length + custom.length;
   els.manifestMethodsSection.innerHTML =
-    `<h3>Methods (${summary.total ?? embedded.length + custom.length})</h3>` +
+    `<h3>Methods (${totalMethods})</h3>` +
     `<div class="body">` +
     `<div style="font-size:11.5px;color:var(--text-dim);margin-bottom:8px">` +
-    `Embedded: ${summary.embedded_count ?? embedded.length} &nbsp;·&nbsp; ` +
-    `Custom: ${summary.custom_count ?? custom.length}` +
+    `Embedded: ${embedded.length} &nbsp;·&nbsp; ` +
+    `Custom: ${custom.length}` +
     `</div>` +
     renderManifestMethodsList(embedded, "Standard Methods") +
     (custom.length ? renderManifestMethodsList(custom, "Custom Methods") : "") +
     `</div>`;
+
+  // Active syntheses panel — populated by the Compose drawer's
+  // accept handler. Lives at the bottom of the Methods section so a
+  // user can see (and invoke) syntheses they've negotiated this
+  // session without leaving the workplace view.
+  renderActiveSyntheses(tab);
 
   // APIs preview: when populated, hint that the dedicated tab has
   // resource-level details. Empty manifests skip this section
@@ -1466,12 +1579,17 @@ function renderManifestView(tab) {
     els.manifestApisPreview.innerHTML = "";
   }
 
-  // Agents section.
-  const agents = m.agents || {};
-  const list = agents.list || [];
+  // Agents section. Post-§5: top-level hosted_agents /
+  // agent_disclosure_notice. Pre-§5: nested agents.{list,notice}.
+  const list = m.hosted_agents
+    || (m.agents && m.agents.list)
+    || [];
+  const disclosureNotice = m.agent_disclosure_notice
+    || (m.agents && m.agents.notice)
+    || "";
   let agentsHtml = `<h3>Hosted agents (${list.length})</h3>`;
-  if (agents.notice) {
-    agentsHtml += `<div class="disclosure-notice">${escapeHtml(agents.notice)}</div>`;
+  if (disclosureNotice) {
+    agentsHtml += `<div class="disclosure-notice">${escapeHtml(disclosureNotice)}</div>`;
   }
   if (list.length === 0) {
     agentsHtml += `<div class="agents-empty">No agents disclosed at this server.</div>`;
@@ -1482,8 +1600,9 @@ function renderManifestView(tab) {
   }
   els.manifestAgents.innerHTML = agentsHtml;
 
-  // Hosted protocols section.
-  const protocols = m.hosts_protocols || [];
+  // Hosted protocols section. Post-§5: hosted_protocols. Pre-§5:
+  // hosts_protocols.
+  const protocols = m.hosted_protocols || m.hosts_protocols || [];
   if (protocols.length) {
     els.manifestProtocols.innerHTML =
       `<h3>Hosted protocols (${protocols.length})</h3>` +
@@ -1549,7 +1668,7 @@ function renderManifestView(tab) {
 //
 // Layout (top-to-bottom):
 //
-//   Bridged services    non-MCP hosts_protocols entries (OpenAPI,
+//   Bridged services    non-MCP hosted_protocols entries (OpenAPI,
 //                       GraphQL, ...). Read-only metadata cards.
 //                       Catalog rendering for these protocols is
 //                       future work; the manifest entry is shown
@@ -1832,7 +1951,10 @@ function capitalize(s) {
 function applyTabVisibility(tab) {
   const isAgent = tab?.kind === "agent";
   const isManifest = tab?.kind === "manifest";
-  const protocols = tab?.result?.manifest?.hosts_protocols || [];
+  const protocols =
+    tab?.result?.manifest?.hosted_protocols
+    || tab?.result?.manifest?.hosts_protocols
+    || [];
   const apis = tab?.result?.manifest?.apis || [];
 
   // The APIs tab now subsumes non-MCP bridged protocols (OpenAPI,
@@ -1954,13 +2076,20 @@ function computeMatchOutcome(agentDoc, manifest) {
   const needs = (requires.methods || []).slice();
   const wildcards = !!requires.wildcards;
   const m = manifest || {};
-  const meth = m.methods || {};
-  const policy = m.policy || {};
+  // Method universe and policy block are top-level post-§5; pre-§5
+  // shapes nest them under ``methods`` / ``policy``. Accept either.
+  const embeddedMethods = m.embedded_methods
+    || (m.methods && m.methods.embedded)
+    || [];
+  const customMethods = m.custom_methods
+    || (m.methods && m.methods.custom)
+    || [];
+  const policies = m.policies || m.policy || {};
   const universeSet = new Set();
-  for (const e of meth.embedded || []) universeSet.add(e.name);
-  for (const e of meth.custom || []) universeSet.add(e.name);
+  for (const e of embeddedMethods) universeSet.add(e.name);
+  for (const e of customMethods) universeSet.add(e.name);
   const universe = Array.from(universeSet).sort();
-  const serverWild = policy.wildcards_accepted !== false;
+  const serverWild = policies.wildcards_accepted !== false;
 
   if (wildcards && serverWild) {
     return {
@@ -2292,9 +2421,13 @@ els.form.addEventListener("submit", (e) => {
    form rendering, validation, YAML preview, and submission flow
    all live below. Hooks into the rest of the app only via:
      - the wrench button + F12 / Ctrl+Shift+I keyboard shortcuts
-     - window.pywebview.api.{validate_compose, get_substitution_catalog,
+     - window.pywebview.api.{validate_compose, get_verb_catalog,
        save_method_yaml, export_library, import_library, invoke}
      - reading the current tab's URI for "Will submit to:" target
+
+   Validation is catalog-driven: the verb name is checked against
+   the AGTP curated catalog (server-side core/methods.json) and the
+   path is checked against core/path_grammar.py.
 
    Future drawer tabs (Inspect, Storage, Network) drop into the same
    .dev-drawer-tabs bar with their own .dev-pane sibling.
@@ -2326,6 +2459,8 @@ els.form.addEventListener("submit", (e) => {
     libMenu:       $("#lib-menu"),
     emptyNew:      $("#compose-empty-new"),
     name:          $("#cf-name"),
+    nameAuto:      $("#cf-name-autocomplete"),
+    path:          $("#cf-path"),
     description:   $("#cf-description"),
     intent:        $("#cf-intent"),
     outcome:       $("#cf-outcome"),
@@ -2345,8 +2480,6 @@ els.form.addEventListener("submit", (e) => {
     yamlCopy:      $("#cf-yaml-copy"),
     yamlToggle:    $("#cf-yaml-toggle"),
     warnings:      $("#compose-warnings"),
-    subList:       $("#cf-substitutes"),
-    subAdd:        $("#cf-sub-add"),
     toast:         $("#compose-toast"),
   };
 
@@ -2356,7 +2489,8 @@ els.form.addEventListener("submit", (e) => {
   let activeLibId = null;        // null = unsaved draft
   let readOnly = false;
   let yamlCollapsed = false;
-  let substitutionCatalog = [];
+  let verbCatalog = [];          // [{name, members, categories, description}, ...]
+  let autocompleteIndex = -1;
   const debounceTimers = new Map();
 
   // ---- utilities ----
@@ -2461,28 +2595,28 @@ els.form.addEventListener("submit", (e) => {
     else closeDrawer();
   }
 
-  // ---- form: read state into a draft dict matching validate_partial shape ----
+  // ---- form: read state into a draft dict matching the wire PROPOSE body shape ----
   function readDraft() {
     const draft = {
-      name: D.name.value.trim(),
+      name: (D.name.value || "").trim().toUpperCase(),
+      path: (D.path.value || "").trim(),
       description: D.description.value.trim(),
       semantic: {
         intent: D.intent.value.trim(),
         actor: (document.querySelector('input[name="cf-actor"]:checked') || {}).value || "agent",
         outcome: D.outcome.value.trim(),
         capability: D.capability.value || null,
-        impact_tier: getActiveImpact(),
-        confidence_guidance: D.confidence.value === "" || D.confidence.value === "0"
+        impact: getActiveImpact(),
+        confidence: D.confidence.value === "" || D.confidence.value === "0"
           ? null : Number(D.confidence.value),
         is_idempotent: D.idempotent.checked,
       },
       required_params: readParamRows("required_params"),
       optional_params: readParamRows("optional_params"),
       namespace: D.namespace.value.trim(),
-      source: "amg/1.0",
       error_codes: getActiveCodes(),
-      substitutes_for: readSubRows(),
     };
+    if (!draft.path) delete draft.path;
     return draft;
   }
 
@@ -2515,18 +2649,11 @@ els.form.addEventListener("submit", (e) => {
     });
     return rows;
   }
-  function readSubRows() {
-    if (!D.subList) return [];
-    return Array.from(D.subList.querySelectorAll(".compose-sub-row")).map((r) => ({
-      target: r.querySelector('input[data-sf="target"]').value.trim(),
-      conditions: r.querySelector('input[data-sf="conditions"]').value.trim(),
-    })).filter((s) => s.target);
-  }
-
   // ---- form: write a draft dict back into the DOM (used when loading library) ----
   function writeDraft(draft) {
     draft = draft || {};
     D.name.value = draft.name || "";
+    D.path.value = draft.path || "";
     D.description.value = draft.description || "";
     const sb = draft.semantic || {};
     D.intent.value = sb.intent || "";
@@ -2535,8 +2662,12 @@ els.form.addEventListener("submit", (e) => {
     const actor = sb.actor || "agent";
     const radio = document.querySelector(`input[name="cf-actor"][value="${actor}"]`);
     if (radio) radio.checked = true;
-    setActiveImpact(sb.impact_tier || null);
-    const cg = sb.confidence_guidance == null ? 0 : Number(sb.confidence_guidance);
+    // Back-compat: persisted drafts may still carry the pre-§4 keys
+    // ``impact_tier`` / ``confidence_guidance``. Accept either shape
+    // so older library entries keep loading.
+    setActiveImpact(sb.impact || sb.impact_tier || null);
+    const cgRaw = sb.confidence != null ? sb.confidence : sb.confidence_guidance;
+    const cg = cgRaw == null ? 0 : Number(cgRaw);
     D.confidence.value = String(cg);
     D.confidenceVal.textContent = cg ? cg.toFixed(2) : "—";
     D.idempotent.checked = !!sb.is_idempotent;
@@ -2545,7 +2676,6 @@ els.form.addEventListener("submit", (e) => {
       ? draft.error_codes : [400, 405, 422]);
     writeParamRows("required_params", draft.required_params || []);
     writeParamRows("optional_params", draft.optional_params || []);
-    writeSubRows(draft.substitutes_for || []);
   }
   function setActiveImpact(tier) {
     $$(".impact-btn").forEach((b) => {
@@ -2588,28 +2718,6 @@ els.form.addEventListener("submit", (e) => {
     });
     tbody.appendChild(tr);
   }
-  function writeSubRows(rows) {
-    if (!D.subList) return;
-    D.subList.innerHTML = "";
-    rows.forEach((r) => addSubRow(r));
-  }
-  function addSubRow(row) {
-    row = row || {};
-    const div = document.createElement("div");
-    div.className = "compose-sub-row";
-    div.innerHTML =
-      `<input data-sf="target" type="text" value="${escapeHtml(row.target || row.target_method || "")}" placeholder="VALIDATE" />` +
-      `<input data-sf="conditions" type="text" value="${escapeHtml(row.conditions || "")}" placeholder="when ruleset is JSON Schema" />` +
-      `<button type="button" class="compose-sub-del" title="Remove">×</button>`;
-    div.querySelector(".compose-sub-del").addEventListener("click", () => {
-      div.remove(); onFormChange();
-    });
-    div.querySelectorAll("input").forEach((el) => {
-      el.addEventListener("input", () => onFormChange());
-    });
-    D.subList.appendChild(div);
-  }
-
   // ---- validation + UI feedback ----
   async function runValidation() {
     if (!window.pywebview || !window.pywebview.api) return;
@@ -2652,34 +2760,49 @@ els.form.addEventListener("submit", (e) => {
         renderFieldFeedback(fb, warns[field], field, "warn");
       }
     });
-    // Live "ok" feedback for the name field once it passes.
+    // Live "ok" feedback for the name field once it passes the
+    // catalog check.
     if (!errs.name && !warns.name && D.name.value.trim().length >= 3) {
       const fb = document.querySelector('.compose-feedback[data-feedback="name"]');
       if (fb) {
         fb.className = "compose-feedback ok";
-        fb.textContent = "✓ Name passes lexical and stoplist checks.";
+        fb.textContent = "✓ Verb is in the AGTP catalog.";
       }
     }
+    // Same affirmation for the path field once it passes the path
+    // grammar.
+    if (!errs.path && !warns.path && (D.path.value || "").trim()) {
+      const fb = document.querySelector('.compose-feedback[data-feedback="path"]');
+      if (fb) {
+        fb.className = "compose-feedback ok";
+        fb.textContent = "✓ Path satisfies AGTP path grammar.";
+      }
+    }
+    lastSuggestions = (result && result.suggestions) || {};
   }
+  let lastSuggestions = {};
   function renderFieldFeedback(fb, message, field, level) {
     const text = document.createElement("span");
     text.textContent = (level === "error" ? "✗ " : "⚠ ") + message;
     fb.appendChild(text);
     if (field === "name") {
-      injectNameSuggestions(fb, D.name.value.trim().toUpperCase());
+      injectNameSuggestions(fb);
     }
   }
-  function injectNameSuggestions(fb, name) {
-    if (!substitutionCatalog || !substitutionCatalog.length) return;
-    // Find catalogs matching by member name OR by prefix overlap.
-    const matches = [];
-    substitutionCatalog.forEach((cls) => {
-      if (cls.members.includes(name) || cls.members.some((m) => m.startsWith(name.slice(0, 3)) && m !== name)) {
-        cls.members.forEach((m) => {
-          if (m !== name && !matches.includes(m)) matches.push(m);
-        });
-      }
-    });
+  function injectNameSuggestions(fb) {
+    // Prefer catalog-driven suggestions surfaced by the bridge (they
+    // come from core.methods.find_close_matches, which is the same
+    // Levenshtein-based ranker the CLI uses). Fall back to a local
+    // prefix scan over the verb catalog when the bridge didn't
+    // attach any.
+    const typed = (D.name.value || "").trim().toUpperCase();
+    let matches = (lastSuggestions && lastSuggestions.name) || [];
+    if (!matches.length && verbCatalog.length && typed.length >= 2) {
+      matches = verbCatalog
+        .map((c) => c.name)
+        .filter((n) => n !== typed && n.startsWith(typed.slice(0, 3)))
+        .slice(0, 5);
+    }
     if (!matches.length) return;
     const top = matches.slice(0, 3);
     fb.appendChild(document.createTextNode(" "));
@@ -2709,7 +2832,7 @@ els.form.addEventListener("submit", (e) => {
     if (panel) { panel.remove(); return; }
     panel = document.createElement("div");
     panel.className = "compose-catalog-panel";
-    panel.appendChild(makeText("From the AMG substitution catalog:", "compose-catalog-entry-name"));
+    panel.appendChild(makeText("From the AGTP verb catalog:", "compose-catalog-entry-name"));
     allMatches.forEach((m) => {
       const row = document.createElement("div");
       row.className = "compose-catalog-entry";
@@ -2732,6 +2855,97 @@ els.form.addEventListener("submit", (e) => {
     s.className = cls || "";
     s.textContent = text;
     return s;
+  }
+
+  // ---- verb-name autocomplete dropdown ----
+  //
+  // Backed by the full AGTP catalog (currently 423 verbs). The
+  // dropdown is anchored to the name input; it shows on focus or
+  // when the user types, filters by prefix, and highlights the
+  // primary category as a tag on each row. Up/Down + Enter pick a
+  // match; Escape dismisses.
+  function autocompleteCandidates(typed) {
+    const upper = (typed || "").toUpperCase();
+    if (!verbCatalog.length) return [];
+    const exact = [];
+    const prefix = [];
+    const contains = [];
+    verbCatalog.forEach((c) => {
+      const n = c.name;
+      if (!upper) { prefix.push(c); return; }
+      if (n === upper) exact.push(c);
+      else if (n.startsWith(upper)) prefix.push(c);
+      else if (n.indexOf(upper) >= 0) contains.push(c);
+    });
+    return exact.concat(prefix, contains).slice(0, 24);
+  }
+  function showAutocomplete() {
+    if (!D.nameAuto) return;
+    const typed = (D.name.value || "").trim().toUpperCase();
+    const candidates = autocompleteCandidates(typed);
+    if (!candidates.length) {
+      hideAutocomplete();
+      return;
+    }
+    D.nameAuto.innerHTML = "";
+    autocompleteIndex = -1;
+    candidates.forEach((c, idx) => {
+      const row = document.createElement("div");
+      row.className = "compose-autocomplete-row";
+      // Phase-6: deprecated verbs render with the .deprecated
+      // marker (italics + tooltip explaining successor and
+      // removed_in). The verb is still pickable; the visual
+      // treatment is the migration prompt.
+      if (c.deprecated) {
+        row.classList.add("deprecated");
+        const succ = c.successor ? ` Successor: ${c.successor}.` : "";
+        const removed = c.removed_in ? ` Removed in: ${c.removed_in}.` : "";
+        row.title = `Deprecated in ${c.deprecated_in || "?"}.${succ}${removed}`;
+      }
+      row.dataset.value = c.name;
+      const cat = (c.categories || [])[0] || "verb";
+      const depMark = c.deprecated ? `<span class="ac-deprecated">deprecated</span>` : "";
+      row.innerHTML =
+        `<span class="ac-name">${escapeHtml(c.name)}</span>` +
+        `<span class="ac-cat">${escapeHtml(cat)}</span>` +
+        depMark +
+        (c.description ? `<span class="ac-desc">${escapeHtml(c.description)}</span>` : "");
+      row.addEventListener("mousedown", (e) => {
+        // mousedown beats blur, so the focus stays put after pick
+        e.preventDefault();
+        pickAutocomplete(c.name);
+      });
+      row.addEventListener("mouseenter", () => {
+        autocompleteIndex = idx;
+        highlightAutocomplete();
+      });
+      D.nameAuto.appendChild(row);
+    });
+    D.nameAuto.classList.remove("hidden");
+  }
+  function hideAutocomplete() {
+    if (D.nameAuto) {
+      D.nameAuto.classList.add("hidden");
+      D.nameAuto.innerHTML = "";
+      autocompleteIndex = -1;
+    }
+  }
+  function highlightAutocomplete() {
+    if (!D.nameAuto) return;
+    const rows = D.nameAuto.querySelectorAll(".compose-autocomplete-row");
+    rows.forEach((r, i) => {
+      r.classList.toggle("active", i === autocompleteIndex);
+      if (i === autocompleteIndex && typeof r.scrollIntoView === "function") {
+        r.scrollIntoView({ block: "nearest" });
+      }
+    });
+  }
+  function pickAutocomplete(value) {
+    if (!value) return;
+    D.name.value = value;
+    hideAutocomplete();
+    D.name.dispatchEvent(new Event("input"));
+    D.name.focus();
   }
   function renderSectionIndicators(completion) {
     Object.keys(completion).forEach((section) => {
@@ -3000,6 +3214,7 @@ els.form.addEventListener("submit", (e) => {
       const id = synth.synthesis_id || "(unknown)";
       const target = synth.target_method || "";
       const mapping = synth.parameter_mapping || {};
+      const proposedName = (draft && draft.name) || target || "(unknown)";
       const mappingHtml = Object.keys(mapping).map((p) =>
         `<dd>${escapeHtml(target)} → ${escapeHtml(mapping[p])} (from ${escapeHtml(p)})</dd>`
       ).join("");
@@ -3015,8 +3230,48 @@ els.form.addEventListener("submit", (e) => {
         `</div>`;
       const btn = D.response.querySelector("#cf-go-invoke");
       if (btn) btn.addEventListener("click", () => {
-        showToast(`Synthesis ${id} ready — switch to the Methods tab to invoke.`);
+        // Replaces the broken v1 toast handler:
+        //   1. Record the synthesis under tab.syntheses so the
+        //      Try-It form's invocation path picks up the
+        //      Synthesis-Id header automatically.
+        //   2. Stash a minimal spec on tab.activeSyntheses keyed by
+        //      synthesis_id so the manifest-side renderer can build
+        //      a Try-It form for the proposed method (which is not
+        //      in the server's REGISTRY when the plan is recipe-
+        //      based).
+        //   3. Close the drawer.
+        //   4. Re-render the manifest's Methods section so the
+        //      "Active Syntheses" pill appears with the new entry.
+        const tab = (typeof getActive === "function") ? getActive() : null;
+        if (tab) {
+          tab.syntheses = tab.syntheses || {};
+          tab.syntheses[proposedName] = id;
+          tab.activeSyntheses = tab.activeSyntheses || {};
+          tab.activeSyntheses[id] = {
+            method: proposedName,
+            spec: {
+              name: proposedName,
+              description: (draft && draft.description) ||
+                           (draft && draft.intent) || "",
+              required_params: ((draft && draft.required_params) || [])
+                .map((p) => p.name),
+              optional_params: ((draft && draft.optional_params) || [])
+                .map((p) => p.name),
+              category: "synthesis",
+              source: "agtp/1.0",
+            },
+            plan: synth.plan || null,
+            target_method: target,
+            created_at: Date.now(),
+          };
+          if (typeof renderActiveSyntheses === "function") {
+            renderActiveSyntheses(tab);
+          }
+        }
         closeDrawer();
+        showToast(
+          `Synthesis ${id.slice(0, 16)}… ready — try invoking ${proposedName}.`
+        );
       });
       markLibraryStatus("accepted", { synthesis_id: id });
     } else if (code === 422 && payload && payload.counter_proposal) {
@@ -3159,7 +3414,6 @@ els.form.addEventListener("submit", (e) => {
     D.closeBtn.addEventListener("click", closeDrawer);
     D.libNew.addEventListener("click", newDraft);
     D.emptyNew.addEventListener("click", newDraft);
-    D.subAdd.addEventListener("click", () => { addSubRow(); onFormChange(); });
 
     // Library menu
     D.libMenuBtn.addEventListener("click", (e) => {
@@ -3190,13 +3444,56 @@ els.form.addEventListener("submit", (e) => {
     });
 
     // Continuous validation on the name field — fires on every
-    // keystroke after the third character, per spec.
+    // keystroke after the second character, per spec.
     D.name.addEventListener("input", () => {
-      if (D.name.value.trim().length >= 3) {
+      // Force uppercase as the user types (the catalog is uppercase).
+      const cur = D.name.value || "";
+      const up = cur.toUpperCase();
+      if (cur !== up) {
+        D.name.value = up;
+      }
+      if (D.name.value.trim().length >= 2) {
         debounce("validate", runValidation, 60);
+        showAutocomplete();
+      } else {
+        hideAutocomplete();
       }
       debounce("yaml", renderYaml, 120);
     });
+    D.name.addEventListener("focus", () => {
+      if ((D.name.value || "").trim().length >= 2) showAutocomplete();
+    });
+    D.name.addEventListener("blur", () => {
+      // Defer hide so a click on a row can register first.
+      setTimeout(hideAutocomplete, 120);
+    });
+    D.name.addEventListener("keydown", (e) => {
+      if (D.nameAuto.classList.contains("hidden")) return;
+      const rows = D.nameAuto.querySelectorAll(".compose-autocomplete-row");
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        autocompleteIndex = Math.min(autocompleteIndex + 1, rows.length - 1);
+        highlightAutocomplete();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        autocompleteIndex = Math.max(autocompleteIndex - 1, 0);
+        highlightAutocomplete();
+      } else if (e.key === "Enter") {
+        if (autocompleteIndex >= 0 && rows[autocompleteIndex]) {
+          e.preventDefault();
+          pickAutocomplete(rows[autocompleteIndex].dataset.value);
+        }
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        hideAutocomplete();
+      }
+    });
+
+    // Path field: validate on input + blur.
+    if (D.path) {
+      D.path.addEventListener("input", () => onFormChange());
+      D.path.addEventListener("blur", () => onFormChange({ immediate: true }));
+    }
 
     // On-blur validation for everything else.
     [D.description, D.intent, D.outcome, D.namespace].forEach((el) => {
@@ -3226,7 +3523,7 @@ els.form.addEventListener("submit", (e) => {
           if (Number(D.confidence.value) < 0.85) {
             D.confidence.value = "0.85";
             D.confidenceVal.textContent = "0.85";
-            showToast("AMG recommends ≥ 0.85 for irreversible methods.");
+            showToast("AGTP guidance: confidence ≥ 0.85 for irreversible methods.");
           }
         }
         onFormChange({ immediate: true });
@@ -3317,8 +3614,8 @@ els.form.addEventListener("submit", (e) => {
   async function bootstrap() {
     await whenApiReady();
     try {
-      substitutionCatalog = await window.pywebview.api.get_substitution_catalog();
-    } catch (e) { substitutionCatalog = []; }
+      verbCatalog = await window.pywebview.api.get_verb_catalog();
+    } catch (e) { verbCatalog = []; }
     wire();
     renderLibrary();
     if (drawerState.open) {

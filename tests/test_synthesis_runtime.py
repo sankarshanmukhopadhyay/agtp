@@ -30,13 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import wire
 from core.identity import AgentDocument
-from server.amg.grammar import (
-    AMGMethodSpec,
-    ParamSpec,
-    SEMANTIC_ACTION_INTENT,
-    SOURCE_AGTP,
-    SOURCE_AMG,
-)
+from core.endpoint import EndpointSpec, ParamSpec
 from server.config import (
     AgentsConfig,
     ServerConfig,
@@ -70,23 +64,19 @@ ORCH_ID   = "9fe1dfc552a64c8bbec8dd2fe8cbe1a275f1a3405f7c5c20acca6453fd479709"
 # ---------------------------------------------------------------------------
 
 
-def _amg(name: str, **overrides: Any) -> AMGMethodSpec:
-    """Cheap AMGMethodSpec constructor for unit tests."""
+def _spec(name: str, **overrides: Any) -> EndpointSpec:
+    """Cheap EndpointSpec constructor for unit tests."""
     base = dict(
         name=name,
-        semantic_class=SEMANTIC_ACTION_INTENT,
         category="custom",
         description=f"test method {name}",
-        idempotent=False,
-        state_modifying=False,
         required_params=[],
         optional_params=[],
         error_codes=[400, 422],
-        source=SOURCE_AGTP,
         namespace=None,
     )
     base.update(overrides)
-    return AMGMethodSpec(**base)
+    return EndpointSpec(**base)
 
 
 def _ok_response(body: Dict[str, Any]) -> wire.AGTPResponse:
@@ -196,29 +186,29 @@ class RecipePatternTests(unittest.TestCase):
 
     def test_name_exact_matches(self):
         pattern = RecipePattern(name_exact="EVALUATE")
-        self.assertTrue(pattern.matches(_amg("EVALUATE")))
-        self.assertFalse(pattern.matches(_amg("OTHER")))
+        self.assertTrue(pattern.matches(_spec("EVALUATE")))
+        self.assertFalse(pattern.matches(_spec("OTHER")))
 
     def test_name_regex_matches(self):
         pattern = RecipePattern(name_regex=r"^EV.*")
-        self.assertTrue(pattern.matches(_amg("EVALUATE")))
-        self.assertFalse(pattern.matches(_amg("RECONCILE")))
+        self.assertTrue(pattern.matches(_spec("EVALUATE")))
+        self.assertFalse(pattern.matches(_spec("RECONCILE")))
 
     def test_category_matches(self):
         pattern = RecipePattern(category="cognitive")
-        self.assertTrue(pattern.matches(_amg("X", category="cognitive")))
-        self.assertFalse(pattern.matches(_amg("X", category="transact")))
+        self.assertTrue(pattern.matches(_spec("X", category="cognitive")))
+        self.assertFalse(pattern.matches(_spec("X", category="transact")))
 
     def test_has_parameters_requires_all(self):
         pattern = RecipePattern(has_parameters=["input", "ruleset"])
-        spec_with_both = _amg(
+        spec_with_both = _spec(
             "EVALUATE",
             required_params=[
                 ParamSpec(name="input", type="string", description="x"),
                 ParamSpec(name="ruleset", type="string", description="y"),
             ],
         )
-        spec_with_one = _amg(
+        spec_with_one = _spec(
             "EVALUATE",
             required_params=[
                 ParamSpec(name="input", type="string", description="x"),
@@ -229,8 +219,8 @@ class RecipePatternTests(unittest.TestCase):
 
     def test_composite_pattern_logical_and(self):
         pattern = RecipePattern(name_exact="EVALUATE", category="custom")
-        self.assertTrue(pattern.matches(_amg("EVALUATE", category="custom")))
-        self.assertFalse(pattern.matches(_amg("EVALUATE", category="other")))
+        self.assertTrue(pattern.matches(_spec("EVALUATE", category="custom")))
+        self.assertFalse(pattern.matches(_spec("EVALUATE", category="other")))
 
 
 class RecipeBasedPolicyTests(unittest.TestCase):
@@ -246,8 +236,8 @@ class RecipeBasedPolicyTests(unittest.TestCase):
             )],
         )
         policy = RecipeBasedPolicy([recipe])
-        proposal = _amg("EVALUATE")
-        available = [_amg("QUERY"), _amg("SUMMARIZE")]
+        proposal = _spec("EVALUATE")
+        available = [_spec("QUERY"), _spec("SUMMARIZE")]
         plan = policy.compose(proposal, available)
         self.assertIsNotNone(plan)
         self.assertEqual(plan.steps[0].method_name, "QUERY")
@@ -261,7 +251,7 @@ class RecipeBasedPolicyTests(unittest.TestCase):
             steps=[CompositionStep(method_name="QUERY")],
         )
         policy = RecipeBasedPolicy([recipe])
-        plan = policy.compose(_amg("AUDIT"), [_amg("QUERY")])
+        plan = policy.compose(_spec("AUDIT"), [_spec("QUERY")])
         self.assertIsNone(plan)
 
     def test_compose_skips_recipe_with_missing_underlying_method(self):
@@ -272,7 +262,7 @@ class RecipeBasedPolicyTests(unittest.TestCase):
             steps=[CompositionStep(method_name="MISSING")],
         )
         policy = RecipeBasedPolicy([recipe])
-        plan = policy.compose(_amg("EVALUATE"), [_amg("QUERY")])
+        plan = policy.compose(_spec("EVALUATE"), [_spec("QUERY")])
         self.assertIsNone(plan)
 
     def test_duplicate_recipe_names_rejected(self):
@@ -293,14 +283,14 @@ class PassthroughPolicyTests(unittest.TestCase):
     def test_compose_returns_one_step_plan_for_existing_method(self):
         policy = PassthroughPolicy()
         available = [
-            _amg(
+            _spec(
                 "QUERY",
                 required_params=[
                     ParamSpec(name="intent", type="string", description="x"),
                 ],
             ),
         ]
-        plan = policy.compose(_amg("QUERY"), available)
+        plan = policy.compose(_spec("QUERY"), available)
         self.assertIsNotNone(plan)
         self.assertEqual(len(plan.steps), 1)
         self.assertEqual(plan.steps[0].method_name, "QUERY")
@@ -308,7 +298,7 @@ class PassthroughPolicyTests(unittest.TestCase):
 
     def test_compose_returns_none_when_method_unknown(self):
         policy = PassthroughPolicy()
-        plan = policy.compose(_amg("AUDIT"), [_amg("QUERY")])
+        plan = policy.compose(_spec("AUDIT"), [_spec("QUERY")])
         self.assertIsNone(plan)
 
 
@@ -350,20 +340,20 @@ class SynthesisRuntimeUnitTests(unittest.TestCase):
 
     def test_attempt_synthesis_uses_passthrough_when_proposal_matches(self):
         plan = self.runtime.attempt_synthesis(
-            _amg("QUERY"), [_amg("QUERY"), _amg("SUMMARIZE")],
+            _spec("QUERY"), [_spec("QUERY"), _spec("SUMMARIZE")],
         )
         self.assertIsNotNone(plan)
         self.assertEqual(plan.policy_name, "passthrough")
 
     def test_attempt_synthesis_returns_none_when_no_policy_matches(self):
         plan = self.runtime.attempt_synthesis(
-            _amg("UNKNOWN"), [_amg("QUERY")],
+            _spec("UNKNOWN"), [_spec("QUERY")],
         )
         self.assertIsNone(plan)
 
     def test_instantiate_returns_id_and_writes_legacy_synthesis(self):
         plan = self.runtime.attempt_synthesis(
-            _amg("QUERY"), [_amg("QUERY")],
+            _spec("QUERY"), [_spec("QUERY")],
         )
         synthesis_id = self.runtime.instantiate(plan)
         self.assertTrue(synthesis_id.startswith("syn-"))
@@ -375,13 +365,13 @@ class SynthesisRuntimeUnitTests(unittest.TestCase):
 
     def test_execute_single_step_plan_dispatches_underlying_method(self):
         plan = self.runtime.attempt_synthesis(
-            _amg(
+            _spec(
                 "QUERY",
                 required_params=[
                     ParamSpec(name="intent", type="string", description="x"),
                 ],
             ),
-            [_amg(
+            [_spec(
                 "QUERY",
                 required_params=[
                     ParamSpec(name="intent", type="string", description="x"),
@@ -391,7 +381,7 @@ class SynthesisRuntimeUnitTests(unittest.TestCase):
         synthesis_id = self.runtime.instantiate(plan)
         request = wire.AGTPRequest(
             method="QUERY",
-            headers={"Synthesis-Id": synthesis_id, "Target-Agent": "x"},
+            headers={"Synthesis-Id": synthesis_id, "Agent-ID": "x"},
             body_bytes=json.dumps({"intent": "hello"}).encode("utf-8"),
         )
         resp = self.runtime.execute(synthesis_id, request, None, None)
@@ -404,7 +394,7 @@ class SynthesisRuntimeUnitTests(unittest.TestCase):
 
     def test_execute_multi_step_plan_threads_outputs(self):
         plan = SynthesisPlan(
-            proposed_method=_amg("AUDIT"),
+            proposed_method=_spec("AUDIT"),
             steps=[
                 CompositionStep(
                     method_name="QUERY",
@@ -428,7 +418,7 @@ class SynthesisRuntimeUnitTests(unittest.TestCase):
         synthesis_id = self.runtime.instantiate(plan)
         request = wire.AGTPRequest(
             method="AUDIT",
-            headers={"Synthesis-Id": synthesis_id, "Target-Agent": "x"},
+            headers={"Synthesis-Id": synthesis_id, "Agent-ID": "x"},
             body_bytes=json.dumps({"subject": "lauren"}).encode("utf-8"),
         )
         resp = self.runtime.execute(synthesis_id, request, None, None)
@@ -443,7 +433,7 @@ class SynthesisRuntimeUnitTests(unittest.TestCase):
 
     def test_execute_aggregation_merge(self):
         plan = SynthesisPlan(
-            proposed_method=_amg("AUDIT"),
+            proposed_method=_spec("AUDIT"),
             steps=[
                 CompositionStep(method_name="QUERY"),
                 CompositionStep(method_name="SUMMARIZE"),
@@ -464,7 +454,7 @@ class SynthesisRuntimeUnitTests(unittest.TestCase):
 
     def test_execute_aggregation_list(self):
         plan = SynthesisPlan(
-            proposed_method=_amg("INSPECT"),
+            proposed_method=_spec("INSPECT"),
             steps=[
                 CompositionStep(method_name="DISCOVER"),
                 CompositionStep(method_name="DESCRIBE"),
@@ -487,7 +477,7 @@ class SynthesisRuntimeUnitTests(unittest.TestCase):
         # First step succeeds, second fails — captured outputs from
         # the first must appear in the error body.
         plan = SynthesisPlan(
-            proposed_method=_amg("AUDIT"),
+            proposed_method=_spec("AUDIT"),
             steps=[
                 CompositionStep(
                     method_name="QUERY", capture_output_as="facts",
@@ -525,7 +515,7 @@ class SynthesisRuntimeUnitTests(unittest.TestCase):
 
     def test_expire_removes_active_and_legacy(self):
         plan = self.runtime.attempt_synthesis(
-            _amg("QUERY"), [_amg("QUERY")],
+            _spec("QUERY"), [_spec("QUERY")],
         )
         synthesis_id = self.runtime.instantiate(plan)
         self.assertTrue(self.runtime.expire(synthesis_id))
@@ -576,7 +566,7 @@ class _Server:
 
 
 def _send(server, target, method, *, body=None, synthesis_id=""):
-    headers = {"Target-Agent": target, "Accept": "application/json",
+    headers = {"Agent-ID": target, "Accept": "application/json",
                "Host": server.host}
     if synthesis_id:
         headers["Synthesis-Id"] = synthesis_id
@@ -647,7 +637,7 @@ class SynthesisEndToEndTests(unittest.TestCase):
 
         cls.config = ServerConfig(
             server=ServerInfo(
-                issuer="t.local", operator="x", contact="", amg_version="1.0",
+                server_id="t.local", operator="x", contact="",
             ),
             policy=ServerPolicy(),
             agents=AgentsConfig(disclosure="public"),
@@ -677,14 +667,15 @@ class SynthesisEndToEndTests(unittest.TestCase):
                 "description": "audit a subject by querying then summarizing",
             },
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 263)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
-        self.assertEqual(payload["outcome"], "accept")
-        synth = payload["synthesis"]
-        self.assertTrue(synth["synthesis_id"].startswith("syn-"))
-        # Multi-step plan exposed to the client.
-        self.assertIn("plan", synth)
-        self.assertEqual(len(synth["plan"]["steps"]), 2)
+        # §7 263 body: synthesis_id top-level, endpoint sub-block,
+        # multi-step plan under the ``synthesis`` extras key.
+        self.assertTrue(payload["synthesis_id"].startswith("syn-"))
+        self.assertIn("endpoint", payload)
+        synth_extras = payload["synthesis"]
+        self.assertIn("plan", synth_extras)
+        self.assertEqual(len(synth_extras["plan"]["steps"]), 2)
 
     def test_propose_no_recipe_falls_through_to_passthrough(self):
         # QUERY exists; passthrough policy yields a one-step plan.
@@ -697,11 +688,13 @@ class SynthesisEndToEndTests(unittest.TestCase):
                 "description": "ask the agent about itself",
             },
         )
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 263)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
         self.assertEqual(payload["synthesis"]["target_method"], "QUERY")
 
-    def test_propose_no_recipe_no_match_returns_422(self):
+    def test_propose_no_recipe_no_match_returns_463(self):
+        # §7: refusal is now 463 proposal-rejected with structured
+        # reason (was 422 negotiation-refused).
         resp = _send(
             self.server, ORCH_ID, "PROPOSE",
             body={
@@ -711,9 +704,9 @@ class SynthesisEndToEndTests(unittest.TestCase):
                 "description": "verb that has no recipe and no close match",
             },
         )
-        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.status_code, 463)
         payload = json.loads(resp.body_bytes.decode("utf-8"))
-        self.assertEqual(payload["error"]["code"], "negotiation-refused")
+        self.assertEqual(payload["error"]["code"], "proposal-rejected")
 
     def test_invoke_via_synthesis_id_executes_plan(self):
         # 1. PROPOSE AUDIT → synthesis_id.
@@ -726,9 +719,8 @@ class SynthesisEndToEndTests(unittest.TestCase):
                 "description": "audit subject via QUERY + SUMMARIZE",
             },
         )
-        synth_id = json.loads(resp.body_bytes.decode("utf-8"))[
-            "synthesis"
-        ]["synthesis_id"]
+        self.assertEqual(resp.status_code, 263)
+        synth_id = json.loads(resp.body_bytes.decode("utf-8"))["synthesis_id"]
 
         # 2. Invoke under the synthesis_id with the proposal's
         #    parameter shape. The runtime walks the plan: QUERY first
@@ -759,9 +751,8 @@ class SynthesisEndToEndTests(unittest.TestCase):
                 "description": "audit subject via QUERY + SUMMARIZE",
             },
         )
-        synth_id = json.loads(resp.body_bytes.decode("utf-8"))[
-            "synthesis"
-        ]["synthesis_id"]
+        self.assertEqual(resp.status_code, 263)
+        synth_id = json.loads(resp.body_bytes.decode("utf-8"))["synthesis_id"]
 
         suspend = _send(
             self.server, ORCH_ID, "SUSPEND",

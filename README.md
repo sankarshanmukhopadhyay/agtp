@@ -14,10 +14,8 @@ Specification, Internet-Draft, and reference implementation.
 This repo is a **monorepo of products**, all sharing the AGTP wire
 format defined in `core/`. Each product is its own top-level
 directory with its own entry point, agents, and configuration. The
-AMG (Agent Method Grammar) validator is duplicated under
-`server/amg/` and `client/amg/` deliberately, mirroring SMTP's MTA
-client / server split: same protocol, two distinct user agents that
-may evolve independently.
+client / server split mirrors SMTP's MTA: same protocol, two
+distinct user agents that may evolve independently.
 
 ```
 agtp/
@@ -26,25 +24,28 @@ agtp/
 │   ├── ids.py              URI + agent-ID parsing (Forms 1, 1a, 2)
 │   ├── identity.py         Agent Document v2 schema
 │   ├── manifest.py         Server Manifest dataclasses
-│   ├── status.py           AGTP status code helpers (455/456/457/458/550/551 + HTTP)
+│   ├── status.py           AGTP status code helpers (455–460, 550/551 + HTTP)
 │   ├── handshake.py        client-side matching outcome
 │   ├── render.py           HTML identity-card renderer
+│   ├── methods.json        curated AGTP method catalog (~425 methods)
+│   ├── methods.py          method-name validator (catalog lookup)
+│   ├── path_grammar.py     path validator (verb-in-path rejection)
+│   ├── endpoint.py         SemanticBlock + EndpointSpec primitives
 │   └── _paths.py           cross-platform path normalization
 │
 ├── server/               AGTP server product
 │   ├── main.py             python -m server  /  agtp-server
 │   ├── methods.py          12-method registry + dispatch
 │   ├── manifest.py         Server Manifest generation
-│   ├── config.py           agtp-server.toml loader
-│   ├── negotiation.py      PROPOSE counter/refuse fallback (vestigial)
+│   ├── config.py           agtp-server.toml loader (incl. [policies.methods])
+│   ├── negotiation.py      find_counter_proposal helper
 │   ├── synthesis/          composition runtime (policies, recipes, plan exec)
 │   ├── synthesis_runtime.py  back-compat shim (re-exports from server.synthesis)
-│   ├── amg/                AMG validator (server-side)
 │   ├── examples/           opt-in custom-method modules
 │   ├── agents/             reference agent docs (Lauren, Orchestrator, legacy/)
 │   ├── agtp-server.toml    reference config
 │   ├── agtp-recipes.toml   starter synthesis recipes
-│   └── run_demo.sh         end-to-end 26-scenario demo
+│   └── run_demo.sh         end-to-end 29-scenario demo
 │
 ├── client/               AGTP client product (one package, two frontends)
 │   ├── core_client.py      shared protocol logic (URI resolution, connections,
@@ -57,8 +58,8 @@ agtp/
 │   │   ├── app.py            pywebview entry            (elemen / python -m client.elemen.app)
 │   │   ├── bridge.py         pywebview <-> Python adapter
 │   │   └── ui/               HTML / CSS / JS
-│   └── amg/                AMG validator (client-side; agtp-amg)
 │
+├── scripts/              build_methods.py + deployment automation
 ├── registry/             AGTP registry product
 │   └── main.py             python -m registry  /  agtp-registry
 │
@@ -83,15 +84,17 @@ frontends:
 
 Both frontends call into the same `client.core_client` module for
 protocol work (URI resolution, connection handling, response parsing)
-and the same `client.amg` package for grammar validation. Updates to
-the wire protocol or to AMG land in both interfaces simultaneously.
+and the same `core.methods` / `core.path_grammar` modules for verb
+and path validation. Updates to the wire protocol or to the verb
+catalog land in both interfaces simultaneously.
 
 After `pip install -e .`:
 
 ```bash
-agtp agtp://agents.agtp.io           # CLI manifest fetch
-elemen                               # launch the GUI browser
-agtp-amg path/to/method.json         # AMG validation tool
+agtp agtp://agents.agtp.io                    # CLI manifest fetch
+agtp agtp://agents.agtp.io RECONCILE          # invoke a method
+agtp agtp://agents.agtp.io RECONCILE --grammar-check   # probe a verb
+elemen                                        # launch the GUI browser
 ```
 
 On Windows, launch the GUI without a console window via the
@@ -113,13 +116,13 @@ pyw -3.13 -m client.elemen.app
   carry the v2 identity schema (skills + requires + scopes_accepted).
 - Content negotiation produces JSON, YAML, or rendered HTML from the
   same URI based on the client's `Accept` header.
-- Twelve embedded methods (six cognitive + six mechanics) plus the
-  AMG validator that gates every custom method registration and every
-  PROPOSE proposal.
+- Twelve embedded methods (six cognitive + six mechanics) plus a
+  curated catalog of ~425 verbs the dispatcher validates against;
+  unknown verbs return 459, paths with verb-tokens return 460.
 
 ## Three URI types, three entity types
 
-AGTP recognizes three URI forms; each addresses a fundamentally
+AGTP recognizes six URI forms (per `agtp §11`); each addresses a fundamentally
 different kind of entity. The elemen browser renders each one
 differently, with a tab structure that matches the entity type.
 
@@ -127,13 +130,23 @@ differently, with a tab structure that matches the entity type.
 |--------------------------------------|-------------|----------------|
 | `agtp://{host}`                      | **Server**  | a workplace    |
 | `agtp://{agent-id}` or `…@{host}`    | **Agent**   | a user         |
-| `agtp://{host}` (with `hosts_protocols`) | **Application server** | applications hosted on AGTP (MCP, OpenAPI, GraphQL bridges) |
+| `agtp://{host}` (with `hosted_protocols`) | **Application server** | applications hosted on AGTP (MCP, OpenAPI, GraphQL bridges) |
 
 ```
-agtp://{agent-id}                  Form 1   - canonical, registry lookup
-agtp://{agent-id}@{host}[:{port}]  Form 1a  - direct host
-agtp://{host}[:{port}]             Form 2   - server-level (no agent ID)
+agtp://{agent-id}                       Form 1   - canonical identity
+agtp://{agent-id}@{host}                Form 1a  - identity + host
+agtp://{host}                           Form 2   - server-level discovery
+agtp://{domain}                         Form 2a  - organization-level
+agtp://{domain}/agents/{name}           Form 3   - domain-anchored agent
+agtp://agtp.{domain}/agents/{name}      Form 4   - subdomain-anchored agent
 ```
+
+Canonical URIs omit the port — the default 4480 is implicit
+(mirroring how HTTPS URIs omit `:443`). The parser tolerates
+`:port` for dev / test fixtures but `format_uri` never emits it.
+
+See [`docs/uri-forms.md`](docs/uri-forms.md) for the full reference
+including the server-side resolution flow for Forms 3 / 4.
 
 ### Agents are users, not APIs
 
@@ -210,96 +223,133 @@ agtp-migrate --check path/to/agent.json  # report only
 A `.v1.bak` backup is written alongside each migrated file unless
 `--no-backup` is set.
 
-## AMG (Agent Method Grammar)
+## Method validation: catalog + path grammar
 
-AMG is the validation layer that makes runtime method synthesis safe.
-Every method — embedded, custom, or proposed at runtime via PROPOSE —
-passes the same nine-pass validator before becoming invocable. The
-validator lives in `agtp/amg/`; the public surface is:
+The protocol's method vocabulary is the curated method list at
+[`core/methods.json`](core/methods.json) — ~425 approved AGTP methods
+plus the 12 embedded primitives plus 5 legacy HTTP methods.
+Validation reduces to two cheap checks:
+
+  * **Method-name lookup** ([`core/methods.py`](core/methods.py)):
+    `is_approved_verb(name)` against the catalog. Verbs absent from
+    the catalog return **459 Method Grammar Violation** with
+    close-match suggestions in the body.
+  * **Path grammar** ([`core/path_grammar.py`](core/path_grammar.py)):
+    `validate_path(path)` rejects paths that don't start with `/`,
+    have a trailing slash on a non-root path, or embed a verb token
+    in any segment. Failures return **460 Endpoint Grammar Violation**.
+
+> **Status of 460.** The path-grammar validator and the **460
+> Endpoint Grammar Violation** status code are wired through every
+> layer (dispatcher, status helpers, CLI, drawer) and tested in
+> isolation. They are reserved and ready, but **460 does not yet
+> fire on real wire traffic**: the current AGTPRequest carries a
+> method line without a path component, so `validate_path("/")`
+> always succeeds at dispatch time. Full operational use of 460
+> lands when the endpoint registry binds methods to specific paths
+> and the wire format starts carrying that path on the request
+> line. Until then, treat 460 as part of the protocol's documented
+> status surface, not part of the daily traffic.
+
+The catalog is a curated list with a small runtime helper surface:
 
 ```python
-from server.amg import AMGMethodSpec, ParamSpec, validate, InvalidMethodError
-
-spec = AMGMethodSpec(
-    name="RECONCILE",
-    semantic_class="action-intent",
-    category="transact",
-    description="Reconcile transactions for a given account and period.",
-    idempotent=False,
-    state_modifying=True,
-    required_params=[
-        ParamSpec(name="account_id", type="string", description="ledger account"),
-        ParamSpec(name="period",     type="string", description="time window"),
-    ],
-    optional_params=[],
-    error_codes=[400, 422, 455],
-    source="amg/1.0",
-    namespace="acme-finance",
+from core.methods import (
+    is_approved_verb, categorize, get_legacy_preferred,
+    find_close_matches,
 )
-result = validate(spec)
-print(result.valid, result.error)
+
+is_approved_verb("RECONCILE")     # True
+categorize("AUDIT")                # ['analysis', 'domain_spanning']
+get_legacy_preferred("GET")        # 'FETCH'
+find_close_matches("PROPOSEX")     # ['PROPOSE']
 ```
 
-### The nine passes (in order)
+### Per-server method policy: `[policies.methods]`
 
-| # | Pass | Checks |
-|---|---|---|
-| 1 | lexical | name matches `/^[A-Z]{3,32}$/` |
-| 2 | reserved | not in `HTTP_METHODS`; not in `EMBEDDED_METHODS` for `source=amg/1.0` |
-| 3 | semantic-class | one of `action-intent` / `query-intent` / `protocol-mechanic`; the last is embedded-only |
-| 4 | stoplist | not a noun, adjective, or static state (suggestion attached) |
-| 5 | required-fields | all required fields present; `error_codes` includes 422; namespace required for `amg/1.0`; namespace forbidden for `agtp/1.0` |
-| 6 | description | ≥ 20 chars, non-stub (no TODO / placeholder / etc.) |
-| 7 | parameters | snake_case names, recognized types, descriptions present, `object`/`array` carry a JSON Schema, no name collisions |
-| 8 | schemas | each schema is valid JSON Schema (Draft 7 when `jsonschema` is installed; structural fallback otherwise) |
-| 9 | substitution | substitution targets exist, no self-reference, no duplicates |
+Each server declares its method policy under `[policies.methods]`
+in [`agtp-server.toml`](server/agtp-server.toml) — which catalog
+verbs it admits, which legacy HTTP methods it opts into, and which
+`(method, path)` pairs are rewritten before dispatch. The block:
 
-Passes run in declared order; the first failure aborts and surfaces a
-structured `ValidationError` with a machine-readable code and a
-human-readable suggestion.
+```toml
+[policies.methods]
+allow    = "*"                      # or a list: ["QUERY", "RECONCILE"]
+disallow = ["PATCH", "TRANSFER"]    # explicit refusals
+legacy   = ["GET", "POST"]          # opt-in HTTP verbs; "*" / "NONE" also accepted
 
-### Integration with the runtime
+[[policies.methods.redirects]]
+from_method = "BOOK"
+from_path   = "/room"               # optional; method-only redirect omits both _path fields
+to_method   = "RESERVE"
+to_path     = "/room"
+```
 
-- **`register_custom`** runs AMG validation on the proposed spec before
-  registering. Failed validations raise `InvalidMethodError` (which
-  inherits from `ValueError`, so existing call sites that
-  `except ValueError` keep catching refusals).
-- **`handle_propose`** filters proposals through AMG before the
-  negotiation policy. Lexical / reserved / stoplist / semantic-class
-  failures return **422 Unprocessable** with
-  `error.code='negotiation-refused'`, `error.reason="ambiguous"`,
-  and the AMG error code in the body's `amg_code` field. The benign
-  case where a proposal names an embedded method (the
-  accept-with-synthesis path) is allowed through.
+The same content surfaces in the server manifest under
+`policies.methods`, so clients can introspect the policy without
+side-channel access to the config file. Embedded methods (the 12
+protocol primitives) bypass the policy gate so a mis-authored
+disallow can't take a server off-protocol.
 
-### `agtp-validate` CLI
+> Pre-§6 servers used a separate `methods.txt` file format with
+> `Allow:` / `Disallow:` / `Legacy:` / `Redirect:` directives. That
+> file format is retired (see `agtp-api §8`); move its content into
+> `[policies.methods]` of `agtp-server.toml`.
 
-After `pip install -e .`:
+### Dispatcher resolution order
+
+The dispatcher applies these gates in order:
+
+  1. **Synthesis-Id** — route to the synthesis runtime if the
+     header names an active synthesis.
+  2. **459 Method Grammar Violation** — verb not in the catalog
+     (and not opted into via `policies.methods.legacy`).
+  3. **460 Endpoint Grammar Violation** — path malformed or
+     contains a verb token.
+  4. **405 Method Not Allowed** — `policies.methods` refuses this
+     verb on this server.
+  5. **Redirect** — `policies.methods.redirects` rewrites
+     `(method, path)`.
+  6. **Registry lookup** — handler resolves and runs.
+
+The ``Method-Grammar`` header pathway the protocol previously
+shipped was retired in this revision; the catalog gate at the top
+of dispatch carries the same job without the wire-level header.
+
+### Building the catalog
+
+The canonical method list lives in [`scripts/methods_source.py`](scripts/methods_source.py).
+Run [`scripts/build_methods.py`](scripts/build_methods.py) after editing
+the source list to regenerate `core/methods.json`:
 
 ```bash
-agtp-validate path/to/method.json                  # validate one spec
-agtp-validate path/to/methods/                     # validate every *.method.json
-agtp-validate --check-substitution BOOK            # show substitution candidates
-agtp-validate --known-methods extra-methods.json   # extend the universe
+python scripts/build_methods.py
 ```
 
-Output is per-pass (`✓` / `✗` with detail), with a final `VALID` /
-`INVALID` summary. Exit code 0 on success, 1 on validation failure,
-2 on argument or I/O errors.
+The build script merges duplicates (verbs that appear under multiple
+categories), excludes legacy HTTP names from the curated catalog
+(POST / PATCH / etc. are legacy-only by spec), and emits the JSON
+in canonical order: embedded first, then alphabetical within each
+category.
 
-### Substitution catalog
+### Catalog evolution
 
-`server.amg.DEFAULT_SUBSTITUTIONS` ships seed equivalence classes
-(reservation, retrieval, execution, validation, creation). Servers
-discover candidates with `find_substitutes(name, registry)`. The
-ecosystem catalog (future work) is the canonical extension point.
+The catalog uses semver. Verbs can be deprecated with
+``deprecated_in`` / ``removed_in`` / ``successor`` metadata; the
+dispatcher stamps an ``AGTP-Catalog-Warning`` advisory header on
+responses for deprecated invocations. The server manifest exposes
+its catalog version on every DISCOVER. The
+[`agtp-catalog-diff`](tools/catalog_diff.py) CLI compares two
+catalogs and scans a deployment for breakage before upgrade.
 
-### Optional dependency
+Run before deploying a new catalog:
 
-AMG works without external dependencies. Installing the
-`amg-schemas` extra (`pip install -e ".[amg-schemas]"`) pulls in
-`jsonschema>=4` so Pass 8 uses the Draft 7 metaschema validator
-instead of the structural fallback.
+```bash
+agtp-catalog-diff core/methods.json proposed/methods.json \
+    --against-deployment ./agtp-server/
+```
+
+Full operator runbook in [`docs/catalog-evolution.md`](docs/catalog-evolution.md).
 
 ## Status codes
 
@@ -317,18 +367,24 @@ HTTP codes carried in payloads.
 | 204 | No Content | Method executed; no response body |
 | 400 | Bad Request | Malformed AGTP request |
 | 401 | Unauthorized | Agent-ID not recognized or not authenticated |
-| 403 | Forbidden | Agent lacks authority for the requested action; carries soft-deny refusals via `error.code` (e.g. `method-not-permitted-for-agent`, `wildcards-refused`) |
+| 261 | Negotiation In Progress | PROPOSE queued for async evaluation; body carries `proposal_id` and polling instructions. *AGTP-specific (§7).* |
+| 262 | Authorization Required | Agent's authority insufficient — scope-required, wildcards-required, credentials-missing, anonymous-discovery-disabled. *AGTP-specific (§7).* |
+| 263 | Proposal Approved | PROPOSE accepted; body carries `synthesis_id`, `endpoint`, `persistent`, `expires_at`. *AGTP-specific (§7).* |
+| 400 | Bad Request | Body well-formedness failure; PROPOSE bodies use `error.code='bad-request'` with `error.issue` |
+| 403 | Forbidden | Agent lacks authority for the requested action; carries soft-deny refusals via `error.code` (e.g. `method-not-permitted-for-agent`). Pre-§7 also covered scope-required / wildcards-refused; those now use 262 |
 | 404 | Not Found | Target resource or agent not found |
 | 408 | Timeout | TTL exceeded before method could execute |
 | 409 | Conflict | Method conflicts with current state |
 | 410 | Gone | Agent has been Revoked or Deprecated; canonical Agent-ID is permanently retired |
-| 422 | Unprocessable | Request well-formed but semantically invalid; PROPOSE refusal (`error.code='negotiation-refused'`) and counter-proposal responses (body carries `counter_proposal`) ride this code |
+| 422 | Unprocessable | Request well-formed but semantically invalid. Pre-§7 also carried PROPOSE refusals (`error.code='negotiation-refused'`); §7 moves those to 463 |
 | 429 | Rate Limited | Agent is exceeding permitted request frequency |
 | 455 | Scope Violation | Requested action is outside declared Authority-Scope. *AGTP-specific.* |
 | 456 | Budget Exceeded | Method execution would exceed the Budget-Limit declared in the request. *AGTP-specific.* |
 | 457 | Zone Violation | Request would route outside the AGTP-Zone-ID boundary; SEP-enforced. *AGTP-specific.* |
 | 458 | Counterparty Unverified | PURCHASE counterparty failed merchant identity verification (Merchant-ID absent, Merchant-Manifest-Fingerprint mismatch, or merchant in non-Active lifecycle state). *AGTP-specific.* |
-| 459 | Grammar Violation | Method-Grammar header pathway: an unrecognized method name accompanied by `Method-Grammar: AMG/1.0` failed AMG's lexical / reserved / stoplist check. *AGTP-specific.* |
+| 459 | Method Grammar Violation | Method name is not in the AGTP verb catalog. The body carries close-match suggestions (Levenshtein-2 against the approved set; legacy verbs surface their canonical replacement first). *AGTP-specific.* |
+| 460 | Endpoint Grammar Violation | Path violates AGTP path grammar — must begin with `/`, must not end with `/` (except the root), must not embed a verb token in any segment. *AGTP-specific.* |
+| 463 | Proposal Rejected | PROPOSE refused; body carries `error.code='proposal-rejected'`, `error.reason` (one of `out-of-scope` / `policy-refused` / `composition-impossible` / `ambiguous`), and optional `error.counter_proposal`. *AGTP-specific (§7).* |
 | 500 | Server Error | Internal failure in the responding system |
 | 503 | Unavailable | Responding agent or system temporarily unavailable or Suspended |
 | 550 | Delegation Failure | A delegated sub-agent failed to complete the requested action. *AGTP-specific.* |
@@ -342,7 +398,6 @@ and **MUST NOT** be returned by current implementations.
 
 | Code | Status |
 |------|--------|
-| 460 | Reserved |
 | 552 | Reserved |
 | 553 | Reserved |
 | 554 | Reserved |
@@ -359,7 +414,7 @@ admits. Their semantics now ride existing codes, with the body's
 | 451 Scope Violation | **455** Scope Violation | Renumbered |
 | 452 Method Not Permitted for Agent | **403** + `error.code='method-not-permitted-for-agent'` | Folded into Forbidden |
 | 453 Zone Violation | **457** Zone Violation | Renumbered |
-| 454 Grammar Violation | **459** Grammar Violation | Method-Grammar header pathway (pre-dispatch). Application-layer grammar checks may still use 422 + `error.code='grammar-violation'`. |
+| 454 Grammar Violation | (split) | Method-name failures now ride **459 Method Grammar Violation**; path failures ride **460 Endpoint Grammar Violation**. The Method-Grammar header pathway was retired; the catalog gate at the top of dispatch carries the same job. |
 | 460 Negotiation Refused | **422** + `error.code='negotiation-refused'` | Folded into Unprocessable |
 | 461 Counter-Proposal | **422** with `counter_proposal` body | Folded into Unprocessable |
 | 462 Wildcards Refused | **403** + `error.code='wildcards-refused'` | Folded into Forbidden |
@@ -385,62 +440,88 @@ agtp agtp://{agent-id} --match-check
 also notes wildcard policy mismatches so callers can predict 403
 `wildcards-refused` responses.
 
+## Wire format and header model
+
+AGTP uses an HTTP-shaped wire format (request line, response line,
+RFC 7230 header encoding, Content-Length framing) over TLS 1.3+ on
+TCP/4480. The header vocabulary is AGTP-specific and intentionally
+small — see [`docs/wire-format.md`](docs/wire-format.md) for the
+full surface.
+
+Required on requests:
+
+- **`Agent-ID`** — identifies the invoking agent. Pre-§10 servers
+  used `Target-Agent`; the §10 fallback accepts that name with a
+  deprecation warning.
+
+Optional on requests:
+
+- **`Authority-Scope`** — claimed scopes for this request,
+  validated against the agent's declared scope set.
+- **`Session-ID`** — opaque operational session grouping.
+- **`Task-ID`** — task tracing; echoed in the response.
+- **`Delegation-Chain`** — reserved for v01; v00 rejects with 501.
+
+Required on responses:
+
+- **`Server-ID`** — identifies the server that produced the response.
+
+Optional on responses:
+
+- **`Attribution-Record`** — signed attestation of response origin
+  (opt-in via `[audit] attribution_records_enabled`; placeholder
+  until §5 JWS signing lands).
+
+Headers retired from earlier drafts: `AGTP-Version`, `AGTP-Method`,
+`AGTP-Status` (info is in the request/response line);
+`Principal-ID` (info is in the agent document); `Priority`, `TTL`,
+`Budget-Limit`, `AGTP-Zone-ID` (not in v00 scope).
+
 ## Negotiation (PROPOSE)
 
-PROPOSE has three documented outcomes:
+PROPOSE has its own status-code family (per `agtp-api §7`):
 
-- **Accept (200)** - server returns a `Synthesis` mapping the proposal
-  onto an existing method. Subsequent calls quote the
-  `Synthesis-Id` header to invoke through the synthesis.
-- **Refuse (422 `negotiation-refused`)** - body carries
-  `error.reason` and `error.explanation`.
-- **Counter (422 with `counter_proposal` body)** - body carries a
-  `counter_proposal` with the MethodSpec the server is willing to
-  admit instead.
+- **263 Proposal Approved** — server returns a synthesis mapping the
+  proposal onto an existing method or composition. Subsequent calls
+  carry the `Synthesis-Id` header to invoke through it. Body carries
+  `synthesis_id`, `endpoint`, `persistent`, `expires_at`, and
+  `granted_duration`.
+- **463 Proposal Rejected** — body carries
+  `error.code = "proposal-rejected"`, `error.reason` (one of
+  `out-of-scope`, `policy-refused`, `composition-impossible`,
+  `ambiguous`), `error.explanation`, and an optional
+  `error.counter_proposal` with the server's suggested alternative.
+- **261 Negotiation In Progress** — server queued the proposal for
+  async evaluation; body carries `proposal_id` and the polling path
+  (`QUERY /proposals`). Only emitted when
+  `[policies.synthesis] async_evaluation_enabled = true`.
+- **400 Bad Request** — body well-formedness failure
+  (`invalid-json`, `missing-required-field`,
+  `malformed-semantic-block`, `malformed-schema`).
+- **262 Authorization Required** — agent's authority insufficient
+  (also used elsewhere for `wildcards-required` and
+  `scope-required`).
+
+See [`docs/propose.md`](docs/propose.md) for the full body shapes,
+the reason / issue / type vocabularies, persistent synthesis (with
+operator-controlled duration caps), audit logging, and the v00
+migration notes.
 
 The client gains `--negotiate` (auto-issue PROPOSE on a 403 soft-deny)
-and `--auto-accept-counter` (re-invoke under a 422 counter-proposal
+and `--auto-accept-counter` (re-invoke under a 463 counter-proposal
 without prompting).
 
-### Method-Grammar header pathway
+### Probing a verb without committing
 
-Lighter-weight than PROPOSE: a client that wants to invoke an
-AMG-conformant method against a server *without* prior negotiation
-includes the `Method-Grammar: AMG/1.0` header on the request. When
-the dispatcher sees an unrecognized method name plus this header, it:
-
-1. Runs AMG's name-targeted passes (lexical, reserved, stoplist) on
-   the method name. Failure returns **459 Grammar Violation** with
-   the failed pass and AMG error code in the body.
-2. Verifies `requires.wildcards: true` on the agent document.
-   Failure returns **403 wildcards-refused**.
-3. Verifies `policy.wildcards_accepted: true` on the server.
-   Failure returns **403 wildcards-refused**.
-
-If all three checks pass, the server returns **200** with a
-structured invitation:
-
-```json
-{
-  "method": "RECONCILE",
-  "status": "amg-conformant",
-  "executable": false,
-  "next_action": "PROPOSE",
-  "negotiable": true,
-  "explanation": "Method name 'RECONCILE' is AMG-conformant but no handler is registered on this server. Issue a PROPOSE to negotiate instantiation, or check the server manifest for similar registered methods."
-}
-```
-
-`next_action` becomes `"no_negotiation_available"` and `negotiable`
-becomes `false` when the server's `policy.negotiable` is `false`.
-
-The `Method-Grammar: AGIS/1.0` header value is also accepted during
-the AGIS → AMG transition; the response carries an HTTP-style
-`Warning: 299 - "Method-Grammar value AGIS/1.0 is deprecated; use
-AMG/1.0"` header advising clients to upgrade.
-
-PROPOSE is still the path that *instantiates* a method; Method-Grammar
-is the path that *probes* whether a method could be instantiated.
+The `Method-Grammar` header pathway the protocol previously shipped
+was retired. The catalog-based dispatcher carries the same job at
+the top of every request: an unknown verb gets **459** with
+close-match suggestions, a verb that's in the catalog but has no
+handler on this server gets **405**, and an admissible verb runs
+normally. The CLI's `agtp <uri> METHOD --grammar-check` flag still
+sends a probe and renders the response — a single command that
+tells you whether the verb is in the catalog and whether the
+server admits it.
 
 ### Synthesis runtime
 
