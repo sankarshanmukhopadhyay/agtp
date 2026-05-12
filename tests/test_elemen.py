@@ -270,7 +270,11 @@ class ElemenBridgeTests(unittest.TestCase):
         self.assertIn("hosted_protocols", d)
         self.assertEqual(d["apis"][0]["path"], "/calendar")
         protos = [p["protocol"] for p in d["hosted_protocols"]]
-        self.assertIn("mcp", protos)
+        # Any configured protocol satisfies the wire contract. The
+        # demo config carries OpenAPI as its bridged-protocol example;
+        # MCP is no longer pinned here because the demo server does
+        # not host an MCP backend.
+        self.assertIn("openapi", protos)
 
     def test_manifest_omits_apis_when_unconfigured(self):
         # Fresh tempdir / default config has neither field populated;

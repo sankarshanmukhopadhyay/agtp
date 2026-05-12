@@ -369,6 +369,13 @@ class MethodSetTests(unittest.TestCase):
         self.assertIn(
             CONTENT_TYPE_JSON, wire.header(resp, "Content-Type")
         )
+        # X-AGTP-Document-Type pins the document kind so a header-first
+        # renderer (elemen) can pick the agent view without parsing.
+        # See core/identity.py for the catalog.
+        self.assertEqual(
+            wire.header(resp, "X-AGTP-Document-Type"),
+            "agtp.agent.document",
+        )
         payload = _decode_json(resp)
         self.assertEqual(payload["agent_id"], LAUREN_ID)
 

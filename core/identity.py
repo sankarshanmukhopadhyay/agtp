@@ -45,6 +45,30 @@ CONTENT_TYPE_YAML = "application/vnd.agtp.identity+yaml"
 CONTENT_TYPE_HTML = "text/html; charset=utf-8"
 CONTENT_TYPE_MANIFEST_JSON = "application/vnd.agtp.manifest+json"
 
+# Document-type discriminators (emitted as ``X-AGTP-Document-Type``).
+# The header lets a renderer dispatch on what a response IS before
+# parsing the body. Three canonical document types today:
+#
+#   agtp.agent.document   Agent Document — the per-agent identity
+#                         returned by DESCRIBE (Form 1/1a).
+#   agtp.server.manifest  Server Manifest — operator / methods /
+#                         hosted_agents / hosted_protocols / apis /
+#                         policy. Returned by server-level DISCOVER
+#                         (Form 2) against an AGTP server.
+#   agtp.server.identity  Application-server identity — the shape an
+#                         application-typed server (e.g. MCP-on-AGTP
+#                         gateway) returns from DESCRIBE/DISCOVER
+#                         target=server. Carries an ``application``
+#                         block whose ``type`` is mirrored on
+#                         ``X-AGTP-Application``.
+HEADER_DOCUMENT_TYPE = "X-AGTP-Document-Type"
+HEADER_APPLICATION = "X-AGTP-Application"
+HEADER_APPLICATION_VERSION = "X-AGTP-Application-Version"
+
+DOC_TYPE_AGENT_DOCUMENT = "agtp.agent.document"
+DOC_TYPE_SERVER_MANIFEST = "agtp.server.manifest"
+DOC_TYPE_SERVER_IDENTITY = "agtp.server.identity"
+
 DOCUMENT_VERSION_V2 = "v2"
 DOCUMENT_VERSION_V1_MIGRATED = "v1-migrated"
 
@@ -340,9 +364,15 @@ __all__ = [
     "CONTENT_TYPE_YAML",
     "CONTENT_TYPE_HTML",
     "CONTENT_TYPE_MANIFEST_JSON",
+    "DOC_TYPE_AGENT_DOCUMENT",
+    "DOC_TYPE_SERVER_IDENTITY",
+    "DOC_TYPE_SERVER_MANIFEST",
     "DOCUMENT_VERSION_V1_MIGRATED",
     "DOCUMENT_VERSION_V2",
     "FIELD_ORDER",
+    "HEADER_APPLICATION",
+    "HEADER_APPLICATION_VERSION",
+    "HEADER_DOCUMENT_TYPE",
     "AgentDocument",
     "RequiresDeclaration",
     "from_dict",

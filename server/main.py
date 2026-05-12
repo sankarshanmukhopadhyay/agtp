@@ -34,6 +34,8 @@ from core._paths import normalize
 from server.config import CONFIG_FILENAME, ServerConfig, default_config, load as load_config
 from core.identity import (
     CONTENT_TYPE_MANIFEST_JSON,
+    DOC_TYPE_SERVER_MANIFEST,
+    HEADER_DOCUMENT_TYPE,
     AgentDocument,
     from_dict,
 )
@@ -494,12 +496,19 @@ def serve_manifest(
         endpoint_registry=getattr(registry, "endpoint_registry", None),
     )
     body = manifest.to_json(pretty=True).encode("utf-8")
+    # X-AGTP-Document-Type lets a header-first renderer (elemen)
+    # dispatch on the document kind without parsing the body. The
+    # main server emits the canonical "agtp.server.manifest" type;
+    # application-typed servers (e.g., the MCP-on-AGTP gateway) emit
+    # "agtp.server.identity" + an X-AGTP-Application discriminator
+    # of their own.
     return wire.AGTPResponse(
         status_code=200,
         status_text="OK",
         headers={
             "Content-Type": CONTENT_TYPE_MANIFEST_JSON,
             "Content-Length": str(len(body)),
+            HEADER_DOCUMENT_TYPE: DOC_TYPE_SERVER_MANIFEST,
         },
         body_bytes=body,
     )

@@ -109,13 +109,10 @@ description = "Free-form notes; QUERY for retrieval, SUMMARIZE for digest."
 
 # Hosted protocols: non-AGTP applications this server bridges. The
 # elemen browser surfaces these as tabs (MCP gets a tool-catalog view;
-# OpenAPI / GraphQL get stub tabs pending future work).
-[[hosted_protocols]]
-protocol = "mcp"
-version  = "0.1"
-endpoint = "https://mcp.agtp.io"
-catalog  = "https://mcp.agtp.io/.well-known/mcp/tools.json"
-
+# OpenAPI / GraphQL get stub tabs pending future work). The demo
+# server is not itself an MCP host — that surface belongs to the
+# MCP-on-AGTP gateway (see mcp-on-agtp/gateway.py), which advertises
+# `application.type == "mcp"` on its identity doc directly.
 [[hosted_protocols]]
 protocol = "openapi"
 version  = "3.1"

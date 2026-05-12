@@ -245,6 +245,72 @@ function renderTabStrip() {
   }
 }
 
+// ---------- document classification ----------
+//
+// What kind of document came back? Three signals, in priority order:
+//
+//   1. Headers (authoritative).
+//      X-AGTP-Document-Type tells us the document kind:
+//        agtp.agent.document    Agent Document (Form 1/1a)
+//        agtp.server.manifest   AGTP Server Manifest (Form 2)
+//        agtp.server.identity   Application-server identity doc
+//                               (e.g., MCP-on-AGTP gateway)
+//      X-AGTP-Application names the application kind on
+//      application-typed servers ("mcp" today; "openapi", "graphql"
+//      in the future).
+//
+//   2. URI form (back-compat).
+//      Form 1/1a carries an agent_id → agent. Form 2 → manifest.
+//      Used when a server pre-dates the header contract.
+//
+//   3. Body shape (last resort).
+//      An identity doc labels itself with `application.type` at the
+//      document root. Read directly off the parsed manifest.
+//
+// Output: { kind, application, source }. `kind` is one of "agent",
+// "manifest", or "unknown". `application` is the lowercased
+// application name when known, else null. `source` records which
+// of the three layers won, useful for debugging "why did this
+// server render as X?" without re-deriving the answer.
+function classifyDocument(result) {
+  if (!result || !result.ok) {
+    return { kind: "unknown", application: null, source: "error" };
+  }
+
+  const docType = (result.document_type || "").toLowerCase();
+  const application = (result.application || "").toLowerCase() || null;
+
+  // 1. Headers.
+  if (docType === "agtp.agent.document") {
+    return { kind: "agent", application: null, source: "header" };
+  }
+  if (
+    docType === "agtp.server.manifest"
+    || docType === "agtp.server.identity"
+  ) {
+    return { kind: "manifest", application, source: "header" };
+  }
+
+  // 2. URI form (bridge's `kind`, derived from the URI before fetch).
+  if (result.agent_id || result.kind === "agent") {
+    return { kind: "agent", application: null, source: "uri" };
+  }
+  if (result.kind === "manifest") {
+    // 3. Body shape — only if no header dispatched us. Identity-doc
+    // shaped manifests label themselves via `application.type`.
+    const bodyApp = (
+      result.manifest?.application?.type || ""
+    ).toLowerCase() || null;
+    return {
+      kind: "manifest",
+      application: bodyApp,
+      source: bodyApp ? "body" : "uri",
+    };
+  }
+
+  return { kind: "unknown", application: null, source: "unknown" };
+}
+
 // ---------- response panes ----------
 function showPrettyAs(mode) {
   if (mode === "iframe") {
@@ -272,6 +338,12 @@ function clearResponsePanes() {
   if (els.matchBadge) els.matchBadge.classList.add("hidden");
   if (els.matchDetail) els.matchDetail.classList.add("hidden");
   if (els.migrationBanner) els.migrationBanner.classList.add("hidden");
+  // Protocol tabs/panes are URI-scoped and must not survive a fetch.
+  // If renderManifestView throws partway, applyTabVisibility never
+  // runs and old buttons would otherwise stay clickable with stale
+  // contents underneath them.
+  if (els.protocolTabsHost) els.protocolTabsHost.innerHTML = "";
+  if (els.protocolPanesHost) els.protocolPanesHost.innerHTML = "";
   showPrettyAs("pre");
 }
 
@@ -298,9 +370,14 @@ function renderResponse(tab) {
   }
   hLines.push("");
   hLines.push(`# resolved: ${r.host}:${r.port}`);
+  // Classification is the authoritative dispatcher — header-first,
+  // URI fallback, body last. Use tab.classification when present
+  // (doFetch populates it) and re-derive otherwise so callers that
+  // build a synthetic tab (e.g., invocations replay) still work.
+  const cls = tab.classification || classifyDocument(r);
   if (r.agent_id) {
     hLines.push(`# agent_id: ${r.agent_id}`);
-  } else if (r.kind === "manifest") {
+  } else if (cls.kind === "manifest") {
     hLines.push(`# server: ${r.host}:${r.port}`);
   }
   els.headers.textContent = hLines.join("\n");
@@ -316,7 +393,7 @@ function renderResponse(tab) {
   //   * Agent doc (status 200) -> structured agent view.
   //   * HTML format -> iframe.
   //   * Otherwise -> syntax-highlighted JSON or plain text.
-  if (r.kind === "manifest") {
+  if (cls.kind === "manifest") {
     if (renderManifestView(tab)) {
       if (banner) {
         els.manifestView.insertBefore(
@@ -328,13 +405,13 @@ function renderResponse(tab) {
     }
   }
 
-  if (r.kind === "agent" && r.format === "html") {
+  if (cls.kind === "agent" && r.format === "html") {
     els.prettyIfr.srcdoc = r.body;
     showPrettyAs("iframe");
     return;
   }
 
-  if (r.kind === "agent" && r.status_code === 200 && r.format === "json") {
+  if (cls.kind === "agent" && r.status_code === 200 && r.format === "json") {
     if (renderAgentView(tab)) {
       if (banner) {
         els.agentView.insertBefore(banner, els.agentView.firstChild);
@@ -1484,9 +1561,15 @@ function renderManifestView(tab) {
   if (!m) return false;
 
   // Server identity is exposed under `server_id` post-§5; older
-  // manifests carry it as `issuer`. Accept either shape so the
-  // dashboard renders cleanly against rolling deployments.
-  const serverId = m.server?.server_id || m.server?.issuer || "(server)";
+  // manifests carry it as `issuer`. The MCP-on-AGTP gateway emits
+  // `agtp.server.identity` docs that label themselves with
+  // `server.name`. Fall back to the resolved host so identity docs
+  // don't head as "(server)".
+  const serverId = m.server?.server_id
+    || m.server?.issuer
+    || m.server?.name
+    || r.host
+    || "(server)";
   els.manifestHeader.innerHTML =
     `<h2>${escapeHtml(serverId)}</h2>` +
     `<span class="endpoint">agtp://${escapeHtml(r.host)}:${escapeHtml(String(r.port))}</span>`;
@@ -1520,21 +1603,40 @@ function renderManifestView(tab) {
       : "") +
     `</div>`;
 
-  // Methods section. Post-§5: top-level embedded_methods /
-  // custom_methods. Pre-§5: nested methods.{embedded,custom}.
-  const embedded = m.embedded_methods
-    || (m.methods && m.methods.embedded)
-    || [];
-  const custom = m.custom_methods
-    || (m.methods && m.methods.custom)
-    || [];
-  const totalMethods = embedded.length + custom.length;
+  // Methods section. Three shapes show up in the wild:
+  //   * post-§5: top-level `embedded_methods` / `custom_methods` as
+  //     arrays of {name, category, namespace?} objects.
+  //   * pre-§5:  nested `methods.{embedded,custom}` with the same
+  //     entry shape.
+  //   * server-identity (e.g., MCP-on-AGTP gateway): `methods.embedded`
+  //     and `methods.custom` are counts (numbers), with the list living
+  //     under `methods.standard_methods` as bare verb strings.
+  // pickMethodList walks the candidates and returns the first array
+  // it finds, skipping past number-shaped counts so the identity-doc
+  // path falls through to `standard_methods`.
+  const embedded = normalizeMethods(pickMethodList(
+    m.embedded_methods,
+    m.methods?.embedded,
+    m.methods?.standard_methods,
+  ));
+  const custom = normalizeMethods(pickMethodList(
+    m.custom_methods,
+    m.methods?.custom,
+    m.methods?.custom_methods,
+  ));
+  const embeddedCount = typeof m.methods?.embedded === "number"
+    ? m.methods.embedded
+    : embedded.length;
+  const customCount = typeof m.methods?.custom === "number"
+    ? m.methods.custom
+    : custom.length;
+  const totalMethods = embeddedCount + customCount;
   els.manifestMethodsSection.innerHTML =
     `<h3>Methods (${totalMethods})</h3>` +
     `<div class="body">` +
     `<div style="font-size:11.5px;color:var(--text-dim);margin-bottom:8px">` +
-    `Embedded: ${embedded.length} &nbsp;·&nbsp; ` +
-    `Custom: ${custom.length}` +
+    `Embedded: ${embeddedCount} &nbsp;·&nbsp; ` +
+    `Custom: ${customCount}` +
     `</div>` +
     renderManifestMethodsList(embedded, "Standard Methods") +
     (custom.length ? renderManifestMethodsList(custom, "Custom Methods") : "") +
@@ -1651,9 +1753,7 @@ function renderManifestView(tab) {
   // protocol (OpenAPI, GraphQL, ...) is informational and folds into
   // the APIs tab as a "Bridged services" section above the resource
   // endpoints.
-  const mcpProtocols = protocols.filter(
-    (p) => (p.protocol || "").toLowerCase() === "mcp",
-  );
+  const mcpProtocols = collectMcpEntries(m, protocols, r);
   const otherProtocols = protocols.filter(
     (p) => (p.protocol || "").toLowerCase() !== "mcp",
   );
@@ -1818,6 +1918,52 @@ function promptApiTryIt(tab, path, method) {
 // catalog rendering for those is future work and they have no
 // interactive surface today.
 
+// Collect every MCP-flavored entry on a manifest into a uniform list
+// for the protocol-tab renderer. Two sources contribute:
+//
+//   * `hosted_protocols[]` entries with protocol == "mcp" — the
+//     standard manifest channel, used by servers that bridge an MCP
+//     deployment as one of many hosted protocols.
+//   * the document-root `application` block with `type == "mcp"` —
+//     the shape served by MCP-on-AGTP gateways (see
+//     mcp-on-agtp/gateway.py:374). The identity doc is itself the
+//     MCP surface, so the tools list arrives inline and no catalog
+//     fetch is needed.
+//
+// Both sources are normalized to the same entry shape so
+// renderMcpPane stays agnostic about where the data came from.
+function collectMcpEntries(manifest, hostedProtocols, fetchResult) {
+  const out = [];
+  const app = detectMcpApplication(manifest, fetchResult);
+  if (app) out.push(app);
+  for (const p of hostedProtocols || []) {
+    if ((p.protocol || "").toLowerCase() === "mcp") out.push(p);
+  }
+  return out;
+}
+
+function detectMcpApplication(manifest, fetchResult) {
+  const app = manifest?.application;
+  if (!app || (app.type || "").toLowerCase() !== "mcp") return null;
+  const endpoint = app.endpoint
+    || (fetchResult?.host
+      ? `agtp://${fetchResult.host}:${fetchResult.port}`
+      : "");
+  return {
+    protocol: "mcp",
+    version: app.protocol_version || app.version || "?",
+    endpoint,
+    catalog: app.catalog || "",
+    inlineTools: Array.isArray(app.tools) ? app.tools : null,
+    backendName: app.name || "",
+    backendVersion: app.version || "",
+    toolCount: typeof app.tool_count === "number" ? app.tool_count : null,
+    capabilities: app.capabilities || null,
+    transport: app.backend_transport || "",
+    source: "application",
+  };
+}
+
 function renderProtocolTabs(tab, mcpEntries) {
   mcpEntries = mcpEntries || [];
 
@@ -1844,7 +1990,13 @@ function renderProtocolTabs(tab, mcpEntries) {
     pane.innerHTML = renderMcpPane(p);
     els.protocolPanesHost.appendChild(pane);
 
-    if (p.catalog) {
+    // Inline tools (from application.tools on an identity doc) are
+    // already in hand — paint them directly. Otherwise the pane has
+    // a Fetch button wired to the catalog URL.
+    if (Array.isArray(p.inlineTools) && p.inlineTools.length) {
+      const target = pane.querySelector(".tool-catalog");
+      if (target) target.innerHTML = renderToolCards(p.inlineTools);
+    } else if (p.catalog) {
       const fetchBtn = pane.querySelector(".fetch-btn");
       if (fetchBtn) {
         fetchBtn.addEventListener("click", () =>
@@ -1859,16 +2011,36 @@ function renderMcpPane(p) {
   // Section 1 (server info) -> Section 2 (exposed connectors / tools).
   // Mirrors the APIs tab: server-level metadata up top, the
   // interactive surface (tool catalog) below.
+  const hasInlineTools = Array.isArray(p.inlineTools) && p.inlineTools.length;
   const head =
     `<h3 class="apis-section-title">MCP server</h3>` +
     `<div class="info">` +
     `<div><strong>Protocol:</strong> ${escapeHtml(p.protocol)}</div>` +
     `<div><strong>Version:</strong> ${escapeHtml(p.version)}</div>` +
     `<div><strong>Endpoint:</strong> ${escapeHtml(p.endpoint)}</div>` +
+    (p.backendName
+      ? `<div><strong>Backend:</strong> ${escapeHtml(p.backendName)}` +
+        (p.backendVersion ? ` <span style="color:var(--text-dim)">v${escapeHtml(p.backendVersion)}</span>` : "") +
+        `</div>`
+      : "") +
+    (p.transport
+      ? `<div><strong>Transport:</strong> ${escapeHtml(p.transport)}</div>`
+      : "") +
     (p.catalog
       ? `<div><strong>Catalog:</strong> ${escapeHtml(p.catalog)}</div>`
       : "") +
     `</div>`;
+
+  // Inline tools (identity-doc shape): tool list is already present
+  // on the document, no fetch needed.
+  if (hasInlineTools) {
+    const count = p.toolCount ?? p.inlineTools.length;
+    return (
+      head +
+      `<h3 class="apis-section-title">Tools (${count})</h3>` +
+      `<div class="tool-catalog"></div>`
+    );
+  }
 
   if (!p.catalog) {
     return (
@@ -1886,6 +2058,30 @@ function renderMcpPane(p) {
     `<h3 class="apis-section-title">Tools</h3>` +
     `<button class="fetch-btn" type="button">Fetch tool catalog</button>` +
     `<div class="tool-catalog"></div>`
+  );
+}
+
+function renderToolCards(tools) {
+  if (!Array.isArray(tools) || !tools.length) {
+    return `<div class="info">No tools listed.</div>`;
+  }
+  return (
+    `<div class="tool-cards">` +
+    tools.map((t) => {
+      const name = t.name || t.id || "(unnamed)";
+      const desc = t.description || t.summary || "";
+      const params = t.parameters || t.input_schema || t.inputSchema || null;
+      return (
+        `<div class="tool-card">` +
+        `<span class="name">${escapeHtml(name)}</span>` +
+        (desc ? `<div class="desc">${escapeHtml(desc)}</div>` : "") +
+        (params
+          ? `<div class="params">${escapeHtml(JSON.stringify(params))}</div>`
+          : "") +
+        `</div>`
+      );
+    }).join("") +
+    `</div>`
   );
 }
 
@@ -1917,23 +2113,7 @@ async function fetchAndRenderMcpCatalog(pane, catalogUrl, skipVerify) {
     return;
   }
 
-  target.innerHTML =
-    `<div class="tool-cards">` +
-    tools.map((t) => {
-      const name = t.name || t.id || "(unnamed)";
-      const desc = t.description || t.summary || "";
-      const params = t.parameters || t.input_schema || t.inputSchema || null;
-      return (
-        `<div class="tool-card">` +
-        `<span class="name">${escapeHtml(name)}</span>` +
-        (desc ? `<div class="desc">${escapeHtml(desc)}</div>` : "") +
-        (params
-          ? `<div class="params">${escapeHtml(JSON.stringify(params))}</div>`
-          : "") +
-        `</div>`
-      );
-    }).join("") +
-    `</div>`;
+  target.innerHTML = renderToolCards(tools);
 }
 
 function capitalize(s) {
@@ -1949,13 +2129,15 @@ function capitalize(s) {
 // so the bar stays clean per URI type.
 
 function applyTabVisibility(tab) {
-  const isAgent = tab?.kind === "agent";
-  const isManifest = tab?.kind === "manifest";
+  const cls = tab?.classification || classifyDocument(tab?.result);
+  const isAgent = cls.kind === "agent";
+  const isManifest = cls.kind === "manifest";
+  const manifest = tab?.result?.manifest;
   const protocols =
-    tab?.result?.manifest?.hosted_protocols
-    || tab?.result?.manifest?.hosts_protocols
+    manifest?.hosted_protocols
+    || manifest?.hosts_protocols
     || [];
-  const apis = tab?.result?.manifest?.apis || [];
+  const apis = manifest?.apis || [];
 
   // The APIs tab now subsumes non-MCP bridged protocols (OpenAPI,
   // GraphQL, ...). Show it whenever the manifest carries either
@@ -1963,9 +2145,16 @@ function applyTabVisibility(tab) {
   const nonMcp = protocols.filter(
     (p) => (p.protocol || "").toLowerCase() !== "mcp",
   );
-  const mcp = protocols.filter(
-    (p) => (p.protocol || "").toLowerCase() === "mcp",
-  );
+  // MCP surface comes from three places, in priority order:
+  //   1. X-AGTP-Application: mcp on the response (classification.application)
+  //   2. hosted_protocols[].protocol == "mcp" on the manifest
+  //   3. application.type == "mcp" in the body (identity-doc shape)
+  // detectMcpApplication covers (3); classification covers (1).
+  // Must stay aligned with collectMcpEntries.
+  const hasMcp =
+    cls.application === "mcp"
+    || protocols.some((p) => (p.protocol || "").toLowerCase() === "mcp")
+    || !!detectMcpApplication(manifest, tab?.result);
 
   const apisBtn = document.querySelector('.rtab[data-tab="apis"]');
   if (apisBtn) {
@@ -1980,7 +2169,7 @@ function applyTabVisibility(tab) {
   // collapses cleanly.
   els.protocolTabsHost.classList.toggle(
     "hidden",
-    !(isManifest && mcp.length),
+    !(isManifest && hasMcp),
   );
 
   // If the currently active rtab has been hidden by the URI type
@@ -2001,9 +2190,23 @@ function activateRtab(name) {
   state.respPane = name;
 }
 
+function pickMethodList(...candidates) {
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+  return [];
+}
+
+function normalizeMethods(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) =>
+    typeof entry === "string" ? { name: entry } : (entry || {}),
+  );
+}
+
 function renderManifestMethodsList(items, title) {
   const rows = items.map((entry) =>
-    `<li><code>${escapeHtml(entry.name)}</code> ` +
+    `<li><code>${escapeHtml(entry.name || "")}</code> ` +
     `<span style="color:var(--text-dim);font-size:11px">` +
     `${escapeHtml(entry.category || "")}` +
     (entry.namespace ? ` · ${escapeHtml(entry.namespace)}` : "") +
@@ -2077,17 +2280,24 @@ function computeMatchOutcome(agentDoc, manifest) {
   const wildcards = !!requires.wildcards;
   const m = manifest || {};
   // Method universe and policy block are top-level post-§5; pre-§5
-  // shapes nest them under ``methods`` / ``policy``. Accept either.
-  const embeddedMethods = m.embedded_methods
-    || (m.methods && m.methods.embedded)
-    || [];
-  const customMethods = m.custom_methods
-    || (m.methods && m.methods.custom)
-    || [];
+  // shapes nest them under ``methods`` / ``policy``. Identity docs
+  // expose only counts under ``methods.{embedded,custom}``, with the
+  // verb list living at ``methods.standard_methods``. normalizeMethods
+  // coerces all three into {name} objects.
+  const embeddedMethods = normalizeMethods(pickMethodList(
+    m.embedded_methods,
+    m.methods?.embedded,
+    m.methods?.standard_methods,
+  ));
+  const customMethods = normalizeMethods(pickMethodList(
+    m.custom_methods,
+    m.methods?.custom,
+    m.methods?.custom_methods,
+  ));
   const policies = m.policies || m.policy || {};
   const universeSet = new Set();
-  for (const e of embeddedMethods) universeSet.add(e.name);
-  for (const e of customMethods) universeSet.add(e.name);
+  for (const e of embeddedMethods) if (e.name) universeSet.add(e.name);
+  for (const e of customMethods) if (e.name) universeSet.add(e.name);
   const universe = Array.from(universeSet).sort();
   const serverWild = policies.wildcards_accepted !== false;
 
@@ -2311,16 +2521,23 @@ async function doFetch({ silentHistory = false } = {}) {
   // (We keyed by tab.id at the time of the call.)
   tab.result = result;
   tab.uri = uri;
-  tab.kind = result.kind || (result.ok ? (result.agent_id ? "agent" : "manifest") : null);
+  // classifyDocument prefers X-AGTP-Document-Type, falls back to URI
+  // form, and only consults the body as a last resort. tab.kind is
+  // derived from it so every existing `tab.kind === "..."` site
+  // automatically picks up header-driven dispatch; tab.classification
+  // also carries the application type ("mcp", ...) for the MCP tab.
+  const classification = classifyDocument(result);
+  tab.classification = classification;
+  tab.kind = classification.kind === "unknown" ? null : classification.kind;
   // Reset the methods view; auto-DISCOVER will repopulate it on success.
   tab.methods = null;
   tab.openMethod = null;
   if (result.ok) {
     tab.name = nameFromBody(result.body, result.format) ||
-      (result.kind === "manifest" ? `server: ${result.host}` : null);
+      (tab.kind === "manifest" ? `server: ${result.host}` : null);
     // Server-level manifest fetch: also seed the manifest cache and
     // load it into tab.serverManifest so the Methods tab uses it.
-    if (result.kind === "manifest" && result.manifest) {
+    if (tab.kind === "manifest" && result.manifest) {
       manifestCacheByEndpoint.set(
         endpointKeyFor(result.host, result.port),
         result.manifest,
@@ -2363,10 +2580,12 @@ async function doFetch({ silentHistory = false } = {}) {
 
   // Auto-DISCOVER /methods on a successful agent fetch. Manifest URIs
   // already carry the methods inventory, so no follow-up is needed.
+  // Use the classification (header-first) rather than result.kind so
+  // the header contract is honored across the whole dispatch chain.
   if (
     result.ok
     && result.status_code === 200
-    && result.kind === "agent"
+    && classification.kind === "agent"
   ) {
     doDiscoverMethods(tab);
     // Matching handshake: fetch (or reuse) the server manifest and

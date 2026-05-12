@@ -65,6 +65,19 @@ def _result_to_js(result: FetchResult, *, fmt: str = "json") -> Dict[str, Any]:
         return out
 
     body_text = result.body_text
+    headers = dict(result.headers or {})
+
+    # Surface the three header-based dispatch signals as first-class
+    # fields so the JS classifier doesn't have to do case-insensitive
+    # key probing on every render. Empty strings when absent — the
+    # classifier then falls back to URI form and body shape.
+    def _h(name: str) -> str:
+        lower = name.lower()
+        for k, v in headers.items():
+            if k.lower() == lower:
+                return v
+        return ""
+
     out = {
         "ok": True,
         "kind": result.kind,
@@ -72,9 +85,12 @@ def _result_to_js(result: FetchResult, *, fmt: str = "json") -> Dict[str, Any]:
         "port": result.port,
         "status_code": result.status_code,
         "status_text": result.status_text,
-        "headers": dict(result.headers or {}),
+        "headers": headers,
         "body": body_text,
-        "content_type": (result.headers or {}).get("Content-Type", ""),
+        "content_type": headers.get("Content-Type", ""),
+        "document_type": _h("X-AGTP-Document-Type"),
+        "application": _h("X-AGTP-Application"),
+        "application_version": _h("X-AGTP-Application-Version"),
         "format": fmt,
     }
     if result.agent_id:

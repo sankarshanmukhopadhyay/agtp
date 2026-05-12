@@ -332,6 +332,13 @@ class ServerManifestTests(unittest.TestCase):
             CONTENT_TYPE_MANIFEST_JSON,
             wire.header(resp, "Content-Type"),
         )
+        # X-AGTP-Document-Type pins the document kind for renderers
+        # that dispatch on the header (e.g., elemen) before parsing
+        # the body. See core/identity.py for the catalog.
+        self.assertEqual(
+            wire.header(resp, "X-AGTP-Document-Type"),
+            "agtp.server.manifest",
+        )
         payload = json.loads(resp.body_bytes.decode("utf-8"))
         self.assertEqual(payload["server"]["server_id"], "test.agtp.local")
         self.assertEqual(len(payload["embedded_methods"]), 12)
@@ -448,7 +455,11 @@ class APIsAndProtocolsTests(unittest.TestCase):
         self.assertGreaterEqual(len(cfg.hosted_protocols), 1)
         self.assertEqual(cfg.apis[0].path, "/calendar")
         protocols = [p.protocol for p in cfg.hosted_protocols]
-        self.assertIn("mcp", protocols)
+        # OpenAPI is the demo's bridged-protocol example. MCP is not
+        # in the demo because the demo server does not host an MCP
+        # backend; mcp-on-agtp/gateway.py is the canonical MCP host
+        # and advertises its own surface via the identity doc.
+        self.assertIn("openapi", protocols)
 
 
 class MethodNotPermittedVocabTests(unittest.TestCase):

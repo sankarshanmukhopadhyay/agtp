@@ -42,6 +42,8 @@ from core.identity import (
     CONTENT_TYPE_HTML,
     CONTENT_TYPE_JSON,
     CONTENT_TYPE_YAML,
+    DOC_TYPE_AGENT_DOCUMENT,
+    HEADER_DOCUMENT_TYPE,
 )
 from core.render import render_html
 
@@ -796,6 +798,11 @@ def handle_describe(
             "Content-Type": content_type,
             "Content-Length": str(len(body)),
             "Server-Agent-ID": agent_doc.agent_id,
+            # Header-first dispatch: this is an Agent Document, not a
+            # Server Manifest. A renderer can pick the right view
+            # without first parsing the body. See core/identity.py
+            # for the catalog of document-type values.
+            HEADER_DOCUMENT_TYPE: DOC_TYPE_AGENT_DOCUMENT,
         },
         body_bytes=body,
     )

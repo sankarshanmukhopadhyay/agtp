@@ -1,0 +1,28 @@
+[Unit]
+Description=MCP-on-AGTP Gateway (mcp.nomotic.ai)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/mcp-on-agtp
+
+Environment=AGTP_MCP_HOST=0.0.0.0
+Environment=AGTP_MCP_PORT=4480
+Environment=AGTP_MCP_CERT=/etc/letsencrypt/live/mcp.nomotic.ai/fullchain.pem
+Environment=AGTP_MCP_KEY=/etc/letsencrypt/live/mcp.nomotic.ai/privkey.pem
+Environment=AGTP_REGISTRY=https://registry.agtp.io
+Environment="AGTP_MCP_BACKEND=/usr/bin/npx -y @modelcontextprotocol/server-filesystem /var/lib/agtp/mcp-sandbox"
+Environment=AGTP_GATEWAY_KEY=/var/lib/agtp/gateway_signing_key.pem
+Environment=AGTP_ATTRIBUTION_LOG=/var/log/agtp/attribution.log
+Environment=AGTP_REQUIRE_SIGNATURE=0
+
+ExecStart=/usr/bin/python3 /opt/mcp-on-agtp/gateway.py
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

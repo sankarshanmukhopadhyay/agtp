@@ -103,10 +103,10 @@ python3 -m pip install -r requirements.txt PyQt5 PyQtWebEngine
 
 ```powershell
 # console attached (handy for stack traces)
-py -3.13 app.py
+py -3.13 client.elemen.app
 
 # no console window
-pyw -3.13 app.py
+pyw -3.13 -m client.elemen.app
 
 # open with a URI prefilled and auto-fetched
 py -3.13 app.py agtp://d8dc6f0df55d66c7b30100db3cffbe383c5f814e6e58a08521fb7636c3bcc230
