@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agtp.io/schemas/v1/endpoint-context.schema.json",
+  "title": "EndpointContext",
+  "description": "Per-request context handed to a handler. Mirrors agtp.handlers.EndpointContext. Every field has been validated by agtpd before crossing the gateway: input is schema-checked, agent_id is authenticated, authority_scope is claim-validated.",
+  "type": "object",
+  "required": [
+    "input",
+    "agent_id",
+    "method",
+    "path"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "type": "object",
+      "description": "The validated request body. Required fields are guaranteed present; optional fields may be absent. Types match the endpoint's input schema.",
+      "additionalProperties": true
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "The invoking agent's identity, from Agent-ID (or legacy Target-Agent). Empty string for server-level probes.",
+      "default": ""
+    },
+    "principal_id": {
+      "type": "string",
+      "description": "Identifier of the human or entity the agent acts on behalf of. Empty when not declared.",
+      "default": ""
+    },
+    "agent_scopes": {
+      "type": "array",
+      "description": "Scopes the calling agent has declared. Surfaced for finer-grained checks; the dispatcher already enforced required_scopes.",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "authority_scope": {
+      "type": "array",
+      "description": "§10 Authority-Scope header: scopes claimed for this specific request. Pre-validated against the agent's declared scope set.",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "session_id": {
+      "type": ["string", "null"],
+      "description": "§10 Session-ID — opaque operational grouping. Passed through without server-side interpretation.",
+      "default": null
+    },
+    "task_id": {
+      "type": ["string", "null"],
+      "description": "§10 Task-ID — task tracing across requests. Echoed back by agtpd in the response automatically.",
+      "default": null
+    },
+    "request_id": {
+      "type": "string",
+      "description": "Correlation id matching the Request-Id response header. Used for log correlation.",
+      "default": ""
+    },
+    "method": {
+      "type": "string",
+      "description": "The AGTP verb (uppercase ASCII). Validated against the method catalog before this envelope was constructed.",
+      "pattern": "^[A-Z]+$"
+    },
+    "path": {
+      "type": "string",
+      "description": "The URI path the request targeted. Validated against AGTP path grammar.",
+      "default": "/"
+    },
+    "headers": {
+      "type": "object",
+      "description": "Request headers, keys lowercased. For handlers that need access to e.g. Idempotency-Key or Trace-Parent.",
+      "additionalProperties": { "type": "string" },
+      "default": {}
+    }
+  }
+}

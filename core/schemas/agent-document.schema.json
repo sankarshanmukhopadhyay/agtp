@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agtp.io/schemas/v1/agent-document.schema.json",
+  "title": "AgentDocument",
+  "description": "The v2 AGTP Agent Document. Canonical identity record served at DESCRIBE on Form 1 and Form 1a URIs. Mirrors core.identity.AgentDocument. v1 documents are converted at load time by from_dict_v1_compat and emerge as in-memory v2 with document_version='v1-migrated'.",
+  "type": "object",
+  "required": [
+    "agtp_version",
+    "agent_id",
+    "name",
+    "principal",
+    "principal_id",
+    "description",
+    "status",
+    "skills",
+    "requires",
+    "scopes_accepted",
+    "issued_at",
+    "issuer"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "agtp_version": {
+      "type": "string",
+      "description": "AGTP wire-protocol version this document is valid for. Today: '1.0'.",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "document_version": {
+      "type": "string",
+      "description": "Schema version of the document itself. v2 is current. 'v1-migrated' identifies a v1 document auto-converted at load.",
+      "enum": ["v2", "v1-migrated"],
+      "default": "v2"
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "Canonical Agent-ID. SHA-256 hex of the agent's Genesis document per draft-hood-independent-agtp-07.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable agent name. Not unique across servers; the agent_id is.",
+      "minLength": 1
+    },
+    "principal": {
+      "type": "string",
+      "description": "Display name of the human or entity the agent acts on behalf of."
+    },
+    "principal_id": {
+      "type": "string",
+      "description": "Stable identifier of the principal (email, opaque id, organization handle)."
+    },
+    "description": {
+      "type": "string",
+      "description": "One- or two-sentence description of the agent."
+    },
+    "status": {
+      "type": "string",
+      "description": "Operational lifecycle state. 'active' agents accept traffic; 'suspended' agents return 503; 'retired' agents return 410.",
+      "enum": ["active", "suspended", "retired"]
+    },
+    "skills": {
+      "type": "array",
+      "description": "Prose declarations of what this agent can do. The primary 'what does this agent do' surface. Replaces v1's 'capabilities' field.",
+      "items": { "type": "string" }
+    },
+    "requires": {
+      "type": "object",
+      "description": "Structured declaration of methods, scopes, and wildcard policy the agent expects to handle inbound.",
+      "required": ["methods", "scopes", "wildcards"],
+      "additionalProperties": false,
+      "properties": {
+        "methods": {
+          "type": "array",
+          "description": "AGTP verbs this agent is authorized to handle inbound. Methods absent here return 403 method-not-permitted-for-agent unless wildcards is true.",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z]+$"
+          }
+        },
+        "scopes": {
+          "type": "array",
+          "description": "Authority scopes the agent expects to be presented for invocation.",
+          "items": { "type": "string" }
+        },
+        "wildcards": {
+          "type": "boolean",
+          "description": "When true, the agent accepts any method (orchestrator pattern). Subject to per-server policies.wildcards_accepted.",
+          "default": false
+        }
+      }
+    },
+    "scopes_accepted": {
+      "type": "array",
+      "description": "Authority scopes this agent will honor on inbound requests.",
+      "items": { "type": "string" }
+    },
+    "issued_at": {
+      "type": "string",
+      "description": "ISO 8601 UTC timestamp when the document was issued.",
+      "format": "date-time"
+    },
+    "issuer": {
+      "type": "string",
+      "description": "Domain or identifier of the issuing authority."
+    }
+  }
+}

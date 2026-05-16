@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agtp.io/schemas/v1/endpoint-error.schema.json",
+  "title": "EndpointError",
+  "description": "Declared-failure shape returned from a handler. Mirrors agtp.handlers.EndpointError. The code MUST be one of the names in the endpoint's errors list, declared at registration; undeclared codes are a protocol violation and become 500 errors logged against the module.",
+  "type": "object",
+  "required": ["code", "message"],
+  "additionalProperties": false,
+  "properties": {
+    "code": {
+      "type": "string",
+      "description": "Error name; must appear in the endpoint's declared errors list. Conventionally snake_case (e.g. 'room_unavailable', 'invalid_dates').",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "minLength": 1
+    },
+    "message": {
+      "type": "string",
+      "description": "Operator- and agent-facing prose. Single sentence preferred.",
+      "minLength": 1
+    },
+    "details": {
+      "type": ["object", "null"],
+      "description": "Optional structured detail. Must be JSON-serializable. The dispatcher renders it under error.details in the 422 wire response.",
+      "additionalProperties": true,
+      "default": null
+    }
+  }
+}

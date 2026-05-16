@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agtp.io/schemas/v1/gateway-handshake.schema.json",
+  "title": "Gateway frames (v1)",
+  "description": "All frame types defined in gateway-protocol-v1.md. Every gateway frame is one of the shapes below, discriminated by the 'type' field. Length-prefixed JSON on the wire; this schema validates the JSON payload only.",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/welcome" },
+    { "$ref": "#/$defs/register" },
+    { "$ref": "#/$defs/register_resume" },
+    { "$ref": "#/$defs/register_ack" },
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/ping" },
+    { "$ref": "#/$defs/pong" },
+    { "$ref": "#/$defs/goodbye" }
+  ],
+  "$defs": {
+    "manifest_hash": {
+      "type": "string",
+      "description": "SHA-256 of the canonically-serialized operator manifest (RFC 8785), expressed as 'sha256:<hex>'.",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "hello": {
+      "type": "object",
+      "required": ["type", "gateway_versions", "module"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "hello" },
+        "gateway_versions": {
+          "type": "array",
+          "description": "Supported gateway protocol versions in preference order.",
+          "items": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+          "minItems": 1
+        },
+        "module": {
+          "type": "object",
+          "required": ["id", "version"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "description": "Short module identifier (mod_python, mod_php, ...)." },
+            "version": { "type": "string", "description": "Semver of the module implementation." },
+            "runtime": { "type": "string", "description": "Free-form runtime description (e.g. 'CPython 3.13')." },
+            "pid": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "description": "Capability tags the module claims. v1 recognizes: registered_function.",
+          "items": { "type": "string" }
+        },
+        "cached_manifest_hash": {
+          "$ref": "#/$defs/manifest_hash"
+        }
+      }
+    },
+    "welcome": {
+      "type": "object",
+      "required": ["type", "gateway_version", "daemon"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "welcome" },
+        "gateway_version": {
+          "type": "string",
+          "description": "The version the daemon chose. Used for the rest of the connection.",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "daemon": {
+          "type": "object",
+          "required": ["version", "server_id"],
+          "additionalProperties": false,
+          "properties": {
+            "version": { "type": "string" },
+            "server_id": { "type": "string" },
+            "catalog_version": { "type": "string" }
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "description": "Intersection of module-claimed and daemon-supported capabilities.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "register": {
+      "type": "object",
+      "required": ["type", "manifest_hash", "endpoints", "schemas"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "register" },
+        "manifest_hash": { "$ref": "#/$defs/manifest_hash" },
+        "endpoints": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["method", "path", "handler_reference", "input_schema_ref", "output_schema_ref", "errors"],
+            "additionalProperties": false,
+            "properties": {
+              "method": { "type": "string", "pattern": "^[A-Z]+$" },
+              "path": { "type": "string" },
+              "handler_reference": { "type": "string", "description": "Opaque to agtpd; the module interprets it (dotted path / class::method / etc.)." },
+              "input_schema_ref": { "type": "string", "description": "JSON Pointer into the schemas block (e.g. '#/schemas/book_room.input')." },
+              "output_schema_ref": { "type": "string" },
+              "errors": { "type": "array", "items": { "type": "string" } },
+              "required_scopes": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "schemas": {
+          "type": "object",
+          "description": "Inline JSON Schema documents keyed by ref label. Each value is itself a JSON Schema.",
+          "additionalProperties": { "type": "object" }
+        }
+      }
+    },
+    "register_resume": {
+      "type": "object",
+      "required": ["type", "manifest_hash"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "register_resume" },
+        "manifest_hash": { "$ref": "#/$defs/manifest_hash" }
+      }
+    },
+    "register_ack": {
+      "type": "object",
+      "required": ["type", "ok"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "register_ack" },
+        "ok": { "type": "boolean" },
+        "resolved": {
+          "type": "array",
+          "description": "When ok=true: list of registered '(method) (path)' identifiers the module successfully bound.",
+          "items": { "type": "string" }
+        },
+        "errors": {
+          "type": "array",
+          "description": "When ok=false: structured per-endpoint failures.",
+          "items": {
+            "type": "object",
+            "required": ["endpoint", "reason"],
+            "additionalProperties": true,
+            "properties": {
+              "endpoint": { "type": "string" },
+              "reason": { "type": "string" },
+              "detail": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["type", "request_id", "envelope"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "request" },
+        "request_id": { "type": "string", "minLength": 1 },
+        "envelope": { "$ref": "https://agtp.io/schemas/v1/endpoint-context.schema.json" },
+        "trust": {
+          "type": "object",
+          "required": ["verified", "agent_id", "method"],
+          "additionalProperties": false,
+          "properties": {
+            "verified": { "type": "boolean" },
+            "agent_id": { "type": "string" },
+            "agent_cert_fingerprint": { "type": ["string", "null"] },
+            "method": {
+              "type": "string",
+              "description": "How the agent identity was established. v1: agent_id_header. v2 (when mTLS lands): agent_cert_mtls.",
+              "enum": ["agent_id_header", "agent_cert_mtls"]
+            }
+          }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["type", "request_id", "envelope"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "response" },
+        "request_id": { "type": "string", "minLength": 1 },
+        "envelope": {
+          "oneOf": [
+            { "$ref": "https://agtp.io/schemas/v1/endpoint-response.schema.json" },
+            {
+              "type": "object",
+              "required": ["endpoint_error"],
+              "additionalProperties": false,
+              "properties": {
+                "endpoint_error": { "$ref": "https://agtp.io/schemas/v1/endpoint-error.schema.json" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["type", "code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "error" },
+        "request_id": { "type": ["string", "null"], "description": "Omitted/null for protocol-level errors not tied to a request." },
+        "code": {
+          "type": "string",
+          "description": "Error code. Protocol-level: gateway_version_unsupported, malformed_frame, frame_too_large, phase_violation, request_id_mismatch, registration_failed. Per-request: handler_exception, handler_timeout, output_schema_failure, undeclared_error_code.",
+          "enum": [
+            "gateway_version_unsupported",
+            "malformed_frame",
+            "frame_too_large",
+            "phase_violation",
+            "request_id_mismatch",
+            "registration_failed",
+            "handler_exception",
+            "handler_timeout",
+            "output_schema_failure",
+            "undeclared_error_code"
+          ]
+        },
+        "message": { "type": "string" },
+        "details": { "type": ["object", "null"] }
+      }
+    },
+    "ping": {
+      "type": "object",
+      "required": ["type", "nonce"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "ping" },
+        "nonce": { "type": "string", "minLength": 1 }
+      }
+    },
+    "pong": {
+      "type": "object",
+      "required": ["type", "nonce"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "pong" },
+        "nonce": { "type": "string", "minLength": 1 }
+      }
+    },
+    "goodbye": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "goodbye" },
+        "reason": {
+          "type": "string",
+          "enum": ["manifest_reload", "shutdown", "drain"]
+        }
+      }
+    }
+  }
+}

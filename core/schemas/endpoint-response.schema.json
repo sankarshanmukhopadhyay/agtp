@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agtp.io/schemas/v1/endpoint-response.schema.json",
+  "title": "EndpointResponse",
+  "description": "Success-shape returned from a handler. Mirrors agtp.handlers.EndpointResponse. The body is validated against the endpoint's output schema before agtpd serializes it onto the AGTP wire; output-schema failures become 500 errors logged against the module.",
+  "type": "object",
+  "required": ["body"],
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "type": "object",
+      "description": "The response payload. Validated against the endpoint's output schema.",
+      "additionalProperties": true
+    },
+    "status": {
+      "type": "integer",
+      "description": "HTTP / AGTP status code for the response line. Most endpoints use the default; 201, 202, 204 are common alternatives. AGTP-specific success codes (200, 202, 204, 261, 263) are valid.",
+      "minimum": 100,
+      "maximum": 599,
+      "default": 200
+    },
+    "headers": {
+      "type": ["object", "null"],
+      "description": "Optional response headers added alongside agtpd-injected headers (Content-Type, Content-Length, Server-ID, Task-ID echo, Attribution-Record).",
+      "additionalProperties": { "type": "string" },
+      "default": null
+    }
+  }
+}
