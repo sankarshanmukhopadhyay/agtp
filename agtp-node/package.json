@@ -1,0 +1,34 @@
+{
+  "name": "@agtp/agtp-node",
+  "version": "0.1.0",
+  "description": "Public AGTP handler API for Node.js / TypeScript.",
+  "license": "MIT",
+  "author": "Chris Hood <chris@nomotic.ai>",
+  "homepage": "https://agtp.io",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --import tsx --test test/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

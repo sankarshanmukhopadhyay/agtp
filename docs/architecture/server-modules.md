@@ -258,7 +258,23 @@ The function call inside `dispatch()` that today invokes a handler in-process be
    semantic-verb reference connector over Drupal's REST surface.
    Useful on its own; coordinates with agtp-drupal when both are
    installed.
-8. **Subsequent modules.** mod_go, mod_node, mod_rust, in order of demand.
+8. **Subsequent modules.** ✅ mod_go, mod_node, mod_rust all landed.
+   - **Go**: [`../../agtp-go/`](../../agtp-go/) +
+     [`../../mod_go/`](../../mod_go/). Sync `net.Dial` transport;
+     `agtp.HandlerFunc` returns `(HandlerResult, error)` with a
+     sum-type interface for response/error. Tested by
+     `tests/test_gateway_e2e_go.py` against a real `go run` subprocess.
+   - **Node.js / TypeScript**: [`../../agtp-node/`](../../agtp-node/) +
+     [`../../mod_node/`](../../mod_node/). Async-first
+     (`HandlerFn` returns `HandlerResult | Promise<HandlerResult>`);
+     `node:net` transport with `pause()`/`readable` event-driven reads.
+     Tested by `tests/test_gateway_e2e_node.py` against a real Node
+     subprocess.
+   - **Rust**: [`../../agtp-rust/`](../../agtp-rust/) +
+     [`../../mod_rust/`](../../mod_rust/). Sync `std::net::TcpStream`
+     transport; `HandlerFn = fn(&EndpointContext) -> Result<HandlerOutcome, String>`.
+     Tested by `tests/test_gateway_e2e_rust.py` against a `cargo build`-ed
+     binary.
 9. **Operational modules.** mod_proxy, mod_cache, mod_audit, in order
    of operator need.
 

@@ -1926,7 +1926,7 @@ function promptApiTryIt(tab, path, method) {
 //     deployment as one of many hosted protocols.
 //   * the document-root `application` block with `type == "mcp"` —
 //     the shape served by MCP-on-AGTP gateways (see
-//     mcp-on-agtp/gateway.py:374). The identity doc is itself the
+//     agtp-mcp/gateway.py:374). The identity doc is itself the
 //     MCP surface, so the tools list arrives inline and no catalog
 //     fetch is needed.
 //

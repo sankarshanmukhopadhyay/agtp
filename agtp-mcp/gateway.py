@@ -396,7 +396,7 @@ def handle_connection(conn: ssl.SSLSocket, addr: tuple, mcp: MCPSubprocess) -> N
                 "tags": [
                     "embedded-methods/12",
                     "identity/v1",
-                    "mcp-on-agtp",
+                    "agtp-mcp",
                     "signed-attribution",
                     "scope-enforcement",
                     "budget-enforcement",

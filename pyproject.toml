@@ -55,12 +55,16 @@ yaml = ["pyyaml>=6"]
 where = ["."]
 include = [
   "core*", "server*", "client*", "registry*",
-  "agtp*", "samples*", "tools*", "mod_python*",
+  "agtp", "agtp.*",  # only the Python `agtp` package, not agtp-php / agtp-go / agtp-rust / agtp-node
+  "samples*", "tools*", "mod_python*",
 ]
-# PHP packages (agtp-php, mod_php, agtp_drupal) and other non-Python
-# trees never carry __init__.py so setuptools skips them automatically,
-# but list them explicitly so build output stays quiet.
+# Non-Python language packages never carry __init__.py so setuptools
+# skips them automatically, but list them explicitly so build output
+# stays quiet.
 exclude = [
-  "tests*", "elemen*", "ietf*", "docs*", "scripts*", "mcp-on-agtp*",
+  "tests*", "elemen*", "ietf*", "docs*", "scripts*", "agtp-mcp*",
   "agtp-php*", "mod_php*", "agtp_drupal*",
+  "agtp-go*", "mod_go*",
+  "agtp-node*", "mod_node*",
+  "agtp-rust*", "mod_rust*",
 ]

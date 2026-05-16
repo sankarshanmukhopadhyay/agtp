@@ -63,7 +63,7 @@ agtp/
 ├── registry/             AGTP registry product
 │   └── main.py             python -m registry  /  agtp-registry
 │
-├── mcp-on-agtp/          MCP-on-AGTP bridge product (in development)
+├── agtp-mcp/             MCP-on-AGTP bridge product (in development)
 ├── ietf/                 IETF Internet-Draft sources
 ├── docs/                 deployment + cross-platform notes
 ├── scripts/              VPS deploy automation
@@ -641,6 +641,11 @@ The current Python implementation in `core/` + `server/` is the
 reference; the architecture doc describes how it decomposes into an
 `agtpd` daemon and language modules (`mod_php`, `mod_python`,
 `mod_go`, ...) over a Unix-socket gateway.
+
+Why some directories are hyphenated (`agtp-go/`, `agtp-php/`) and
+others use underscores (`mod_python/`, `agtp_drupal/`) — and which
+are forced by language / framework rules — is documented in
+[`NAMING.md`](NAMING.md).
 
 ## Public deployment
 

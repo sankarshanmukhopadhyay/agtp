@@ -125,7 +125,7 @@ description = "Free-form notes; QUERY for retrieval, SUMMARIZE for digest."
 # elemen browser surfaces these as tabs (MCP gets a tool-catalog view;
 # OpenAPI / GraphQL get stub tabs pending future work). The demo
 # server is not itself an MCP host — that surface belongs to the
-# MCP-on-AGTP gateway (see mcp-on-agtp/gateway.py), which advertises
+# MCP-on-AGTP gateway (see agtp-mcp/gateway.py), which advertises
 # `application.type == "mcp"` on its identity doc directly.
 [[hosted_protocols]]
 protocol = "openapi"

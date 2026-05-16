@@ -1,0 +1,17 @@
+[package]
+name = "agtp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Public AGTP handler API for Rust."
+homepage = "https://agtp.io"
+repository = "https://github.com/nomoticai/agtp"
+rust-version = "1.70"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[lib]
+name = "agtp"
+path = "src/lib.rs"

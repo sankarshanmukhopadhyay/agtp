@@ -139,6 +139,37 @@ htmlcov/
 .pytype/
 
 # -----------------------------------------------------------------------------
+# Node / TypeScript build artifacts (agtp-node, mod_node, samples/*_node)
+# -----------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tsbuildinfo
+package-lock.json
+# `dist/` already excluded above (Python wheel dir); also covers TS dist.
+
+# -----------------------------------------------------------------------------
+# Rust build artifacts (agtp-rust, mod_rust, samples/*_rust)
+# -----------------------------------------------------------------------------
+target/
+Cargo.lock
+
+# -----------------------------------------------------------------------------
+# Go build artifacts (agtp-go, mod_go, samples/*_go)
+# -----------------------------------------------------------------------------
+# The sample binaries the e2e tests build into samples/*_go/.
+samples/gateway_demo_go/gateway-demo-go
+samples/gateway_demo_go/gateway-demo-go.exe
+
+# -----------------------------------------------------------------------------
+# PHP / Composer artifacts (agtp-php, mod_php, samples/*_php)
+# -----------------------------------------------------------------------------
+vendor/
+composer.lock
+.phpunit.result.cache
+
+# -----------------------------------------------------------------------------
 # Editor / IDE / agent tooling
 # -----------------------------------------------------------------------------
 .vscode/

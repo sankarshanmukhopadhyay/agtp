@@ -457,7 +457,7 @@ class APIsAndProtocolsTests(unittest.TestCase):
         protocols = [p.protocol for p in cfg.hosted_protocols]
         # OpenAPI is the demo's bridged-protocol example. MCP is not
         # in the demo because the demo server does not host an MCP
-        # backend; mcp-on-agtp/gateway.py is the canonical MCP host
+        # backend; agtp-mcp/gateway.py is the canonical MCP host
         # and advertises its own surface via the identity doc.
         self.assertIn("openapi", protocols)
 

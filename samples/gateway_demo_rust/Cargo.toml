@@ -1,0 +1,14 @@
+[package]
+name = "gateway-demo-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+agtp = { path = "../../agtp-rust" }
+mod_rust = { path = "../../mod_rust" }
+serde_json = "1.0"
+
+[[bin]]
+name = "gateway-demo-rust"
+path = "src/main.rs"

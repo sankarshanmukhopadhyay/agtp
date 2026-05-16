@@ -1,0 +1,11 @@
+{
+  "name": "gateway-demo-node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./demo.js",
+  "dependencies": {
+    "@agtp/agtp-node": "file:../../agtp-node",
+    "@agtp/mod-node": "file:../../mod_node"
+  }
+}
