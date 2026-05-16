@@ -57,4 +57,10 @@ include = [
   "core*", "server*", "client*", "registry*",
   "agtp*", "samples*", "tools*", "mod_python*",
 ]
-exclude = ["tests*", "elemen*", "ietf*", "docs*", "scripts*", "mcp-on-agtp*"]
+# PHP packages (agtp-php, mod_php) and other non-Python trees never
+# carry __init__.py so setuptools skips them automatically, but list
+# them explicitly so build output stays quiet.
+exclude = [
+  "tests*", "elemen*", "ietf*", "docs*", "scripts*", "mcp-on-agtp*",
+  "agtp-php*", "mod_php*",
+]

@@ -62,6 +62,7 @@ class GatewayClient:
         registry: Optional[HandlerRegistry] = None,
         module_id: str = "mod_python",
         module_version: str = "0.1.0",
+        cached_manifest_hash: str = "",
     ) -> None:
         self.socket_path = socket_path
         self.registry = registry if registry is not None else global_registry
@@ -73,6 +74,13 @@ class GatewayClient:
         # Map (method, path) -> resolved handler callable.
         self._bindings: Dict[Tuple[str, str], Callable[..., Any]] = {}
         self._stop = False
+        # Resume support (gateway spec §6.4). The client offers
+        # ``cached_manifest_hash`` on hello; if the daemon's current
+        # hash matches, it sends ``register_resume`` instead of the
+        # full register frame, and the client reuses its cached
+        # bindings. A fresh client sends an empty cached hash.
+        self.cached_manifest_hash = cached_manifest_hash
+        self._cached_bindings: Dict[Tuple[str, str], Callable[..., Any]] = {}
 
     # ----- Lifecycle -----
 
@@ -132,8 +140,9 @@ class GatewayClient:
     def _handshake(self) -> None:
         assert self._reader is not None and self._writer is not None
 
-        # 1. Send hello.
-        write_frame(self._writer, {
+        # 1. Send hello. Include cached_manifest_hash when we have one
+        # so the daemon can short-circuit to register_resume (§6.4).
+        hello_frame: Dict[str, Any] = {
             "type": "hello",
             "gateway_versions": [GATEWAY_VERSION],
             "module": {
@@ -145,7 +154,10 @@ class GatewayClient:
                 "pid": os.getpid(),
             },
             "capabilities": ["registered_function"],
-        })
+        }
+        if self.cached_manifest_hash:
+            hello_frame["cached_manifest_hash"] = self.cached_manifest_hash
+        write_frame(self._writer, hello_frame)
 
         # 2. Read welcome.
         welcome = read_frame(self._reader)
@@ -165,17 +177,26 @@ class GatewayClient:
                 f"this module speaks {GATEWAY_VERSION!r}"
             )
 
-        # 3. Read register.
+        # 3. Read register or register_resume.
         register = read_frame(self._reader)
-        if register.get("type") != "register":
+        ftype = register.get("type")
+        if ftype == "register_resume":
+            self._handle_register_resume(register)
+        elif ftype == "register":
+            self._handle_register(register)
+        else:
             raise ModuleError(
-                f"expected register, got type={register.get('type')!r}"
+                f"expected register or register_resume, got type={ftype!r}"
             )
 
-        # 4. Resolve every handler_reference against the local registry.
+    def _handle_register(self, register: Dict[str, Any]) -> None:
+        """Process a full ``register`` frame and send the matching ack."""
+        assert self._writer is not None
+        manifest_hash = str(register.get("manifest_hash") or "")
         endpoints = register.get("endpoints") or []
         resolved: List[str] = []
         errors: List[Dict[str, Any]] = []
+        new_bindings: Dict[Tuple[str, str], Callable[..., Any]] = {}
         for ep in endpoints:
             method = str(ep.get("method") or "").upper()
             path = str(ep.get("path") or "/")
@@ -191,10 +212,9 @@ class GatewayClient:
                     ),
                 })
                 continue
-            self._bindings[(method, path)] = entry.handler
+            new_bindings[(method, path)] = entry.handler
             resolved.append(f"{method} {path}")
 
-        # 5. Send register_ack.
         if errors:
             write_frame(self._writer, {
                 "type": "register_ack",
@@ -204,6 +224,43 @@ class GatewayClient:
             raise ModuleError(
                 f"could not resolve {len(errors)} endpoint reference(s): {errors}"
             )
+
+        self._bindings = new_bindings
+        self._cached_bindings = dict(new_bindings)
+        self.cached_manifest_hash = manifest_hash
+        write_frame(self._writer, {
+            "type": "register_ack",
+            "ok": True,
+            "resolved": resolved,
+        })
+
+    def _handle_register_resume(self, register: Dict[str, Any]) -> None:
+        """Process a ``register_resume`` frame: reuse cached bindings."""
+        assert self._writer is not None
+        manifest_hash = str(register.get("manifest_hash") or "")
+        if not self._cached_bindings or manifest_hash != self.cached_manifest_hash:
+            # We claimed a cached hash that no longer matches our state
+            # (cache evicted between hello and resume, somehow). Refuse
+            # and let the daemon retry with a full register on next
+            # connection.
+            write_frame(self._writer, {
+                "type": "register_ack",
+                "ok": False,
+                "errors": [{
+                    "endpoint": "*",
+                    "reason": "cache_miss",
+                    "detail": (
+                        f"module has no cached bindings matching "
+                        f"manifest_hash={manifest_hash!r}"
+                    ),
+                }],
+            })
+            raise ModuleError(
+                f"register_resume could not reuse cached bindings "
+                f"(hash={manifest_hash!r})"
+            )
+        self._bindings = dict(self._cached_bindings)
+        resolved = [f"{method} {path}" for (method, path) in self._bindings]
         write_frame(self._writer, {
             "type": "register_ack",
             "ok": True,

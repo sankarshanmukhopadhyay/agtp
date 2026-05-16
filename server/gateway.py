@@ -398,7 +398,7 @@ class GatewayServer:
         )
 
     def _do_handshake(self, mod: _ModuleConnection) -> None:
-        """Run hello / welcome / register / register_ack on a new connection."""
+        """Run hello / welcome / register{,_resume} / register_ack on a new connection."""
         # 1. Read hello.
         hello = read_frame(mod.reader)
         if hello.get("type") != "hello":
@@ -422,6 +422,7 @@ class GatewayServer:
         mod.module_id = str(module_block.get("id") or "")
         mod.module_version = str(module_block.get("version") or "")
         mod.capabilities = list(hello.get("capabilities") or [])
+        cached_hash = str(hello.get("cached_manifest_hash") or "")
 
         # 2. Send welcome.
         welcome: Dict[str, Any] = {
@@ -437,18 +438,25 @@ class GatewayServer:
             welcome["daemon"]["catalog_version"] = self.catalog_version
         write_frame(mod.writer, welcome)
 
-        # 3. Send register.
+        # 3. Send register or register_resume. Resume when the module's
+        # cached_manifest_hash matches our current hash exactly; otherwise
+        # send the full register with inline schemas. See gateway spec §6.4.
         endpoints_block, schemas_block = self._build_register_blocks()
         manifest_hash = _canonical_json_hash(
             {"endpoints": endpoints_block, "schemas": schemas_block}
         )
-        register = {
-            "type": "register",
-            "manifest_hash": manifest_hash,
-            "endpoints": endpoints_block,
-            "schemas": schemas_block,
-        }
-        write_frame(mod.writer, register)
+        if cached_hash and cached_hash == manifest_hash:
+            write_frame(mod.writer, {
+                "type": "register_resume",
+                "manifest_hash": manifest_hash,
+            })
+        else:
+            write_frame(mod.writer, {
+                "type": "register",
+                "manifest_hash": manifest_hash,
+                "endpoints": endpoints_block,
+                "schemas": schemas_block,
+            })
 
         # 4. Read register_ack.
         ack = read_frame(mod.reader)

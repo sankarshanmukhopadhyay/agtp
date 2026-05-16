@@ -591,6 +591,39 @@ Both `python -m server 4480` (positional) and
 `python -m server --port 4480` work. After install, the same
 command is also available as the bare name `agtp-server 4480`.
 
+### Gateway mode (recommended for production)
+
+The above runs handlers in the daemon's own process. The recommended
+production shape, as of M3 step (b), is to run `agtpd` and a runtime
+module as **separate processes** that talk over a Unix-socket gateway.
+That matches the httpd + PHP-FPM model: the daemon owns the AGTP
+protocol; the runtime module owns the language runtime; a crashing
+handler can never take down the daemon.
+
+```bash
+# Terminal 1: daemon with gateway socket enabled.
+python -m server 4480 \
+    --agents-dir server/agents \
+    --endpoints-dir endpoints \
+    --gateway-socket /tmp/agtpd.sock
+
+# Terminal 2: Python runtime module, loading sample handlers.
+python -m mod_python \
+    --gateway-socket /tmp/agtpd.sock \
+    --load-module samples.gateway_demo
+```
+
+When `--gateway-socket` is set, the daemon routes `registered_function`
+endpoints over the gateway instead of importing them in-daemon.
+Composition recipes, external_service bindings, and the 12 embedded
+methods continue to run in-daemon regardless.
+
+See
+[`docs/architecture/server-modules.md`](docs/architecture/server-modules.md)
+and
+[`docs/architecture/gateway-protocol-v1.md`](docs/architecture/gateway-protocol-v1.md)
+for the full architecture and protocol references.
+
 ### Cross-platform notes
 
 Git Bash on Windows reports POSIX-form paths (`/x/agtp/server`) from

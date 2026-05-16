@@ -218,15 +218,41 @@ The function call inside `dispatch()` that today invokes a handler in-process be
 
 ## 7. Build Order
 
-1. **Gateway socket specification.** A short working document defining transport, framing, envelope shape, trusted-header convention, version negotiation, and registration direction. This is the long-lived contract.
-2. **Canonical schemas.** JSON Schema documents for `EndpointContext`, `EndpointResponse`, `EndpointError`, Agent Document, and Manifest. Lifted from the existing Python dataclasses, then frozen. Every language library loads these.
-3. **mod_python.** Extract the handler-side code from `/server` into a separate Python process. Wire it to agtpd over the gateway socket. This is mostly a refactor of existing code, not new code.
-4. **agtp-python.** The PyPI package developers install. Pairs with mod_python.
-5. **mod_php and agtp-php.** The second runtime module and its paired library. Proves the gateway is language-neutral.
-6. **agtp-drupal.** The first framework library on top of agtp-php. The Drupal community is the first beachhead.
-7. **agentic-drupal.** Independent of AGTP transport. The semantic-verb reference connector over Drupal's REST surface. Useful on its own; coordinates with agtp-drupal when both are installed.
+1. **Gateway socket specification.** ✅ Landed as
+   [`gateway-protocol-v1.md`](gateway-protocol-v1.md).
+2. **Canonical schemas.** ✅ Landed under
+   [`../../core/schemas/`](../../core/schemas/) with drift-detection
+   tests in `tests/schemas/`.
+3. **mod_python.** ✅ Landed as the
+   [`mod_python/`](../../mod_python/) package. Connects to `agtpd`
+   over the gateway socket and serves `@endpoint`-decorated Python
+   handlers. End-to-end coverage in `tests/test_gateway_e2e.py` and
+   `tests/test_gateway_resume.py`.
+4. **agtp-python.** ✅ The handler-author surface lives at
+   [`../../agtp/`](../../agtp/) — `EndpointContext`,
+   `EndpointResponse`, `EndpointError`, `@endpoint`,
+   `HandlerRegistry`, `agtp.testing`. Versioned via
+   [`../../agtp/CHANGELOG.md`](../../agtp/CHANGELOG.md).
+5. **mod_php and agtp-php.** ✅ Landed under
+   [`../../agtp-php/`](../../agtp-php/) and
+   [`../../mod_php/`](../../mod_php/). The handler-author API
+   (`Agtp\EndpointContext`, `Agtp\EndpointResponse`,
+   `Agtp\EndpointError`, `#[AgtpEndpoint]`,
+   `Agtp\HandlerRegistry`, `Agtp\Testing`) mirrors the Python
+   library. The runtime module (`mod_php`) ports
+   `mod_python.client.GatewayClient` value-for-value; end-to-end
+   coverage in `tests/test_gateway_e2e_php.py` (skipped when PHP
+   is not on PATH). PHPUnit unit tests under `agtp-php/tests/`.
+   PHP 8.1+ minimum (matches Drupal 10's floor).
+6. **agtp-drupal.** The first framework library on top of agtp-php.
+   The Drupal community is the first beachhead.
+7. **agentic-drupal.** Independent of AGTP transport. The
+   semantic-verb reference connector over Drupal's REST surface.
+   Useful on its own; coordinates with agtp-drupal when both are
+   installed.
 8. **Subsequent modules.** mod_go, mod_node, mod_rust, in order of demand.
-9. **Operational modules.** mod_proxy, mod_cache, mod_audit, in order of operator need.
+9. **Operational modules.** mod_proxy, mod_cache, mod_audit, in order
+   of operator need.
 
 ## 8. Open Questions and Closed Decisions
 

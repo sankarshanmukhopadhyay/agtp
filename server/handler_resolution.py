@@ -85,8 +85,20 @@ class InvalidHandlerError(Exception):
 
 def resolve_registered_function(reference: str) -> Callable[..., Any]:
     """
-    Resolve ``reference`` (a Python dotted path like
-    ``staybeta.handlers.book_room``) to the named callable.
+    Legacy in-daemon resolution of a ``registered_function`` binding.
+
+    .. note::
+
+       The gateway path (:func:`resolve_via_gateway`, configured via
+       ``--gateway-socket``) is the recommended way to host Python
+       handlers as of M3 step (c). The in-daemon import path resolved
+       here remains the **default** when no gateway socket is
+       configured, and continues to be supported for unit tests,
+       legacy deployments, and the embedded methods path. New
+       deployments should prefer the gateway path so handlers live in
+       a separate process — see
+       ``docs/architecture/server-modules.md`` and
+       ``docs/architecture/gateway-protocol-v1.md``.
 
     Splits at the last ``.`` so the module path is the prefix and
     the function name is the trailing token. ``importlib.import_module``

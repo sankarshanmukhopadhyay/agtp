@@ -94,6 +94,20 @@ max_evaluation_duration      = "10m"
 path                         = "stderr"
 attribution_records_enabled  = false
 
+# Gateway socket: when set, the daemon binds this path for accepting
+# runtime-module connections (mod_python, mod_php, ...). Empty means
+# gateway mode is off and registered_function endpoints resolve
+# in-daemon via Python imports (the legacy path). The --gateway-socket
+# command-line flag overrides this value at boot.
+#
+# Two transport forms:
+#   socket = "/var/run/agtpd/gateway.sock"   # Unix domain socket
+#   socket = "127.0.0.1:4481"                # TCP loopback
+#
+# See docs/architecture/gateway-protocol-v1.md.
+[gateway]
+socket = ""
+
 # APIs: resource-scoped endpoints the workplace exposes. Servers with
 # multi-resource architectures populate this. Each entry lists the
 # methods admissible against that resource.

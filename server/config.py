@@ -522,6 +522,26 @@ class AuditConfig:
 
 
 @dataclass
+class GatewayConfig:
+    """
+    Gateway socket configuration (M3 step b/c).
+
+    ``socket`` is the path or ``host:port`` the daemon binds for
+    accepting runtime-module connections. When empty, gateway mode is
+    off and registered_function handlers resolve in-daemon (the
+    legacy path documented in
+    ``server.handler_resolution.resolve_registered_function``).
+
+    The ``--gateway-socket`` command-line flag overrides whatever is
+    set here. Operators who want gateway mode to be the default for
+    their deployment set ``socket`` in their ``agtp-server.toml``;
+    transient overrides at boot use the flag.
+    """
+
+    socket: str = ""
+
+
+@dataclass
 class ServerConfig:
     """Top-level configuration object."""
 
@@ -530,6 +550,7 @@ class ServerConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     synthesis: SynthesisConfig = field(default_factory=SynthesisConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
+    gateway: GatewayConfig = field(default_factory=GatewayConfig)
     apis: list = field(default_factory=list)
     hosted_protocols: list = field(default_factory=list)
     source_path: Optional[Path] = None
@@ -677,6 +698,11 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         ),
     )
 
+    gateway_block = data.get("gateway", {}) or {}
+    gateway = GatewayConfig(
+        socket=str(gateway_block.get("socket") or ""),
+    )
+
     apis = _load_apis(data.get("apis", []) or [])
     # Back-compat: pre-§5 configs used ``[[hosts_protocols]]``. Accept
     # either array key.
@@ -691,6 +717,7 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         synthesis=synthesis,
         agents=agents,
         audit=audit,
+        gateway=gateway,
         apis=apis,
         hosted_protocols=hosted_protocols,
         source_path=candidate,
@@ -701,6 +728,7 @@ __all__ = [
     "AgentsConfig",
     "AuditConfig",
     "DISCLOSURE_LEVELS",
+    "GatewayConfig",
     "MethodsPolicy",
     "ServerConfig",
     "ServerInfo",

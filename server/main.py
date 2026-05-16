@@ -1098,6 +1098,15 @@ def main() -> int:
     if args.endpoints_dir is not None:
         endpoints_path = normalize(args.endpoints_dir)
 
+    # Gateway socket precedence: --gateway-socket flag wins; otherwise
+    # fall back to [gateway].socket in the config. Empty means
+    # gateway mode is off.
+    gateway_socket = args.gateway_socket
+    if not gateway_socket and config is not None:
+        gateway_socket = (
+            config.gateway.socket if getattr(config, "gateway", None) else ""
+        ) or None
+
     run(
         args.host,
         port,
@@ -1107,7 +1116,7 @@ def main() -> int:
         config=config,
         soft_deny_enabled=not args.no_soft_deny,
         endpoints_dir=endpoints_path,
-        gateway_socket=args.gateway_socket,
+        gateway_socket=gateway_socket,
     )
     return 0
 
