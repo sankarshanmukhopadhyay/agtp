@@ -1,0 +1,27 @@
+<?php
+
+/**
+ * @file
+ * AGTP for Drupal — module hook implementations.
+ *
+ * The module is deliberately thin. Handler discovery happens through
+ * tagged services (see Drupal\agtp_drupal\Registry\AgtpHandlerCollector).
+ * The runtime entry point is the drush command ``agtp:serve``. There
+ * is no HTTP request-pipeline integration — AGTP traffic is served by
+ * agtpd on its own port (4480), not through Drupal's request handler.
+ */
+
+declare(strict_types=1);
+
+use Drupal\Core\Routing\RouteMatchInterface;
+
+/**
+ * Implements hook_help().
+ */
+function agtp_drupal_help(string $route_name, RouteMatchInterface $route_match): string
+{
+    if ($route_name === 'help.page.agtp_drupal') {
+        return '<p>' . t('AGTP for Drupal exposes your site to the Agent Transfer Protocol. Site builders register handler services tagged with <code>agtp.endpoint</code>; the <code>drush agtp:serve</code> command runs a runtime worker that connects to a local <code>agtpd</code> instance.') . '</p>';
+    }
+    return '';
+}

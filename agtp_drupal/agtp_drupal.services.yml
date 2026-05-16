@@ -1,0 +1,15 @@
+services:
+  # Collects every service tagged ``agtp.endpoint`` into the agtp-php
+  # HandlerRegistry. Invoked by drush agtp:serve at boot, before the
+  # gateway client connects to agtpd. The collected service is the
+  # responsibility of the module that registers it — agtp_drupal does
+  # not enforce a class hierarchy; the only contract is that the
+  # service's class carries one or more #[AgtpEndpoint] attributes
+  # (on its public methods).
+  agtp_drupal.handler_collector:
+    class: Drupal\agtp_drupal\Registry\AgtpHandlerCollector
+    arguments: [!tagged_iterator agtp.endpoint]
+
+  # Compiler pass tagging consumers' services for collection happens
+  # in Drupal\agtp_drupal\AgtpDrupalServiceProvider; nothing to
+  # declare here.

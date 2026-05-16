@@ -244,8 +244,16 @@ The function call inside `dispatch()` that today invokes a handler in-process be
    coverage in `tests/test_gateway_e2e_php.py` (skipped when PHP
    is not on PATH). PHPUnit unit tests under `agtp-php/tests/`.
    PHP 8.1+ minimum (matches Drupal 10's floor).
-6. **agtp-drupal.** The first framework library on top of agtp-php.
-   The Drupal community is the first beachhead.
+6. **agtp-drupal.** ✅ Landed under
+   [`../../agtp_drupal/`](../../agtp_drupal/). Drupal 10.2+ / 11
+   module that adopts handler discovery into the Drupal service
+   container: site builders tag handler services with
+   `agtp.endpoint`, and `AgtpHandlerCollector` populates the
+   agtp-php registry at boot. Runtime entry point is the drush
+   command `agtp:serve --gateway-socket=...`. Handlers stay
+   testable as plain functions via `\Agtp\Testing`. See
+   [`../../agtp_drupal/INSTALL.md`](../../agtp_drupal/INSTALL.md)
+   for the smallest-possible installation walkthrough.
 7. **agentic-drupal.** Independent of AGTP transport. The
    semantic-verb reference connector over Drupal's REST surface.
    Useful on its own; coordinates with agtp-drupal when both are
