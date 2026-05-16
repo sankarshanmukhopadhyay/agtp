@@ -599,6 +599,16 @@ on the current drive. Anywhere a path crosses the shell-to-Python
 boundary, use `agtp._paths.normalize()` (the demo script and the
 package internals do).
 
+## Architecture
+
+The long-term deployment shape — daemon, modules, and language /
+framework libraries — is described in
+[`docs/architecture/server-modules.md`](docs/architecture/server-modules.md).
+The current Python implementation in `core/` + `server/` is the
+reference; the architecture doc describes how it decomposes into an
+`agtpd` daemon and language modules (`mod_php`, `mod_python`,
+`mod_go`, ...) over a Unix-socket gateway.
+
 ## Public deployment
 
 See [`docs/DEPLOY.md`](docs/DEPLOY.md) for a step-by-step walkthrough
