@@ -40,6 +40,9 @@ row and an explanation here.
 | `mod_php/`          | PHP runtime module            | Underscore for symmetry with `mod_python`         |
 | `mod_rust/`         | Rust runtime module           | Underscore for symmetry with `mod_python`         |
 | `agtp_drupal/`      | Drupal framework integration  | Forced: Drupal module machine names `^[a-z_]+$`   |
+| `agtp-wordpress/`   | WordPress plugin              | Convention: WP plugin slug directories are hyphenated |
+| `agtp-symfony/`     | Symfony bundle                | Convention: Composer-published bundles are hyphenated |
+| `agtp-laravel/`     | Laravel package               | Convention: Composer-published Laravel packages are hyphenated |
 | `agtp-mcp/`         | MCP-on-AGTP connector         | Convention: hyphenated like the rest of the agtp-X family |
 
 ## The rules in plain English
@@ -77,10 +80,9 @@ convention:
 - `agtp_drupal/` — Drupal modules MUST use `[a-z][a-z0-9_]*` for the
   directory name (matches the module machine name). The underscore is
   not a style choice.
-- Future `agtp-wordpress/` — WordPress plugin directories accept
-  hyphens by convention.
-- Future `agtp-symfony/`, `agtp-laravel/` — Symfony bundles and
-  Laravel packages publish as Composer packages with hyphenated names.
+- `agtp-wordpress/` — WordPress plugin slug directories accept hyphens.
+- `agtp-symfony/`, `agtp-laravel/` — Symfony bundles and Laravel
+  packages publish as Composer packages with hyphenated names.
 
 ### Cross-protocol connectors (`agtp-<protocol>`)
 

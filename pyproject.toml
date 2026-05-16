@@ -67,4 +67,5 @@ exclude = [
   "agtp-go*", "mod_go*",
   "agtp-node*", "mod_node*",
   "agtp-rust*", "mod_rust*",
+  "agtp-wordpress*", "agtp-symfony*", "agtp-laravel*",
 ]

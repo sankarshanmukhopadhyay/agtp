@@ -1,0 +1,21 @@
+services:
+  _defaults:
+    autowire: false
+    autoconfigure: false
+    public: false
+
+  # The tagged-service iterator is wired by AgtpHandlerPass at compile
+  # time. The empty array here is a placeholder that the compiler pass
+  # overwrites.
+  agtp.handler_collector:
+    class: Agtp\Symfony\Registry\AgtpHandlerCollector
+    arguments:
+      $taggedHandlers: []
+
+  # The Symfony Console command `bin/console agtp:serve`.
+  agtp.serve_command:
+    class: Agtp\Symfony\Command\AgtpServeCommand
+    arguments:
+      - '@agtp.handler_collector'
+    tags:
+      - { name: console.command }

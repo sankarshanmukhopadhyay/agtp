@@ -1,0 +1,33 @@
+{
+    "name": "agtp/agtp-laravel",
+    "description": "Laravel package that wires AGTP handlers into the Laravel service container. Bind handler classes via the service provider; the agtp:serve artisan command runs the gateway worker against agtpd.",
+    "type": "library",
+    "license": "MIT",
+    "homepage": "https://agtp.io",
+    "authors": [
+        {
+            "name": "Chris Hood",
+            "email": "chris@nomotic.ai"
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "agtp/agtp-php": "^0.1",
+        "agtp/mod-php": "^0.1",
+        "illuminate/console": "^10.0 || ^11.0",
+        "illuminate/contracts": "^10.0 || ^11.0",
+        "illuminate/support": "^10.0 || ^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Agtp\\Laravel\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Agtp\\Laravel\\AgtpServiceProvider"
+            ]
+        }
+    }
+}

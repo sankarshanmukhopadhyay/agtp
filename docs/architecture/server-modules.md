@@ -254,6 +254,16 @@ The function call inside `dispatch()` that today invokes a handler in-process be
    testable as plain functions via `\Agtp\Testing`. See
    [`../../agtp_drupal/INSTALL.md`](../../agtp_drupal/INSTALL.md)
    for the smallest-possible installation walkthrough.
+   Pairing PHP framework integrations landed in **M8**:
+   - **WordPress**: [`../../agtp-wordpress/`](../../agtp-wordpress/).
+     Plugin with `agtp_register_handlers` filter and `agtp_init`
+     action for discovery; `wp agtp serve` WP-CLI command.
+   - **Symfony**: [`../../agtp-symfony/`](../../agtp-symfony/). Bundle
+     with `agtp.endpoint` tagged services collected via a compiler
+     pass; `bin/console agtp:serve` Console command.
+   - **Laravel**: [`../../agtp-laravel/`](../../agtp-laravel/).
+     Auto-discovered service provider; container `tag()` for
+     discovery; `php artisan agtp:serve` Artisan command.
 7. **agentic-drupal.** Independent of AGTP transport. The
    semantic-verb reference connector over Drupal's REST surface.
    Useful on its own; coordinates with agtp-drupal when both are
