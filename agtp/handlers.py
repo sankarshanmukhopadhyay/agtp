@@ -54,6 +54,14 @@ class EndpointContext:
                           extracted from the ``Agent-ID`` header — or
                           legacy ``Target-Agent`` — or the URI). May
                           be empty for server-level probes.
+      * ``principal_id``  identifier of the human or entity the agent
+                          acts on behalf of, lifted from the resolved
+                          Agent Document's ``principal_id`` field.
+                          Empty when the agent does not declare a
+                          principal or when the request is a
+                          server-level probe. Surfaced for handlers
+                          that need to log, audit, or branch on who
+                          the agent represents.
       * ``agent_scopes``  the scopes the calling agent has declared.
                           The dispatcher's authority gate already
                           checked these against the endpoint's
@@ -95,6 +103,7 @@ class EndpointContext:
 
     input: Dict[str, Any]
     agent_id: str = ""
+    principal_id: str = ""
     agent_scopes: List[str] = field(default_factory=list)
     authority_scope: List[str] = field(default_factory=list)
     session_id: Optional[str] = None

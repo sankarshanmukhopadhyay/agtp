@@ -42,6 +42,7 @@ agtp-curl           = "client.cli.curl:main"
 agtp-migrate        = "client.cli.migrate:main"
 agtp-import-openapi = "tools.openapi_import:main"
 agtp-catalog-diff   = "tools.catalog_diff:main"
+agtp-mod-python     = "mod_python.__main__:main"
 elemen              = "client.elemen.app:main"
 
 [project.optional-dependencies]
@@ -54,6 +55,6 @@ yaml = ["pyyaml>=6"]
 where = ["."]
 include = [
   "core*", "server*", "client*", "registry*",
-  "agtp*", "samples*", "tools*",
+  "agtp*", "samples*", "tools*", "mod_python*",
 ]
 exclude = ["tests*", "elemen*", "ietf*", "docs*", "scripts*", "mcp-on-agtp*"]

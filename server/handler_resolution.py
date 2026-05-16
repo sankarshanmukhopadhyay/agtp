@@ -765,6 +765,62 @@ def resolve_external_service(
 # ---------------------------------------------------------------------------
 
 
+def resolve_via_gateway(
+    binding: HandlerBinding,
+    *,
+    spec: EndpointSpec,
+    gateway_server: Any,
+) -> Callable[..., Any]:
+    """
+    Resolve a ``registered_function`` binding to a gateway-dispatch closure.
+
+    When the daemon is running with ``--gateway-socket`` set,
+    ``registered_function`` bindings are NOT imported in-daemon. The
+    function's dotted path is sent to a connected runtime module
+    (``mod_python``, ``mod_php``, ...) inside the ``register`` frame;
+    that module resolves the reference against its local import path.
+
+    The returned closure has the same signature as every other
+    resolved handler — ``(EndpointContext) -> EndpointResponse |
+    EndpointError`` — so :func:`server.methods._serve_endpoint` calls
+    it without knowing the dispatch is happening over a socket. On
+    gateway failure (no module connected, mid-request disconnect),
+    the closure returns an :class:`EndpointError` with code
+    ``gateway_unavailable``; ``_serve_endpoint`` translates that into
+    a 503 wire response.
+
+    Composition and external_service bindings continue to resolve
+    in-daemon even when gateway mode is on — composition is a daemon
+    concern (it walks the synthesis runtime), and external_service is
+    the daemon's reverse-proxy. The gateway is only for bridging to
+    user code.
+    """
+    if binding.type != "registered_function":
+        raise InvalidHandlerError(
+            f"resolve_via_gateway only handles registered_function bindings; "
+            f"got {binding.type!r}",
+            detail="bad-binding-type",
+        )
+    if not binding.function:
+        raise InvalidHandlerError(
+            "registered_function binding has no function reference",
+            detail="empty-reference",
+        )
+    if gateway_server is None:
+        raise InvalidHandlerError(
+            "resolve_via_gateway requires a GatewayServer",
+            detail="runtime-not-configured",
+        )
+
+    def gateway_handler(ctx: Any) -> Any:
+        return gateway_server.dispatch(ctx)
+
+    gateway_handler.__agtp_handler_kind__ = "gateway"
+    gateway_handler.__agtp_handler_reference__ = binding.function
+    gateway_handler.__agtp_endpoint__ = (spec.method, spec.path or "/")
+    return gateway_handler
+
+
 def resolve_handler(
     binding: HandlerBinding,
     server_state: Optional[Any] = None,
@@ -781,13 +837,32 @@ def resolve_handler(
     ``server.main.AgentRegistry.configure_endpoints`` passes it
     through automatically.
 
+    When ``server_state`` carries a non-``None`` ``gateway_server``
+    attribute, ``registered_function`` bindings resolve to a
+    gateway-dispatch closure instead of an in-daemon import. The
+    closure proxies to a connected runtime module via the gateway
+    socket. Composition and external_service bindings continue to
+    resolve in-daemon regardless of gateway mode.
+
     Returns the callable; raises :class:`InvalidHandlerError` for
     registered_function and composition resolution failures, or
     :class:`NotImplementedError` for the still-stubbed
     ``external_service`` kind. Callers typically catch both and
     skip the offending endpoint with a logged warning.
     """
+    gateway_server = getattr(server_state, "gateway_server", None)
+
     if binding.type == "registered_function":
+        if gateway_server is not None:
+            if spec is None:
+                raise InvalidHandlerError(
+                    "gateway-mode resolution of registered_function binding "
+                    "requires the originating EndpointSpec",
+                    detail="composition-needs-spec",
+                )
+            return resolve_via_gateway(
+                binding, spec=spec, gateway_server=gateway_server,
+            )
         return resolve_registered_function(binding.function or "")
     if binding.type == "composition":
         return resolve_composition(
@@ -809,4 +884,5 @@ __all__ = [
     "resolve_external_service",
     "resolve_handler",
     "resolve_registered_function",
+    "resolve_via_gateway",
 ]

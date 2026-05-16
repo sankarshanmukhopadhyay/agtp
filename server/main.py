@@ -210,6 +210,13 @@ class AgentRegistry:
         self.synthesis_runtime: Optional[SynthesisRuntime] = (
             self._make_default_runtime()
         )
+        # Gateway mode (M3 step b) is opt-in via --gateway-socket. When
+        # this attribute is set, ``server.handler_resolution.resolve_handler``
+        # routes registered_function bindings through a gateway-dispatch
+        # closure instead of importing the function in-daemon. Composition
+        # and external_service bindings continue to resolve in-daemon.
+        # See docs/architecture/gateway-protocol-v1.md.
+        self.gateway_server: Optional[Any] = None
         # Per-server method policy. ``configure_methods_policy()``
         # replaces it from a loaded ServerConfig at startup; the
         # default is allow-all so a fresh checkout boots without
@@ -761,8 +768,34 @@ def run(
     *,
     soft_deny_enabled: bool = True,
     endpoints_dir: Optional[Path] = None,
+    gateway_socket: Optional[str] = None,
 ) -> None:
     registry = AgentRegistry(agents_dir)
+
+    # M3 step (b): gateway mode is opt-in. When the operator passes
+    # --gateway-socket, the daemon binds a Unix socket / TCP loopback
+    # endpoint, accepts runtime-module connections, and routes
+    # registered_function endpoints through the gateway instead of
+    # importing them in-daemon. Composition / external_service / the
+    # 12 embedded methods stay in-daemon regardless.
+    gateway_server = None
+    if gateway_socket:
+        from server.gateway import GatewayServer
+        gateway_server = GatewayServer(
+            socket_path=gateway_socket,
+            server_id=(
+                config.server.server_id
+                if config is not None and getattr(config, "server", None) is not None
+                else ""
+            ),
+            daemon_version="agtpd",
+            catalog_version="",
+        )
+        registry.gateway_server = gateway_server
+        print(
+            f"[server] gateway mode enabled (socket={gateway_socket})",
+            file=sys.stderr,
+        )
     if not registry.agents:
         print(
             f"[server] WARNING: no agents loaded from {agents_dir}",
@@ -844,6 +877,31 @@ def run(
                 file=sys.stderr,
             )
 
+    # Register gateway-bound endpoints AFTER configure_endpoints loaded
+    # them. We iterate the endpoint registry rather than reaching into
+    # endpoint_loader so each registered_function endpoint (with its
+    # resolved schemas) is picked up exactly once.
+    if gateway_server is not None:
+        from server.schema_validation import (
+            spec_to_input_schema, spec_to_output_schema,
+        )
+        gateway_count = 0
+        for spec in registry.endpoint_registry.all_endpoints():
+            if spec.handler is None or spec.handler.type != "registered_function":
+                continue
+            gateway_server.register_endpoint(
+                spec,
+                input_schema=spec_to_input_schema(spec),
+                output_schema=spec_to_output_schema(spec),
+            )
+            gateway_count += 1
+        print(
+            f"[server] gateway will route {gateway_count} endpoint(s) "
+            f"to connected runtime modules",
+            file=sys.stderr,
+        )
+        gateway_server.start()
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
@@ -882,6 +940,8 @@ def run(
         print("\n[server] shutting down")
     finally:
         sock.close()
+        if gateway_server is not None:
+            gateway_server.stop()
 
 
 def main() -> int:
@@ -964,6 +1024,20 @@ def main() -> int:
             f"that doesn't exist to skip endpoint loading."
         ),
     )
+    parser.add_argument(
+        "--gateway-socket",
+        metavar="PATH",
+        help=(
+            "Enable gateway mode (M3 step b). Binds a Unix-domain socket "
+            "at PATH and accepts connections from runtime modules "
+            "(mod_python, mod_php, ...). When set, registered_function "
+            "endpoints are routed through the gateway instead of being "
+            "imported in-daemon; composition and external_service "
+            "bindings continue to resolve in-daemon. Pass 'host:port' "
+            "instead of a path to use TCP loopback. See "
+            "docs/architecture/gateway-protocol-v1.md."
+        ),
+    )
     args = parser.parse_args()
 
     if args.port_pos is not None and args.port_flag is not None:
@@ -1033,6 +1107,7 @@ def main() -> int:
         config=config,
         soft_deny_enabled=not args.no_soft_deny,
         endpoints_dir=endpoints_path,
+        gateway_socket=args.gateway_socket,
     )
     return 0
 

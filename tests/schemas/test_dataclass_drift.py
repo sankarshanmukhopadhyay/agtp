@@ -23,9 +23,15 @@ Drift the test deliberately tolerates:
     that's accretive and forward-compatible. Bump the schema minor
     version in a follow-up; failing CI for it just discourages
     contributors from adding fields cleanly.
-  * Schema properties not present on the dataclass — sometimes the
-    schema documents wire-only fields (e.g. computed values, legacy
-    keys) that no dataclass carries.
+
+Drift the test catches but used to miss:
+
+  * Schema properties not present on the dataclass — these used to be
+    treated as "wire-only" fields, but in practice every such
+    discrepancy so far has been a real bug (schema declared a field
+    that nobody implemented). Schemas that legitimately need to
+    document wire-only fields can opt the field out by name via
+    ``ignore_schema_fields``.
 
 If the drift is intentional (a schema bump is in flight), update the
 schema file in the same commit. The CI failure is the prompt to
@@ -93,6 +99,14 @@ def _check_alignment(
     if missing_in_schema:
         problems.append(
             f"dataclass fields not declared in schema: {sorted(missing_in_schema)}"
+        )
+
+    missing_in_dataclass = sc_fields - dc_fields
+    if missing_in_dataclass:
+        problems.append(
+            f"schema declares fields the dataclass does not have: "
+            f"{sorted(missing_in_dataclass)} — if these are intentionally "
+            f"wire-only, add them to ignore_schema_fields"
         )
 
     required_in_schema_not_dc = sc_required - dc_fields
