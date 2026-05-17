@@ -124,6 +124,27 @@ enabled  = false
 key_path = ""
 key_id   = ""  # Optional; derived from the public key when omitted.
 
+# Mutual TLS (Agent-Cert verification). When mode is "optional" or
+# "required", the daemon verifies client certs against the CA bundle
+# during the TLS handshake, extracts the Ed25519 public key, and
+# derives the canonical Agent-ID = SHA-256(public-key-raw-bytes).
+# Connections present `trust.method = "agent_cert_mtls"` to handlers
+# and runtime modules; connections without certs (in "optional" mode)
+# fall back to `trust.method = "agent_id_header"`.
+#
+# Generate agent certs with:
+#
+#   python -m tools.generate_agent_cert agents/lauren
+#
+# require_agent_id_match: when true (default), a request that carries
+# both a verified cert AND an Agent-ID header MUST agree. Mismatch
+# returns 401. Disable only if you have a written reason to allow
+# header-vs-cert disagreement.
+[mtls]
+mode                     = "disabled"  # disabled | optional | required
+ca_bundle_path           = ""
+require_agent_id_match   = true
+
 # APIs: resource-scoped endpoints the workplace exposes. Servers with
 # multi-resource architectures populate this. Each entry lists the
 # methods admissible against that resource.

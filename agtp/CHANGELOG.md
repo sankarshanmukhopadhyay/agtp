@@ -19,6 +19,19 @@ documentation.
 
 ## [Unreleased]
 
+### Added — Phase B: Agent-Cert / mTLS trust signals
+
+- `EndpointContext.agent_verified: bool` — true when the daemon
+  verified an Agent Certificate during the TLS handshake and the
+  cert-derived Agent-ID matches the request's `agent_id`.
+- `EndpointContext.agent_cert_fingerprint: Optional[str]` — SHA-256
+  of the verified cert DER, hex-encoded.
+
+Handlers can now branch on `ctx.agent_verified` to apply different
+trust levels (e.g., refuse high-impact methods for header-only
+authenticated agents). Existing handlers that don't read these
+fields continue to work unchanged.
+
 ### Added — M3 step (a): handler-author API skeleton
 
 - `agtp.registry` module: `HandlerRegistry` class, process-wide

@@ -229,6 +229,12 @@ class AgentRegistry:
         # is disabled, in which case Attribution-Record falls back
         # to the pre-§5 placeholder shape.
         self.signing_service: Optional[Any] = None
+        # mTLS cert verifier (loaded during run() when [mtls].mode
+        # is "optional" or "required"). handle_connection extracts
+        # the peer cert from each accepted connection and runs it
+        # through this verifier to populate the EndpointContext's
+        # agent_verified / agent_cert_fingerprint fields.
+        self.cert_verifier: Optional[Any] = None
         # Per-server method policy. ``configure_methods_policy()``
         # replaces it from a loaded ServerConfig at startup; the
         # default is allow-all so a fresh checkout boots without
@@ -631,6 +637,63 @@ def handle_connection(
         # warning when it falls through).
         target_header = wire.read_agent_id(request)
 
+        # Phase B: when mTLS is enabled, verify the peer cert and
+        # stash the result on the request for downstream consumers
+        # (gateway trust block, EndpointContext.agent_verified). The
+        # TLS library already validated the chain; the verifier
+        # extracts the Ed25519 public key, derives the Agent-ID,
+        # computes the cert fingerprint.
+        request.verified_cert = None  # runtime attribute; not on the wire
+        cert_verifier = getattr(registry, "cert_verifier", None)
+        if cert_verifier is not None:
+            try:
+                peer_der = conn.getpeercert(binary_form=True)
+            except (AttributeError, OSError):
+                peer_der = None
+            if peer_der:
+                from server.mtls import CertVerificationError
+                try:
+                    request.verified_cert = cert_verifier.verify_peer_cert(peer_der)
+                except CertVerificationError as exc:
+                    response = error_response(
+                        401, "Unauthorized",
+                        "cert-verification-failed",
+                        f"client cert verification failed: {exc}",
+                        extra={"detail": exc.detail},
+                    )
+                    _finalize_response(response, request, config)
+                    conn.sendall(response.serialize())
+                    return
+                # Cross-check against the Agent-ID header. When
+                # [mtls].require_agent_id_match is on (default true),
+                # mismatched identities refuse the request. When the
+                # header is empty, the cert-derived identity becomes
+                # authoritative and gets written back into the
+                # request so downstream code sees it.
+                mtls_cfg = getattr(config, "mtls", None)
+                if (
+                    mtls_cfg is not None
+                    and mtls_cfg.require_agent_id_match
+                    and target_header
+                ):
+                    try:
+                        cert_verifier.cross_check_agent_id_header(
+                            request.verified_cert, target_header,
+                        )
+                    except CertVerificationError as exc:
+                        response = error_response(
+                            401, "Unauthorized",
+                            "agent-id-mismatch",
+                            str(exc),
+                            extra={"detail": exc.detail},
+                        )
+                        _finalize_response(response, request, config)
+                        conn.sendall(response.serialize())
+                        return
+                if not target_header:
+                    target_header = request.verified_cert.agent_id
+                    request.headers["Agent-ID"] = request.verified_cert.agent_id
+
         # §10 delegation-chain gate. The header is reserved for v01;
         # v00 implementations refuse with 501 Not Implemented before
         # any other dispatch logic so the rejection cost is uniform
@@ -1005,10 +1068,57 @@ def run(
     sock.bind((host, port))
     sock.listen(64)
 
+    # Build the cert verifier when mTLS is configured. The verifier
+    # itself doesn't re-validate chains — the TLS library does that
+    # when verify_mode is CERT_REQUIRED / CERT_OPTIONAL — but it
+    # extracts the Ed25519 public key and derives Agent-ID from each
+    # accepted connection's peer cert.
+    cert_verifier = None
+    if config is not None and getattr(config, "mtls", None) is not None:
+        mtls_cfg = config.mtls
+        if mtls_cfg.mode != "disabled":
+            if not certfile or not keyfile:
+                print(
+                    f"[server] [mtls].mode = {mtls_cfg.mode!r} requires "
+                    f"--cert and --key (TLS must be enabled)",
+                    file=sys.stderr,
+                )
+                return
+            if not mtls_cfg.ca_bundle_path:
+                print(
+                    f"[server] [mtls].mode = {mtls_cfg.mode!r} requires "
+                    f"a ca_bundle_path",
+                    file=sys.stderr,
+                )
+                return
+            from server.mtls import CertVerifier
+            cert_verifier = CertVerifier(ca_bundle_path=mtls_cfg.ca_bundle_path)
+            registry.cert_verifier = cert_verifier
+            print(
+                f"[server] mTLS enabled "
+                f"(mode={mtls_cfg.mode}, ca_bundle={mtls_cfg.ca_bundle_path})",
+                file=sys.stderr,
+            )
+
     if certfile and keyfile:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
-        ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
+        from server.mtls import build_server_ssl_context
+        mtls_cfg = (
+            config.mtls
+            if config is not None and getattr(config, "mtls", None) is not None
+            else None
+        )
+        require_cert = mtls_cfg is not None and mtls_cfg.mode == "required"
+        ca_bundle = mtls_cfg.ca_bundle_path if mtls_cfg and mtls_cfg.mode != "disabled" else None
+        try:
+            ctx = build_server_ssl_context(
+                certfile=certfile,
+                keyfile=keyfile,
+                ca_bundle_path=ca_bundle,
+                require_client_cert=require_cert,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[server] TLS context build failed: {exc}", file=sys.stderr)
+            return
         sock = ctx.wrap_socket(sock, server_side=True)
         scheme = "agtps"
     else:

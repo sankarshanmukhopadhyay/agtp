@@ -533,6 +533,19 @@ class GatewayServer:
         }
 
     def _build_trust_block(self, ctx: EndpointContext) -> Dict[str, Any]:
+        # Phase B: when the daemon verified an Agent Certificate
+        # during the TLS handshake, EndpointContext.agent_verified is
+        # true and agent_cert_fingerprint is set. The trust block
+        # reflects that — ``method`` becomes ``agent_cert_mtls`` and
+        # the fingerprint rides through to the module so it can be
+        # logged / audited without re-verifying.
+        if ctx.agent_verified and ctx.agent_cert_fingerprint:
+            return {
+                "verified": True,
+                "agent_id": ctx.agent_id,
+                "agent_cert_fingerprint": ctx.agent_cert_fingerprint,
+                "method": "agent_cert_mtls",
+            }
         return {
             "verified": bool(ctx.agent_id),
             "agent_id": ctx.agent_id,

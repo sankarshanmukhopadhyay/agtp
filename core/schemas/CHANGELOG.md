@@ -31,6 +31,23 @@ A change that does not appear here did not happen as far as the
 ecosystem is concerned. Drift detection (`tests/schemas/`) is the
 enforcement.
 
+## [Unreleased]
+
+### EndpointContext v1.1.0 — Agent-Cert / mTLS trust signals
+
+Additive minor bump. Two new optional fields:
+
+- `agent_verified: bool` — true when the daemon verified an Agent
+  Certificate during the TLS handshake AND the cert-derived
+  Agent-ID matches the request's `agent_id`. Defaults to false.
+- `agent_cert_fingerprint: string|null` — SHA-256 of the verified
+  cert DER, hex-encoded. Null when identity was established via
+  Agent-ID header without mTLS.
+
+Backward-compatible: existing handlers that don't read these fields
+continue to work. The drift CI test treats additions as accretive
+when defaults are present.
+
 ## [1.0.0] — 2026-05-15
 
 Initial schema freeze. Six public-contract schemas:

@@ -542,6 +542,38 @@ class GatewayConfig:
 
 
 @dataclass
+class MtlsConfig:
+    """
+    Mutual-TLS (Agent-Cert) configuration.
+
+    ``mode`` controls how the daemon's TLS listener treats client
+    certificates:
+
+      * ``"disabled"`` (default) — no client-cert verification. The
+        Agent-ID header is the only identity signal; ``trust.method``
+        on the gateway request frame stays ``"agent_id_header"``.
+      * ``"optional"`` — clients MAY present a cert. When presented,
+        the cert is verified against ``ca_bundle_path`` and the
+        derived Agent-ID becomes authoritative. When absent, the
+        connection proceeds with header-only identity (graceful
+        migration path for sites rolling out mTLS).
+      * ``"required"`` — clients MUST present a verified cert. The
+        TLS handshake fails for missing certs.
+
+    ``ca_bundle_path`` is a PEM file with one or more trusted CA
+    certs. Required when mode is not ``"disabled"``.
+
+    ``require_agent_id_match`` (default true): when a request carries
+    BOTH a verified cert AND an Agent-ID header, the header value
+    MUST match the cert-derived Agent-ID. Mismatches return 401.
+    """
+
+    mode: str = "disabled"
+    ca_bundle_path: str = ""
+    require_agent_id_match: bool = True
+
+
+@dataclass
 class SigningConfig:
     """
     Ed25519 signing configuration.
@@ -581,6 +613,7 @@ class ServerConfig:
     audit: AuditConfig = field(default_factory=AuditConfig)
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     signing: SigningConfig = field(default_factory=SigningConfig)
+    mtls: MtlsConfig = field(default_factory=MtlsConfig)
     apis: list = field(default_factory=list)
     hosted_protocols: list = field(default_factory=list)
     source_path: Optional[Path] = None
@@ -740,6 +773,21 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         key_id=str(signing_block.get("key_id") or ""),
     )
 
+    mtls_block = data.get("mtls", {}) or {}
+    mtls_mode = str(mtls_block.get("mode") or "disabled").lower()
+    if mtls_mode not in ("disabled", "optional", "required"):
+        raise ValueError(
+            f"[mtls].mode must be one of disabled/optional/required, "
+            f"got {mtls_mode!r}"
+        )
+    mtls = MtlsConfig(
+        mode=mtls_mode,
+        ca_bundle_path=str(mtls_block.get("ca_bundle_path") or ""),
+        require_agent_id_match=bool(
+            mtls_block.get("require_agent_id_match", True)
+        ),
+    )
+
     apis = _load_apis(data.get("apis", []) or [])
     # Back-compat: pre-§5 configs used ``[[hosts_protocols]]``. Accept
     # either array key.
@@ -756,6 +804,7 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         audit=audit,
         gateway=gateway,
         signing=signing,
+        mtls=mtls,
         apis=apis,
         hosted_protocols=hosted_protocols,
         source_path=candidate,
@@ -768,6 +817,7 @@ __all__ = [
     "DISCLOSURE_LEVELS",
     "GatewayConfig",
     "MethodsPolicy",
+    "MtlsConfig",
     "ServerConfig",
     "ServerInfo",
     "ServerPolicy",

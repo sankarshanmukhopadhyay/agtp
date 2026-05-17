@@ -48,6 +48,7 @@ agtp-import-openapi = "tools.openapi_import:main"
 agtp-catalog-diff   = "tools.catalog_diff:main"
 agtp-mod-python     = "mod_python.__main__:main"
 agtp-keygen         = "tools.generate_signing_key:main"
+agtp-gen-agent-cert = "tools.generate_agent_cert:main"
 elemen              = "client.elemen.app:main"
 
 [project.optional-dependencies]

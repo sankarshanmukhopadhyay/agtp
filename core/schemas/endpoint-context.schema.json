@@ -69,6 +69,16 @@
       "description": "Request headers, keys lowercased. For handlers that need access to e.g. Idempotency-Key or Trace-Parent.",
       "additionalProperties": { "type": "string" },
       "default": {}
+    },
+    "agent_verified": {
+      "type": "boolean",
+      "description": "True when the daemon verified an Agent Certificate during the TLS handshake AND the cert-derived Agent-ID matches the request's agent_id. False for header-only identity and anonymous requests. (Added v1.1.0 with Agent-Cert / mTLS support.)",
+      "default": false
+    },
+    "agent_cert_fingerprint": {
+      "type": ["string", "null"],
+      "description": "SHA-256 of the verified Agent Certificate DER, hex-encoded. Null when identity was established via Agent-ID header without mTLS. (Added v1.1.0.)",
+      "default": null
     }
   }
 }

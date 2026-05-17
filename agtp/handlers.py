@@ -113,6 +113,14 @@ class EndpointContext:
     method: str = ""
     path: str = "/"
     headers: Dict[str, str] = field(default_factory=dict)
+    # Phase B mTLS trust signals. True when the daemon verified an
+    # Agent Certificate during the TLS handshake AND the cert-derived
+    # Agent-ID matches the request's agent_id. False for header-only
+    # identity (Agent-ID header without mTLS) and for anonymous
+    # requests. ``agent_cert_fingerprint`` is the SHA-256 of the cert
+    # DER bytes, hex-encoded; null when not verified via cert.
+    agent_verified: bool = False
+    agent_cert_fingerprint: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

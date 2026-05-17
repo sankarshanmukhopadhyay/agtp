@@ -1585,6 +1585,16 @@ def _build_endpoint_context(
     ]
     session_id = headers_lower.get("session-id") or None
     task_id = headers_lower.get("task-id") or None
+    # Phase B mTLS: when handle_connection verified a client cert,
+    # it stashed a VerifiedCert on the request as the runtime
+    # attribute ``verified_cert``. Surface it into the EndpointContext
+    # as agent_verified + agent_cert_fingerprint so handlers can read
+    # the trust signal directly.
+    verified_cert = getattr(request, "verified_cert", None)
+    agent_verified = verified_cert is not None
+    agent_cert_fingerprint = (
+        verified_cert.fingerprint if verified_cert is not None else None
+    )
     return EndpointContext(
         input=body,
         agent_id=agent_doc.agent_id if agent_doc is not None else "",
@@ -1597,6 +1607,8 @@ def _build_endpoint_context(
         method=request.method.upper(),
         path=getattr(request, "path", "/") or "/",
         headers=headers_lower,
+        agent_verified=agent_verified,
+        agent_cert_fingerprint=agent_cert_fingerprint,
     )
 
 

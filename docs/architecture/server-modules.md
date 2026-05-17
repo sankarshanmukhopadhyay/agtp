@@ -53,7 +53,7 @@ agtpd owns everything inside the protocol boundary. An operator who installs agt
 | 11 | Configuration | Implemented (`agtp-server.toml`) |
 | 12 | Logging | Basic; needs structured format |
 | 13 | Session management | Specified, partial implementation |
-| 14 | Agent Certificate verification | Specified, pending |
+| 14 | Agent Certificate verification | Implemented (`server/mtls.py`, Phase B); standard X.509 + Ed25519 with Agent-ID derived from public-key hash. Full Agent-Cert custom extensions (subject-agent-id, principal-id, authority-scope-commitment, etc.) deferred to a future revision. |
 | 15 | Caching | Implemented (`mod_cache`, M9) |
 | 16 | Reverse proxy | Implemented (`mod_proxy`, M9) |
 | 17 | AGTP-LOG receipt emission | Implemented as Ed25519-signed JSONL (`mod_audit`); COSE/SCITT wrapper deferred |
