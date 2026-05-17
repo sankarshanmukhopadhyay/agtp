@@ -217,6 +217,18 @@ class AgentRegistry:
         # and external_service bindings continue to resolve in-daemon.
         # See docs/architecture/gateway-protocol-v1.md.
         self.gateway_server: Optional[Any] = None
+        # M9 operational-module dispatch hooks. mod_cache, mod_audit,
+        # and any future hook-based module register here during
+        # --load-module boot. The dispatcher in ``server.methods._serve_endpoint``
+        # consults this registry before and after each handler call.
+        from server.hooks import HookRegistry as _HookRegistry
+        self.hook_registry = _HookRegistry()
+        # Ed25519 signing service (loaded lazily during run() when
+        # [signing].enabled is true). Operational modules consume
+        # this through the AgentRegistry; stays None when signing
+        # is disabled, in which case Attribution-Record falls back
+        # to the pre-§5 placeholder shape.
+        self.signing_service: Optional[Any] = None
         # Per-server method policy. ``configure_methods_policy()``
         # replaces it from a loaded ServerConfig at startup; the
         # default is allow-all so a fresh checkout boots without
@@ -557,7 +569,12 @@ def _finalize_response(
         task_id = wire.header(request, "Task-ID")
         if task_id and "Task-ID" not in headers:
             headers["Task-ID"] = task_id
-    # Attribution-Record (opt-in placeholder).
+    # Attribution-Record. When the daemon has a loaded SigningService
+    # AND attribution_records_enabled is true, the header carries a
+    # real Ed25519-signed envelope. Without a signing service, the
+    # header falls back to the pre-§5 unsigned placeholder so
+    # existing deployments don't see header churn until they opt in
+    # to signing via [signing].enabled=true in their config.
     audit = getattr(config, "audit", None) if config is not None else None
     if audit is not None and getattr(
         audit, "attribution_records_enabled", False
@@ -569,16 +586,29 @@ def _finalize_response(
             if config and getattr(config, "server", None) is not None
             else ""
         )
-        attestation = _json.dumps({
-            "server_id": server_id,
-            "issued_at": _dt.now(tz=_tz.utc)
-                .isoformat().replace("+00:00", "Z"),
-            "status": response.status_code,
-            # v00 placeholder: future revisions replace this dict
-            # with a JWS compact serialization once §5 signing lands.
-            "signature": "placeholder",
-        }, separators=(",", ":"))
-        headers["Attribution-Record"] = attestation
+        issued_at = _dt.now(tz=_tz.utc).isoformat().replace("+00:00", "Z")
+        signing_service = (
+            getattr(config, "signing_service", None) if config is not None else None
+        )
+        if signing_service is not None:
+            attestation_obj = signing_service.build_attribution_record(
+                server_id=server_id,
+                issued_at=issued_at,
+                status=response.status_code,
+            )
+        else:
+            attestation_obj = {
+                "server_id": server_id,
+                "issued_at": issued_at,
+                "status": response.status_code,
+                # Pre-§5 placeholder: only emitted when signing is
+                # disabled. Operators who enable [signing] get real
+                # Ed25519 signatures via build_attribution_record().
+                "signature": "placeholder",
+            }
+        headers["Attribution-Record"] = _json.dumps(
+            attestation_obj, separators=(",", ":"),
+        )
     response.headers = headers
 
 
@@ -769,8 +799,76 @@ def run(
     soft_deny_enabled: bool = True,
     endpoints_dir: Optional[Path] = None,
     gateway_socket: Optional[str] = None,
+    load_modules: Optional[List[str]] = None,
 ) -> None:
     registry = AgentRegistry(agents_dir)
+
+    # M9 hook-aware module loading. Each --load-module is imported
+    # AFTER the AgentRegistry is constructed so operational modules
+    # (mod_cache, mod_audit, etc.) can register dispatch hooks via
+    # their optional ``install(server_state)`` function. Modules
+    # without ``install`` still load — they're custom-method modules
+    # that register at import time, the older pattern.
+    if load_modules:
+        for mod_name in load_modules:
+            try:
+                mod = importlib.import_module(mod_name)
+            except ImportError as exc:
+                print(
+                    f"[server] failed to load module {mod_name!r}: {exc}",
+                    file=sys.stderr,
+                )
+                continue
+            installer = getattr(mod, "install", None)
+            if callable(installer):
+                try:
+                    installer(registry)
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        f"[server] {mod_name}.install() raised "
+                        f"{type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
+                    continue
+                print(
+                    f"[server] loaded operational module {mod_name} "
+                    f"(install() ok)",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"[server] loaded module: {mod_name}",
+                    file=sys.stderr,
+                )
+
+    # Load the Ed25519 signing service if configured. Operators who
+    # enable signing in [signing] but lack a valid key file get a
+    # clear boot-time refusal — silently falling back to "no
+    # signatures" would be a security regression for a deployment
+    # that asked for it.
+    if config is not None and getattr(config, "signing", None) is not None:
+        signing_cfg = config.signing
+        if signing_cfg.enabled:
+            from server.signing import KeyLoadError, SigningService
+            try:
+                registry.signing_service = SigningService.from_key_path(
+                    signing_cfg.key_path, key_id=signing_cfg.key_id,
+                )
+                # Stash on config too so _finalize_response (which
+                # only sees config) can sign Attribution-Record
+                # without a separate thread-through.
+                config.signing_service = registry.signing_service
+                print(
+                    f"[server] signing enabled (kid={registry.signing_service.key_id})",
+                    file=sys.stderr,
+                )
+            except KeyLoadError as exc:
+                print(
+                    f"[server] signing is enabled in config but the key "
+                    f"could not be loaded: {exc}",
+                    file=sys.stderr,
+                )
+                return
 
     # M3 step (b): gateway mode is opt-in. When the operator passes
     # --gateway-socket, the daemon binds a Unix socket / TCP loopback
@@ -1048,16 +1146,9 @@ def main() -> int:
         args.port_flag if args.port_flag is not None else DEFAULT_PORT
     )
 
-    for mod_name in args.load_module:
-        try:
-            importlib.import_module(mod_name)
-            print(f"[server] loaded custom-method module: {mod_name}")
-        except ImportError as exc:
-            print(
-                f"[server] failed to load module {mod_name!r}: {exc}",
-                file=sys.stderr,
-            )
-            return 2
+    # Module loading now happens inside run() so the operational-module
+    # install(server_state) convention has access to the registry.
+    # See M9 hook-aware module loading in run().
 
     use_tls = bool(args.cert and args.key)
     loopback = _is_loopback(args.host)
@@ -1117,6 +1208,7 @@ def main() -> int:
         soft_deny_enabled=not args.no_soft_deny,
         endpoints_dir=endpoints_path,
         gateway_socket=gateway_socket,
+        load_modules=args.load_module,
     )
     return 0
 

@@ -1771,26 +1771,41 @@ def _serve_endpoint(
         request, spec, validated, agent_doc, server_state,
     )
 
-    try:
-        result = handler(ctx)
-    except Exception as exc:  # noqa: BLE001
-        # Expected error conditions ride EndpointError; bare
-        # exceptions are bugs. Log them and return 500 — Phase 2's
-        # logging hook is just stderr for now.
-        import sys as _sys
-        import traceback as _tb
-        print(
-            f"[server] handler for ({spec.name}, {spec.path}) raised "
-            f"{type(exc).__name__}: {exc}",
-            file=_sys.stderr,
-        )
-        _tb.print_exc(file=_sys.stderr)
-        return error_response(
-            500,
-            "Internal Server Error",
-            "handler-exception",
-            f"{type(exc).__name__}: {exc}",
-        )
+    # Operational-module dispatch hooks (M9). Hooks may short-circuit
+    # the handler — used by mod_cache to serve cached responses. Hooks
+    # run only when the server has a registered HookRegistry; the bare
+    # tests-and-fixtures path skips this entirely.
+    hooks = getattr(server_state, "hook_registry", None)
+    short_circuit_result = None
+    if hooks is not None:
+        short_circuit_result = hooks.run_before(spec, ctx, server_state)
+
+    if short_circuit_result is not None:
+        result = short_circuit_result
+    else:
+        try:
+            result = handler(ctx)
+        except Exception as exc:  # noqa: BLE001
+            # Expected error conditions ride EndpointError; bare
+            # exceptions are bugs. Log them and return 500 — Phase 2's
+            # logging hook is just stderr for now.
+            import sys as _sys
+            import traceback as _tb
+            print(
+                f"[server] handler for ({spec.name}, {spec.path}) raised "
+                f"{type(exc).__name__}: {exc}",
+                file=_sys.stderr,
+            )
+            _tb.print_exc(file=_sys.stderr)
+            return error_response(
+                500,
+                "Internal Server Error",
+                "handler-exception",
+                f"{type(exc).__name__}: {exc}",
+            )
+
+    if hooks is not None and result is not None:
+        hooks.run_after(spec, ctx, result, server_state)
 
     return _translate_endpoint_result(result, spec)
 

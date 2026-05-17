@@ -882,10 +882,27 @@ def resolve_handler(
         )
     if binding.type == "external_service":
         return resolve_external_service(binding, spec=spec)
+    if binding.type == "proxy":
+        # mod_proxy installs `resolve_proxy` here when loaded via
+        # --load-module. The default state is unloaded — refuse with
+        # a clear message.
+        proxy_resolver = globals().get("resolve_proxy")
+        if proxy_resolver is None:
+            raise InvalidHandlerError(
+                "proxy binding requires the mod_proxy operational module. "
+                "Add --load-module mod_proxy to the daemon's command line.",
+                detail="mod-proxy-not-loaded",
+            )
+        if spec is None:
+            raise InvalidHandlerError(
+                "proxy binding resolution requires the originating EndpointSpec",
+                detail="composition-needs-spec",
+            )
+        return proxy_resolver(binding, spec=spec)
     raise InvalidHandlerError(
         f"handler binding type {binding.type!r} is not recognized; "
         f"expected one of registered_function / composition / "
-        f"external_service",
+        f"external_service / proxy",
         detail="bad-binding-type",
     )
 

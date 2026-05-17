@@ -39,6 +39,9 @@ row and an explanation here.
 | `mod_node/`         | Node runtime module           | Underscore for symmetry with `mod_python`         |
 | `mod_php/`          | PHP runtime module            | Underscore for symmetry with `mod_python`         |
 | `mod_rust/`         | Rust runtime module           | Underscore for symmetry with `mod_python`         |
+| `mod_cache/`        | Operational module: caching   | Forced: `import mod_cache` requires underscore    |
+| `mod_audit/`        | Operational module: audit log | Forced: `import mod_audit` requires underscore    |
+| `mod_proxy/`        | Operational module: AGTP proxy| Forced: `import mod_proxy` requires underscore    |
 | `agtp_drupal/`      | Drupal framework integration  | Forced: Drupal module machine names `^[a-z_]+$`   |
 | `agtp-wordpress/`   | WordPress plugin              | Convention: WP plugin slug directories are hyphenated |
 | `agtp-symfony/`     | Symfony bundle                | Convention: Composer-published bundles are hyphenated |
@@ -59,7 +62,7 @@ across all five — three value classes (`EndpointContext`,
   because Cargo / npm / Composer / Go all accept hyphenated names
   and hyphens read more naturally in published-package contexts.
 
-### Runtime modules (`mod_*`)
+### Runtime modules (`mod_*` — language bridges)
 
 The process that connects to `agtpd` over the gateway socket and
 dispatches AGTP requests to handlers in its language. One per language.
@@ -71,6 +74,24 @@ dispatches AGTP requests to handlers in its language. One per language.
 
 If you write a `mod_<newlang>`, use the underscore unless the
 language's own convention strongly forbids it.
+
+### Operational modules (`mod_*` — daemon plugins)
+
+Python packages loaded **into** the `agtpd` process via
+`--load-module`. Unlike runtime modules, they do not speak the
+gateway protocol — they extend the daemon's own behavior.
+
+- `mod_cache/` — response caching for idempotent methods
+- `mod_audit/` — append-only JSONL audit log
+- `mod_proxy/` — forward AGTP requests to upstream `agtpd` instances
+
+All are Python packages, all use the underscore (forced by Python
+import rules). They share the `mod_` prefix with runtime modules
+intentionally — both are "modules that extend agtpd"; the
+in-process vs out-of-process split is a deployment detail, not a
+naming concern. Disambiguate by referring to "runtime modules"
+(language bridges) vs "operational modules" (daemon plugins) when
+context matters.
 
 ### Framework integrations (`agtp_<framework>` or `agtp-<framework>`)
 

@@ -54,10 +54,10 @@ agtpd owns everything inside the protocol boundary. An operator who installs agt
 | 12 | Logging | Basic; needs structured format |
 | 13 | Session management | Specified, partial implementation |
 | 14 | Agent Certificate verification | Specified, pending |
-| 15 | Caching | Pending |
-| 16 | Reverse proxy | Pending |
-| 17 | AGTP-LOG receipt emission | Specified, pending |
-| 18 | Ed25519 signing of receipts and responses | Pending |
+| 15 | Caching | Implemented (`mod_cache`, M9) |
+| 16 | Reverse proxy | Implemented (`mod_proxy`, M9) |
+| 17 | AGTP-LOG receipt emission | Implemented as Ed25519-signed JSONL (`mod_audit`); COSE/SCITT wrapper deferred |
+| 18 | Ed25519 signing of receipts and responses | Implemented (`server/signing.py`); Attribution-Record now signed when `[signing].enabled` |
 
 Items 1 through 14 are protocol concerns. They live in the daemon because every AGTP server must do them identically. A module never reimplements any of these. By the time a request crosses the gateway socket into a module, it has been authenticated, validated against the catalog and path grammar, schema-checked, scope-gated, and correlated to a session.
 
@@ -285,8 +285,28 @@ The function call inside `dispatch()` that today invokes a handler in-process be
      transport; `HandlerFn = fn(&EndpointContext) -> Result<HandlerOutcome, String>`.
      Tested by `tests/test_gateway_e2e_rust.py` against a `cargo build`-ed
      binary.
-9. **Operational modules.** mod_proxy, mod_cache, mod_audit, in order
-   of operator need.
+9. **Operational modules.** ✅ All three landed in M9.
+   - **mod_cache** ([`../../mod_cache/`](../../mod_cache/)) — response
+     caching for endpoints whose semantic block declares
+     `impact == "informational"` (or `reversible + is_idempotent`).
+     In-memory LRU + TTL backend; multi-process / Redis backend
+     deferred. Integrates via the new `DispatchHook` surface in
+     [`../../server/hooks.py`](../../server/hooks.py).
+   - **mod_audit** ([`../../mod_audit/`](../../mod_audit/)) — append-only
+     JSONL log of every dispatch (timestamp, method, path, agent,
+     outcome). Same field set the AGTP-LOG draft's signed receipts
+     will carry; signing waits for Ed25519 in the daemon.
+   - **mod_proxy** ([`../../mod_proxy/`](../../mod_proxy/)) — new
+     `proxy` handler-binding type that forwards AGTP requests to
+     an upstream `agtpd`. Parallels the existing HTTP
+     `external_service` binding. Preserves `Agent-ID`,
+     `Principal-ID`, `Session-ID`, `Task-ID`, `Authority-Scope`.
+
+   The hook surface itself is documented inline in
+   [`../../server/hooks.py`](../../server/hooks.py). Future operational
+   modules (mod_metrics, mod_log_structured, mod_signing) follow the
+   same `install(server_state)` boot convention and consume the
+   same `HookRegistry`.
 
 ## 8. Open Questions and Closed Decisions
 
@@ -304,7 +324,14 @@ The function call inside `dispatch()` that today invokes a handler in-process be
 
 - **Connection reuse for outbound calls.** When a handler originates AGTP requests to other agents, does the daemon pool those connections, or does the language library? Leaning toward daemon-side so every language benefits.
 
-- **Key custody.** Ed25519 private keys for response signing live in agtpd, never in modules. Modules request signing through the gateway. Needs formalization in the gateway spec.
+- **Key custody.** ✅ *Closed.* Ed25519 private keys live in agtpd
+  via `server.signing.SigningService` (loaded at boot from a
+  PEM file path declared in `[signing]`). Runtime modules MUST NOT
+  hold private keys; future gateway protocol v2 will add a
+  `sign_request` capability so modules can request signatures over
+  opaque bytes without ever touching the key. Today, the only
+  module that consumes signing is `mod_audit` (in-daemon, has direct
+  access via the AgentRegistry).
 
 ## 9. What This Document Does Not Cover
 

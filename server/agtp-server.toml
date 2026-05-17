@@ -108,6 +108,22 @@ attribution_records_enabled  = false
 [gateway]
 socket = ""
 
+# Ed25519 signing: when enabled the daemon loads a private key at
+# boot and uses it to sign Attribution-Record headers and (when
+# mod_audit is loaded with AGTP_AUDIT_SIGN_RECEIPTS=1) audit
+# receipts. Generate a key pair with:
+#
+#   python -m tools.generate_signing_key /etc/agtpd/signing
+#
+# The daemon refuses to boot when [signing].enabled = true and the
+# key_path cannot be loaded — silently falling back to unsigned
+# would be a security regression for a deployment that asked for
+# signing.
+[signing]
+enabled  = false
+key_path = ""
+key_id   = ""  # Optional; derived from the public key when omitted.
+
 # APIs: resource-scoped endpoints the workplace exposes. Servers with
 # multi-resource architectures populate this. Each entry lists the
 # methods admissible against that resource.

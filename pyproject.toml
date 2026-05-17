@@ -12,6 +12,10 @@ requires-python = ">=3.11"
 dependencies = [
   # Phase 2 endpoint-input/output validation rides on Draft 2020-12.
   "jsonschema>=4",
+  # Ed25519 signing for Attribution-Record, audit receipts, and
+  # (when mTLS lands) Agent-Cert verification. The `cryptography`
+  # library is the de-facto standard for asymmetric ops in Python.
+  "cryptography>=42",
 ]
 authors = [{ name = "Chris Hood", email = "chris@nomotic.ai" }]
 keywords = ["agtp", "agent", "protocol", "ietf"]
@@ -43,6 +47,7 @@ agtp-migrate        = "client.cli.migrate:main"
 agtp-import-openapi = "tools.openapi_import:main"
 agtp-catalog-diff   = "tools.catalog_diff:main"
 agtp-mod-python     = "mod_python.__main__:main"
+agtp-keygen         = "tools.generate_signing_key:main"
 elemen              = "client.elemen.app:main"
 
 [project.optional-dependencies]
@@ -57,6 +62,7 @@ include = [
   "core*", "server*", "client*", "registry*",
   "agtp", "agtp.*",  # only the Python `agtp` package, not agtp-php / agtp-go / agtp-rust / agtp-node
   "samples*", "tools*", "mod_python*",
+  "mod_cache*", "mod_audit*", "mod_proxy*",  # M9 operational modules (Python)
 ]
 # Non-Python language packages never carry __init__.py so setuptools
 # skips them automatically, but list them explicitly so build output

@@ -542,6 +542,35 @@ class GatewayConfig:
 
 
 @dataclass
+class SigningConfig:
+    """
+    Ed25519 signing configuration.
+
+    When ``enabled`` is true and ``key_path`` resolves to a readable
+    PEM file, the daemon loads the key at boot via
+    :class:`server.signing.SigningService` and uses it to sign:
+
+      * Attribution-Record headers on every response (replaces the
+        pre-§5 placeholder).
+      * Audit log receipts (when ``mod_audit`` is loaded with
+        ``AGTP_AUDIT_SIGN_RECEIPTS=1``).
+      * Future: Server Manifest at DISCOVER, AGTP-LOG entries.
+
+    Generate a key pair with ``tools/generate_signing_key.py``. The
+    daemon refuses to boot when signing is enabled and the key file
+    is missing or malformed.
+
+    ``key_id`` is an optional stable identifier embedded in signed
+    payloads. When omitted the service derives it from the public
+    key's raw bytes (``ed25519-<sha256 prefix>``).
+    """
+
+    enabled: bool = False
+    key_path: str = ""
+    key_id: str = ""
+
+
+@dataclass
 class ServerConfig:
     """Top-level configuration object."""
 
@@ -551,6 +580,7 @@ class ServerConfig:
     synthesis: SynthesisConfig = field(default_factory=SynthesisConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
+    signing: SigningConfig = field(default_factory=SigningConfig)
     apis: list = field(default_factory=list)
     hosted_protocols: list = field(default_factory=list)
     source_path: Optional[Path] = None
@@ -703,6 +733,13 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         socket=str(gateway_block.get("socket") or ""),
     )
 
+    signing_block = data.get("signing", {}) or {}
+    signing = SigningConfig(
+        enabled=bool(signing_block.get("enabled", False)),
+        key_path=str(signing_block.get("key_path") or ""),
+        key_id=str(signing_block.get("key_id") or ""),
+    )
+
     apis = _load_apis(data.get("apis", []) or [])
     # Back-compat: pre-§5 configs used ``[[hosts_protocols]]``. Accept
     # either array key.
@@ -718,6 +755,7 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         agents=agents,
         audit=audit,
         gateway=gateway,
+        signing=signing,
         apis=apis,
         hosted_protocols=hosted_protocols,
         source_path=candidate,
@@ -733,6 +771,7 @@ __all__ = [
     "ServerConfig",
     "ServerInfo",
     "ServerPolicy",
+    "SigningConfig",
     "SynthesisConfig",
     "default_config",
     "default_methods_policy",

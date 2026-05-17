@@ -179,10 +179,10 @@ ALL_PARAM_TYPES: FrozenSet[str] = frozenset({
 #: Recognized handler-binding kinds. ``registered_function`` resolves
 #: to a callable in the server's import path; ``composition`` resolves
 #: to a recipe in the synthesis runtime; ``external_service`` resolves
-#: to an upstream URL the server proxies to. Phase 1 only validates
-#: the binding shape; resolution lands in Phase 2+.
+#: to an upstream URL the server proxies to (HTTP); ``proxy`` resolves
+#: to an upstream AGTP server (lands via M9 ``mod_proxy``).
 ALL_HANDLER_TYPES: FrozenSet[str] = frozenset({
-    "registered_function", "composition", "external_service",
+    "registered_function", "composition", "external_service", "proxy",
 })
 
 
@@ -312,6 +312,8 @@ class HandlerBinding:
     #: ``composition`` only: recipe name in the synthesis runtime.
     recipe: Optional[str] = None
     #: ``external_service`` only: HTTPS URL the server proxies to.
+    #: ``proxy`` only: AGTP URI of the upstream daemon (e.g.,
+    #: ``agtp://other.example.com``). M9.
     url: Optional[str] = None
     # external_service-only extras. Defaults: empty maps mean
     # "pass-through with original names", empty headers mean "no
@@ -342,6 +344,8 @@ class HandlerBinding:
                 self.recipe = self.reference
             elif self.type == "external_service" and not self.url:
                 self.url = self.reference
+            elif self.type == "proxy" and not self.url:
+                self.url = self.reference
             self.reference = None
         if self.input_map is not None and not self.input_transform:
             self.input_transform = dict(self.input_map)
@@ -364,7 +368,7 @@ class HandlerBinding:
             return self.function or ""
         if self.type == "composition":
             return self.recipe or ""
-        if self.type == "external_service":
+        if self.type in ("external_service", "proxy"):
             return self.url or ""
         return ""
 
@@ -377,7 +381,7 @@ class HandlerBinding:
             out["function"] = self.function
         elif self.type == "composition" and self.recipe:
             out["recipe"] = self.recipe
-        elif self.type == "external_service" and self.url:
+        elif self.type in ("external_service", "proxy") and self.url:
             out["url"] = self.url
         if self.type == "external_service":
             if self.method is not None:
@@ -418,6 +422,8 @@ class HandlerBinding:
             elif type_ == "composition" and not recipe:
                 recipe = legacy_reference
             elif type_ == "external_service" and not url:
+                url = legacy_reference
+            elif type_ == "proxy" and not url:
                 url = legacy_reference
         # Transforms — prefer §9 names.
         input_transform_raw = (
