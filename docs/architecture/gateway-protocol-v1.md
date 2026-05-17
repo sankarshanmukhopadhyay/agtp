@@ -641,28 +641,30 @@ streaming, outbound calls, signing requests all roll in this way.
 
 ### 12.1 When v2 cuts
 
-The gateway version stays at `1.0` until **both** of the following
-are true:
+The gateway protocol stays at **`1.0` and iterates in place** for
+the foreseeable future. AGTP is pre-stable, no external
+implementations exist outside this monorepo, and capability
+negotiation in the handshake already handles graceful additions.
+"Bumping to v2" buys nothing when we control every implementation.
 
-1. **mTLS termination is implemented in `agtpd`.** Specifically: the
-   daemon verifies client Agent Certificates per
-   `draft-hood-agtp-agent-cert`, and the `trust.method` field on a
-   real production deployment can return `agent_cert_mtls` rather
-   than `agent_id_header`.
-2. **At least one operational module needs streaming or outbound
-   calls.** A documented use case — not a hypothetical — drives a
-   frame shape that cannot be expressed as a capability flag layered
-   over v1.
+A real v2 cut waits for the day there's an **external implementation
+that a frame-shape change would break**. At that point we'll have a
+specific compatibility surface to design against and the version
+bump means something. Until then, additions follow this rule:
 
-Both gates must fire. Either one alone is handled additively: mTLS
-without new frame shapes is just a `trust.method` value v1 already
-allows; streaming without an mTLS dependency is a capability flag
-layered on v1.
+- **Backward-compatible** changes (new optional fields on existing
+  frames, new frame types tied to capability flags modules can
+  decline) land in v1.0 directly. The spec gets a `### N.N`
+  subsection, the CHANGELOG records what arrived, and modules that
+  don't claim the capability continue to work unchanged.
 
-Until both gates fire, v1 absorbs additive change via capability
-negotiation. This keeps the ecosystem coherent — `mod_php`,
-`mod_python`, and any future runtime module continue to interoperate
-with the same daemon across years of incremental evolution.
+- **Backward-incompatible** changes (wire format break, mandatory
+  new fields, removal of frame types) wait for an actual v2 cut
+  triggered by an external user we'd otherwise break.
+
+This document is the working spec. Look at the capability-flag table
+in §5.2 (`welcome.capabilities`) to see what the current daemon
+advertises; the canonical list grows as new capabilities ship.
 
 ## 13. Conformance vectors
 
@@ -683,31 +685,170 @@ conformance by:
 Reference frame samples for each step are in
 [`tests/gateway/vectors/`](../../tests/gateway/vectors/).
 
-## 14. Deferred to v2
+## 14. Optional capabilities
 
-These extensions are anticipated but **not** in v1. Modules MUST NOT
-implement them; daemons MUST NOT advertise them in `welcome`.
+Beyond the baseline `registered_function` capability that every
+runtime module claims, the protocol defines optional capabilities
+modules can opt into via `hello.capabilities`. A module MUST NOT
+exercise a capability the daemon did not echo back in
+`welcome.capabilities`.
 
-- **Streaming responses.** Multiple `response_chunk` frames followed
-  by a `response_end`. Tied to the AGTP wire format gaining
-  streaming.
-- **Outbound calls.** Module sends an `outbound_request` to the
-  daemon; daemon proxies to another AGTP server, returns
-  `outbound_response`. Lets handlers originate AGTP traffic without
-  the module managing TLS, connection pools, or Agent-Cert state.
-- **Signing requests.** Module sends `sign_request` carrying bytes
-  to be signed; daemon returns `sign_response` with an Ed25519
-  signature. Private keys never leave the daemon.
-- **Certificate chain fetch.** Module sends `get_certificate_chain`
-  for the current request's agent; daemon returns the full chain.
-  Audit and policy modules need this; everyday handlers don't.
-- **Multiplex on one connection.** Multiple in-flight `request_id`s
-  per connection. Reduces socket count for high-concurrency
-  modules.
+The introduction of a capability is always additive: existing
+modules that don't claim it continue to work unchanged.
 
-Each v2 extension lands as a capability flag negotiated at handshake.
-v1 modules keep working against v2 daemons because the v1
-capability set is a subset of v2.
+### 14.1 `sign_request` (module → daemon → module)
+
+When the module claims `sign_request` AND the daemon advertises it,
+the module may ask the daemon to sign opaque bytes with the
+daemon's Ed25519 signing service. Private keys never leave the
+daemon. The flow:
+
+```
+  Module                                          Daemon
+    |                                               |
+    | --- request {request_id, envelope} ---------> |    (existing)
+    |   <-- daemon expects the response back --     |
+    |                                               |
+    | --- sign_request {operation_id, data_b64} --> |    (NEW)
+    |   <-- daemon's read-loop services this --     |
+    | <-- sign_response {operation_id, ...} ------- |
+    |                                               |
+    | --- response {request_id, envelope} --------> |    (existing)
+    |                                               |
+```
+
+Frames:
+
+```json
+{
+  "type": "sign_request",
+  "operation_id": "op-abc123",
+  "data_b64": "<base64url of bytes to sign>"
+}
+```
+
+```json
+{
+  "type": "sign_response",
+  "operation_id": "op-abc123",
+  "kid": "ed25519-...",
+  "alg": "Ed25519",
+  "signature_b64": "<base64url of 64-byte signature>"
+}
+```
+
+```json
+{
+  "type": "sign_error",
+  "operation_id": "op-abc123",
+  "code": "signing_unavailable" | "sign_failure",
+  "message": "..."
+}
+```
+
+The daemon's signing key is the one loaded via `[signing]` in
+`agtp-server.toml`. When `[signing].enabled = false`, the daemon
+either omits `sign_request` from `welcome.capabilities` (preferred)
+or replies with `sign_error` code `signing_unavailable` to any
+incoming `sign_request`.
+
+### 14.2 `outbound_call` (module → daemon → upstream → module)
+
+When the module claims `outbound_call` AND the daemon advertises
+it, the module may ask the daemon to make an outbound AGTP request
+on its behalf. The daemon uses its own client primitives (connection
+pool, TLS context, Agent-Cert presentation) to reach the upstream.
+
+```json
+{
+  "type": "outbound_request",
+  "operation_id": "op-def456",
+  "uri": "agtp://reservations.partner.com",
+  "method": "QUERY",
+  "path": "/availability",
+  "headers": {"Agent-ID": "...", "Authority-Scope": "..."},
+  "body": {"date": "2026-06-01"}
+}
+```
+
+```json
+{
+  "type": "outbound_response",
+  "operation_id": "op-def456",
+  "status": 200,
+  "headers": {"Content-Type": "application/json"},
+  "body": {"available": true}
+}
+```
+
+```json
+{
+  "type": "outbound_error",
+  "operation_id": "op-def456",
+  "code": "upstream_unreachable" | "upstream_malformed" | "outbound_failure",
+  "message": "..."
+}
+```
+
+Identity propagation is the operator's choice: the module supplies
+the headers it wants forwarded. The daemon does not inject the
+calling agent's identity automatically — handlers that want to
+forward the original agent must explicitly pass the relevant
+headers.
+
+### 14.3 Bidirectional read-loop during dispatch
+
+Both `sign_request` and `outbound_call` invert the per-request
+flow: the **module** initiates, the **daemon** services, before the
+module sends its final `response`. The daemon's dispatch loop, after
+writing the inbound `request` frame, reads frames in a loop until
+the matching `response` arrives:
+
+```
+loop:
+    next = read_frame()
+    if next.type == "response" and next.request_id == this_request:
+        break
+    elif next.type == "sign_request":
+        handle_sign(next)
+    elif next.type == "outbound_request":
+        handle_outbound(next)
+    elif next.type == "error":
+        bail out
+    else:
+        protocol violation
+```
+
+Singleplex still applies — the module issues one sub-request at a
+time and waits for its reply before continuing or sending the final
+`response`. Operations are matched by module-generated
+`operation_id` (analogous to but distinct from `request_id`, which
+belongs to the inbound request).
+
+### 14.4 `streaming` — deferred
+
+The wire format is strictly synchronous today (`Content-Length`
+framing, no half-close). Streaming responses at the gateway layer
+are spec'd here only as a placeholder so future implementers know
+where they'll attach: `response_chunk` frames followed by
+`response_end`, tied to a `streaming` capability flag, lighting up
+when AGTP itself gains streaming at the wire layer. Modules MUST
+NOT claim `streaming` today; daemons MUST NOT advertise it.
+
+### 14.5 Other anticipated capabilities
+
+These are sketched but not yet specified in detail. Each will get
+its own subsection above when there's a real use case driving the
+shape:
+
+- **Certificate chain fetch.** Module asks the daemon for the full
+  X.509 chain of the current request's agent. Useful for audit and
+  policy modules; everyday handlers don't need it.
+- **Multiplex.** Multiple in-flight `request_id`s on one connection.
+  Reduces socket count for high-concurrency modules. Trade-off:
+  more complex framing on both sides. Waits for a real concurrency
+  case that singleplex-with-multiple-connections doesn't already
+  serve.
 
 ## 15. What this document does not cover
 

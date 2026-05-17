@@ -953,6 +953,11 @@ def run(
             catalog_version="",
         )
         registry.gateway_server = gateway_server
+        # Phase C: the gateway's optional capabilities pull from
+        # daemon state. sign_request lights up when [signing] is
+        # loaded; outbound_call defaults on (operators disable via
+        # a future config flag when there's a reason to).
+        gateway_server.signing_service = registry.signing_service
         print(
             f"[server] gateway mode enabled (socket={gateway_socket})",
             file=sys.stderr,

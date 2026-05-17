@@ -14,7 +14,13 @@
     { "$ref": "#/$defs/error" },
     { "$ref": "#/$defs/ping" },
     { "$ref": "#/$defs/pong" },
-    { "$ref": "#/$defs/goodbye" }
+    { "$ref": "#/$defs/goodbye" },
+    { "$ref": "#/$defs/sign_request" },
+    { "$ref": "#/$defs/sign_response" },
+    { "$ref": "#/$defs/sign_error" },
+    { "$ref": "#/$defs/outbound_request" },
+    { "$ref": "#/$defs/outbound_response" },
+    { "$ref": "#/$defs/outbound_error" }
   ],
   "$defs": {
     "manifest_hash": {
@@ -253,6 +259,105 @@
           "type": "string",
           "enum": ["manifest_reload", "shutdown", "drain"]
         }
+      }
+    },
+    "sign_request": {
+      "type": "object",
+      "description": "Phase C: module asks daemon to Ed25519-sign opaque bytes. Requires the `sign_request` capability advertised in welcome.",
+      "required": ["type", "operation_id", "data_b64"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "sign_request" },
+        "operation_id": { "type": "string", "minLength": 1 },
+        "data_b64": {
+          "type": "string",
+          "description": "base64url-encoded bytes to sign (no padding)."
+        }
+      }
+    },
+    "sign_response": {
+      "type": "object",
+      "required": ["type", "operation_id", "kid", "alg", "signature_b64"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "sign_response" },
+        "operation_id": { "type": "string", "minLength": 1 },
+        "kid": { "type": "string", "minLength": 1 },
+        "alg": { "const": "Ed25519" },
+        "signature_b64": {
+          "type": "string",
+          "description": "base64url-encoded 64-byte Ed25519 signature (no padding)."
+        }
+      }
+    },
+    "sign_error": {
+      "type": "object",
+      "required": ["type", "operation_id", "code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "sign_error" },
+        "operation_id": { "type": "string", "minLength": 1 },
+        "code": {
+          "type": "string",
+          "enum": ["signing_unavailable", "sign_failure"]
+        },
+        "message": { "type": "string" }
+      }
+    },
+    "outbound_request": {
+      "type": "object",
+      "description": "Phase C: module asks daemon to make an outbound AGTP request. Requires the `outbound_call` capability advertised in welcome.",
+      "required": ["type", "operation_id", "uri", "method"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "outbound_request" },
+        "operation_id": { "type": "string", "minLength": 1 },
+        "uri": { "type": "string", "pattern": "^agtps?://" },
+        "method": { "type": "string", "pattern": "^[A-Z]+$" },
+        "path": { "type": "string", "default": "/" },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "body": {
+          "description": "Request body. Objects/arrays are JSON-encoded by the daemon before forwarding; strings are sent as-is; null/missing sends an empty body."
+        }
+      }
+    },
+    "outbound_response": {
+      "type": "object",
+      "required": ["type", "operation_id", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "outbound_response" },
+        "operation_id": { "type": "string", "minLength": 1 },
+        "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "body": {
+          "description": "Upstream response body, JSON-parsed when the upstream returned application/json; null when the body was empty."
+        }
+      }
+    },
+    "outbound_error": {
+      "type": "object",
+      "required": ["type", "operation_id", "code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "outbound_error" },
+        "operation_id": { "type": "string", "minLength": 1 },
+        "code": {
+          "type": "string",
+          "enum": [
+            "upstream_unreachable",
+            "upstream_malformed",
+            "outbound_failure"
+          ]
+        },
+        "message": { "type": "string" },
+        "details": { "type": ["object", "null"] }
       }
     }
   }

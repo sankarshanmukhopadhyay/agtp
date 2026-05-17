@@ -327,11 +327,12 @@ The function call inside `dispatch()` that today invokes a handler in-process be
 - **Key custody.** ✅ *Closed.* Ed25519 private keys live in agtpd
   via `server.signing.SigningService` (loaded at boot from a
   PEM file path declared in `[signing]`). Runtime modules MUST NOT
-  hold private keys; future gateway protocol v2 will add a
-  `sign_request` capability so modules can request signatures over
-  opaque bytes without ever touching the key. Today, the only
-  module that consumes signing is `mod_audit` (in-daemon, has direct
-  access via the AgentRegistry).
+  hold private keys; the `sign_request` gateway capability (Phase C)
+  lets modules request signatures over opaque bytes without ever
+  touching the key. `mod_audit` (in-daemon) and `mod_python`
+  (via `ctx.daemon.sign()`) both consume signing through this
+  surface; other runtime modules pick up the capability as they're
+  updated.
 
 ## 9. What This Document Does Not Cover
 

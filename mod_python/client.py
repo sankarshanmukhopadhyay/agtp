@@ -16,14 +16,22 @@ connection per process is enough for the first deployments.)
 
 from __future__ import annotations
 
+import base64
 import importlib
 import os
 import socket
 import sys
 import traceback
-from typing import Any, Callable, Dict, List, Optional, Tuple
+import uuid
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from agtp.handlers import EndpointContext, EndpointError, EndpointResponse
+from agtp.handlers import (
+    DaemonError,
+    EndpointContext,
+    EndpointError,
+    EndpointResponse,
+    OutboundResponse,
+)
 from agtp.registry import HandlerRegistry, registry as global_registry
 from core.gateway import (
     GATEWAY_VERSION,
@@ -37,6 +45,130 @@ from core.gateway import (
 
 class ModuleError(Exception):
     """Raised when the module cannot operate (handshake failed, etc.)."""
+
+
+# ---------------------------------------------------------------------------
+# PythonDaemonClient — Phase C capability surface for handlers.
+# ---------------------------------------------------------------------------
+
+
+class PythonDaemonClient:
+    """Implements :class:`agtp.handlers.DaemonClient` over the gateway socket.
+
+    Constructed by the GatewayClient for each in-flight request and
+    passed to the handler via ``ctx.daemon``. The methods send
+    module-initiated frames over the gateway connection during the
+    handler's execution; the daemon's read-loop services them.
+
+    Each PythonDaemonClient is bound to a single in-flight request —
+    the daemon won't accept these frames outside the dispatch window
+    of an inbound request.
+    """
+
+    def __init__(
+        self,
+        *,
+        owner: "GatewayClient",
+        daemon_capabilities: List[str],
+    ) -> None:
+        self._owner = owner
+        self._daemon_capabilities = list(daemon_capabilities)
+
+    def sign(self, data: bytes) -> bytes:
+        if "sign_request" not in self._daemon_capabilities:
+            raise DaemonError(
+                "daemon did not advertise sign_request capability; "
+                "enable [signing] in agtp-server.toml",
+                code="capability_not_claimed",
+            )
+        if not isinstance(data, (bytes, bytearray)):
+            raise DaemonError(
+                f"sign() requires bytes; got {type(data).__name__}",
+                code="sign_failure",
+            )
+        op_id = f"op-{uuid.uuid4().hex[:12]}"
+        write_frame(self._owner._writer, {
+            "type": "sign_request",
+            "operation_id": op_id,
+            "data_b64": base64.urlsafe_b64encode(bytes(data))
+                .rstrip(b"=").decode("ascii"),
+        })
+        response = read_frame(self._owner._reader)
+        rtype = response.get("type")
+        if rtype == "sign_error":
+            raise DaemonError(
+                str(response.get("message") or "signing failed"),
+                code=str(response.get("code") or "sign_failure"),
+            )
+        if rtype != "sign_response":
+            raise DaemonError(
+                f"unexpected frame from daemon: type={rtype!r}",
+                code="protocol_violation",
+            )
+        if response.get("operation_id") != op_id:
+            raise DaemonError(
+                f"operation_id mismatch: sent {op_id!r}, "
+                f"got {response.get('operation_id')!r}",
+                code="protocol_violation",
+            )
+        sig_b64 = str(response.get("signature_b64") or "")
+        padded = sig_b64 + "=" * (-len(sig_b64) % 4)
+        return base64.urlsafe_b64decode(padded)
+
+    def fetch(
+        self,
+        uri: str,
+        method: str,
+        path: str = "/",
+        *,
+        body: Optional[Union[Dict[str, Any], str, bytes]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> OutboundResponse:
+        if "outbound_call" not in self._daemon_capabilities:
+            raise DaemonError(
+                "daemon did not advertise outbound_call capability",
+                code="capability_not_claimed",
+            )
+        op_id = f"op-{uuid.uuid4().hex[:12]}"
+        # Encode body for the wire: pass dicts/lists through, otherwise
+        # the daemon-side handler will JSON-encode strings/None.
+        wire_body: Any = body
+        if isinstance(body, bytes):
+            wire_body = body.decode("utf-8", errors="replace")
+        write_frame(self._owner._writer, {
+            "type": "outbound_request",
+            "operation_id": op_id,
+            "uri": uri,
+            "method": method.upper(),
+            "path": path,
+            "headers": dict(headers or {}),
+            "body": wire_body,
+        })
+        response = read_frame(self._owner._reader)
+        rtype = response.get("type")
+        if rtype == "outbound_error":
+            raise DaemonError(
+                str(response.get("message") or "outbound call failed"),
+                code=str(response.get("code") or "outbound_failure"),
+            )
+        if rtype != "outbound_response":
+            raise DaemonError(
+                f"unexpected frame from daemon: type={rtype!r}",
+                code="protocol_violation",
+            )
+        if response.get("operation_id") != op_id:
+            raise DaemonError(
+                f"operation_id mismatch: sent {op_id!r}, "
+                f"got {response.get('operation_id')!r}",
+                code="protocol_violation",
+            )
+        return OutboundResponse(
+            status=int(response.get("status") or 0),
+            headers=dict(response.get("headers") or {}),
+            body=dict(response.get("body") or {}) if isinstance(
+                response.get("body"), dict,
+            ) else {"result": response.get("body")},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +213,11 @@ class GatewayClient:
         # bindings. A fresh client sends an empty cached hash.
         self.cached_manifest_hash = cached_manifest_hash
         self._cached_bindings: Dict[Tuple[str, str], Callable[..., Any]] = {}
+        # Phase C: capabilities the daemon advertised in `welcome`.
+        # Used to populate the PythonDaemonClient handed to handlers
+        # so they can check whether sign / fetch are supported before
+        # calling.
+        self._daemon_capabilities: List[str] = []
 
     # ----- Lifecycle -----
 
@@ -153,7 +290,15 @@ class GatewayClient:
                 ),
                 "pid": os.getpid(),
             },
-            "capabilities": ["registered_function"],
+            # Phase C: mod_python claims sign_request and outbound_call.
+            # The daemon's welcome will echo back only what it
+            # advertises; PythonDaemonClient checks the intersection
+            # before each call.
+            "capabilities": [
+                "registered_function",
+                "sign_request",
+                "outbound_call",
+            ],
         }
         if self.cached_manifest_hash:
             hello_frame["cached_manifest_hash"] = self.cached_manifest_hash
@@ -176,6 +321,9 @@ class GatewayClient:
                 f"daemon chose gateway version {chosen!r}; "
                 f"this module speaks {GATEWAY_VERSION!r}"
             )
+        # Capture daemon-advertised capabilities for the
+        # PythonDaemonClient handed to each handler. Phase C.
+        self._daemon_capabilities = list(welcome.get("capabilities") or [])
 
         # 3. Read register or register_resume.
         register = read_frame(self._reader)
@@ -313,6 +461,20 @@ class GatewayClient:
             })
             return
 
+        # Build a DaemonClient bound to this in-flight request. The
+        # handler may call ctx.daemon.sign(...) / ctx.daemon.fetch(...)
+        # during execution; those calls write module-initiated frames
+        # on the gateway connection that the daemon's read-loop services
+        # before reading our final response.
+        daemon = PythonDaemonClient(
+            owner=self,
+            daemon_capabilities=self._daemon_capabilities,
+        )
+        # Propagate trust info from the gateway request frame's
+        # `trust` block (Phase B). The daemon sets these when it
+        # verified an Agent Certificate; otherwise they default.
+        trust = frame.get("trust") or {}
+        cert_method = str(trust.get("method") or "")
         ctx = EndpointContext(
             input=dict(envelope.get("input") or {}),
             agent_id=str(envelope.get("agent_id") or ""),
@@ -325,6 +487,9 @@ class GatewayClient:
             method=method,
             path=path,
             headers=dict(envelope.get("headers") or {}),
+            agent_verified=cert_method == "agent_cert_mtls",
+            agent_cert_fingerprint=trust.get("agent_cert_fingerprint"),
+            daemon=daemon,
         )
 
         try:

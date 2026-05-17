@@ -33,6 +33,24 @@ enforcement.
 
 ## [Unreleased]
 
+### GatewayHandshake v1.1.0 — Phase C optional capabilities
+
+Additive: six new frame types added to the `oneOf` set, none of
+them mandatory. Modules and daemons that don't negotiate the
+corresponding capability never emit these frames.
+
+- `sign_request`, `sign_response`, `sign_error` — module asks the
+  daemon to Ed25519-sign opaque bytes. Capability:
+  `sign_request`. Requires the daemon to have a loaded
+  `SigningService`.
+- `outbound_request`, `outbound_response`, `outbound_error` —
+  module asks the daemon to make an outbound AGTP call.
+  Capability: `outbound_call`.
+
+Modules negotiate via `hello.capabilities`; daemons confirm via
+`welcome.capabilities`. The frame types are valid only between
+the two sides that mutually advertised them.
+
 ### EndpointContext v1.1.0 — Agent-Cert / mTLS trust signals
 
 Additive minor bump. Two new optional fields:

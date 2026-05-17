@@ -19,6 +19,28 @@ documentation.
 
 ## [Unreleased]
 
+### Added — Phase C: DaemonClient (sign_request + outbound_call)
+
+- `agtp.DaemonClient` protocol — handler-side view of the daemon's
+  gateway capabilities. Implementations expose `sign(bytes) -> bytes`
+  and `fetch(uri, method, ...) -> OutboundResponse`. Runtime modules
+  set `EndpointContext.daemon` to an implementation; in-daemon
+  dispatch leaves it `None`.
+- `agtp.OutboundResponse` dataclass — `status`, `headers`, `body`.
+- `agtp.DaemonError` exception with `code` attribute — raised when
+  the daemon refuses the request (`capability_not_claimed`,
+  `signing_unavailable`, `upstream_unreachable`, etc.). Handlers
+  catch and translate to declared `EndpointError`s.
+- `EndpointContext.daemon: Optional[Any]` field — the
+  DaemonClient instance (typed as `Any` to avoid a circular import;
+  `runtime_checkable` protocol in `agtp.handlers`).
+
+Handlers running under `mod_python` can now call
+`ctx.daemon.sign(b"data")` to request an Ed25519 signature from
+the daemon (key stays in the daemon) or `ctx.daemon.fetch("agtp://...")`
+to make an outbound AGTP call via the daemon's connection pool.
+Other runtime modules pick up the same surface when they're updated.
+
 ### Added — Phase B: Agent-Cert / mTLS trust signals
 
 - `EndpointContext.agent_verified: bool` — true when the daemon

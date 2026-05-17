@@ -30,7 +30,7 @@ handler stays inside.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Protocol, Union, runtime_checkable
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +121,15 @@ class EndpointContext:
     # DER bytes, hex-encoded; null when not verified via cert.
     agent_verified: bool = False
     agent_cert_fingerprint: Optional[str] = None
+    # Phase C: handler-side access to the daemon's gateway capabilities.
+    # When running inside a runtime module that negotiated the
+    # ``sign_request`` and/or ``outbound_call`` capabilities, this
+    # field holds a :class:`DaemonClient` implementation. Handlers
+    # call ``ctx.daemon.sign(bytes)`` and ``ctx.daemon.fetch(...)`` to
+    # ask the daemon to sign or proxy on their behalf. ``None`` for
+    # in-daemon dispatch (no module involved) and for runtime modules
+    # that didn't claim the capability.
+    daemon: Optional[Any] = None  # DaemonClient implementation
 
 
 # ---------------------------------------------------------------------------
@@ -199,9 +208,91 @@ class EndpointError:
 HandlerResult = Union[EndpointResponse, EndpointError]
 
 
+# ---------------------------------------------------------------------------
+# DaemonClient — Phase C gateway capabilities exposed to handlers.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class OutboundResponse:
+    """Response from a daemon-mediated outbound AGTP call.
+
+    Returned by :meth:`DaemonClient.fetch` when the upstream answers
+    with a 2xx. Upstream errors are raised as exceptions; handlers
+    catch them or let them propagate as ``handler_exception``.
+    """
+
+    status: int
+    headers: Dict[str, str]
+    body: Dict[str, Any]
+
+
+class DaemonError(Exception):
+    """Raised by :class:`DaemonClient` methods on protocol or upstream failure.
+
+    The ``code`` attribute carries one of the structured codes from
+    the gateway spec's ``sign_error`` / ``outbound_error`` frames
+    (e.g. ``signing_unavailable``, ``upstream_unreachable``,
+    ``upstream_malformed``).
+    """
+
+    def __init__(self, message: str, *, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@runtime_checkable
+class DaemonClient(Protocol):
+    """Handler-side view of the daemon's gateway-protocol capabilities.
+
+    When a handler runs inside a runtime module (``mod_python``,
+    ``mod_php``, …), the module sets ``EndpointContext.daemon`` to
+    an instance implementing this protocol. Handlers use it to
+    request Ed25519 signatures and outbound AGTP calls from the
+    daemon, without managing keys, TLS state, or upstream
+    connection pools themselves.
+
+    The protocol is intentionally minimal. Methods may raise
+    :class:`DaemonError` when the daemon refuses a request (capability
+    not advertised, signing key not loaded, upstream unreachable).
+
+    Each method consumes a corresponding gateway capability:
+
+      * :meth:`sign` consumes the ``sign_request`` capability
+      * :meth:`fetch` consumes the ``outbound_call`` capability
+
+    Modules that don't claim the capability in their ``hello`` MUST
+    pass a DaemonClient implementation that raises ``DaemonError``
+    with code ``capability_not_claimed`` rather than silently failing.
+    """
+
+    def sign(self, data: bytes) -> bytes:
+        """Ask the daemon to Ed25519-sign ``data``. Returns the 64-byte
+        signature. Raises :class:`DaemonError` when signing is
+        unavailable."""
+        ...
+
+    def fetch(
+        self,
+        uri: str,
+        method: str,
+        path: str = "/",
+        *,
+        body: Optional[Union[Dict[str, Any], str, bytes]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> OutboundResponse:
+        """Ask the daemon to make an outbound AGTP request. Returns
+        the upstream response. Raises :class:`DaemonError` on upstream
+        failure or malformed response."""
+        ...
+
+
 __all__ = [
+    "DaemonClient",
+    "DaemonError",
     "EndpointContext",
     "EndpointError",
     "EndpointResponse",
     "HandlerResult",
+    "OutboundResponse",
 ]

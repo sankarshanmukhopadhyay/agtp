@@ -161,6 +161,14 @@ class GatewayServer:
         self._module: Optional[_ModuleConnection] = None
         self._module_lock = threading.Lock()
         self._module_ready = threading.Event()
+        # Phase C capabilities. ``server.main.run()`` attaches the
+        # signing service after the daemon loads its key. The AGTP
+        # client is imported lazily in the outbound handler so
+        # daemons without ``client.core_client`` available
+        # (stripped test fixtures) gracefully refuse outbound
+        # requests instead of failing at boot.
+        self.signing_service: Optional[Any] = None
+        self.outbound_enabled: bool = True
 
     # ----- Endpoint registration (pre-start) -----
 
@@ -288,7 +296,7 @@ class GatewayServer:
         try:
             with mod.lock:
                 write_frame(mod.writer, frame)
-                response_frame = read_frame(mod.reader)
+                response_frame = self._read_until_response(mod, request_id)
         except (FrameDecodeError, FrameTooLargeError, OSError, GatewayError) as exc:
             # Connection-level failure. Drop the module and surface a 503.
             self._drop_module(mod)
@@ -299,6 +307,169 @@ class GatewayServer:
             )
 
         return self._decode_response_frame(response_frame, request_id)
+
+    def _read_until_response(
+        self, mod: _ModuleConnection, request_id: str,
+    ) -> Dict[str, Any]:
+        """Read frames in a loop, servicing module-initiated requests
+        (sign_request, outbound_request) until the final `response`
+        (or matching `error`) arrives. Phase C bidirectional read-loop.
+        """
+        while True:
+            next_frame = read_frame(mod.reader)
+            ftype = next_frame.get("type")
+            if ftype == "response":
+                return next_frame
+            if ftype == "error" and next_frame.get("request_id") == request_id:
+                # Module reported an error against the request itself.
+                return next_frame
+            if ftype == "sign_request":
+                self._handle_sign_request(mod, next_frame)
+                continue
+            if ftype == "outbound_request":
+                self._handle_outbound_request(mod, next_frame)
+                continue
+            # Unexpected frame type — surface as a protocol error.
+            write_frame(mod.writer, {
+                "type": "error",
+                "code": "phase_violation",
+                "message": f"unexpected frame type {ftype!r} during dispatch",
+            })
+            return {
+                "type": "error",
+                "request_id": request_id,
+                "code": "handler_exception",
+                "message": f"module sent unexpected frame type {ftype!r}",
+            }
+
+    def _handle_sign_request(
+        self, mod: _ModuleConnection, frame: Dict[str, Any],
+    ) -> None:
+        """Service a module's sign_request frame. Signs the supplied
+        bytes with the daemon's SigningService and replies."""
+        import base64 as _base64
+
+        op_id = str(frame.get("operation_id") or "")
+        if self.signing_service is None:
+            write_frame(mod.writer, {
+                "type": "sign_error",
+                "operation_id": op_id,
+                "code": "signing_unavailable",
+                "message": (
+                    "daemon has no signing service configured; "
+                    "set [signing].enabled in agtp-server.toml"
+                ),
+            })
+            return
+        data_b64 = str(frame.get("data_b64") or "")
+        try:
+            padded = data_b64 + "=" * (-len(data_b64) % 4)
+            data = _base64.urlsafe_b64decode(padded)
+        except (ValueError, TypeError) as exc:
+            write_frame(mod.writer, {
+                "type": "sign_error",
+                "operation_id": op_id,
+                "code": "sign_failure",
+                "message": f"could not decode data_b64: {exc}",
+            })
+            return
+        try:
+            signature = self.signing_service.sign(data)
+        except Exception as exc:  # noqa: BLE001
+            write_frame(mod.writer, {
+                "type": "sign_error",
+                "operation_id": op_id,
+                "code": "sign_failure",
+                "message": f"{type(exc).__name__}: {exc}",
+            })
+            return
+        write_frame(mod.writer, {
+            "type": "sign_response",
+            "operation_id": op_id,
+            "kid": self.signing_service.key_id,
+            "alg": "Ed25519",
+            "signature_b64": _base64.urlsafe_b64encode(signature)
+                .rstrip(b"=").decode("ascii"),
+        })
+
+    def _handle_outbound_request(
+        self, mod: _ModuleConnection, frame: Dict[str, Any],
+    ) -> None:
+        """Service a module's outbound_request frame. Issues the
+        outbound AGTP call via ``client.core_client`` and replies."""
+        import json as _json
+
+        op_id = str(frame.get("operation_id") or "")
+        uri = str(frame.get("uri") or "")
+        method = str(frame.get("method") or "QUERY").upper()
+        path = str(frame.get("path") or "/")
+        headers = dict(frame.get("headers") or {})
+        body = frame.get("body")
+        if not uri:
+            write_frame(mod.writer, {
+                "type": "outbound_error",
+                "operation_id": op_id,
+                "code": "outbound_failure",
+                "message": "outbound_request requires a non-empty uri",
+            })
+            return
+        try:
+            from client.core_client import fetch as _fetch
+        except ImportError as exc:
+            write_frame(mod.writer, {
+                "type": "outbound_error",
+                "operation_id": op_id,
+                "code": "outbound_failure",
+                "message": f"AGTP client unavailable: {exc}",
+            })
+            return
+        body_bytes = (
+            _json.dumps(body).encode("utf-8")
+            if isinstance(body, (dict, list))
+            else (body.encode("utf-8") if isinstance(body, str) else b"")
+        )
+        try:
+            result = _fetch(
+                uri, method=method, path=path,
+                headers=headers, body=body_bytes,
+            )
+        except Exception as exc:  # noqa: BLE001
+            write_frame(mod.writer, {
+                "type": "outbound_error",
+                "operation_id": op_id,
+                "code": "upstream_unreachable",
+                "message": f"upstream call failed: {exc}",
+            })
+            return
+        status = getattr(result, "status_code", None) or getattr(result, "status", 0) or 0
+        upstream_body_bytes = (
+            getattr(result, "body_bytes", None)
+            or getattr(result, "body", b"")
+            or b""
+        )
+        if isinstance(upstream_body_bytes, str):
+            upstream_body_bytes = upstream_body_bytes.encode("utf-8")
+        parsed_body: Any = None
+        if upstream_body_bytes:
+            try:
+                parsed_body = _json.loads(upstream_body_bytes.decode("utf-8"))
+            except (UnicodeDecodeError, _json.JSONDecodeError):
+                write_frame(mod.writer, {
+                    "type": "outbound_error",
+                    "operation_id": op_id,
+                    "code": "upstream_malformed",
+                    "message": "upstream returned non-JSON body",
+                    "details": {"status": status, "uri": uri},
+                })
+                return
+        upstream_headers = dict(getattr(result, "headers", {}) or {})
+        write_frame(mod.writer, {
+            "type": "outbound_response",
+            "operation_id": op_id,
+            "status": int(status) if status else 0,
+            "headers": upstream_headers,
+            "body": parsed_body,
+        })
 
     # ----- Internals -----
 
@@ -425,6 +596,16 @@ class GatewayServer:
         cached_hash = str(hello.get("cached_manifest_hash") or "")
 
         # 2. Send welcome.
+        # Build the daemon's capability list. Always-on:
+        # registered_function. sign_request lights up when the daemon
+        # has a signing service loaded; outbound_call lights up unless
+        # the operator explicitly disabled it. Modules that don't
+        # claim a capability in `hello` won't have its frames serviced.
+        daemon_caps = ["registered_function"]
+        if self.signing_service is not None:
+            daemon_caps.append("sign_request")
+        if self.outbound_enabled:
+            daemon_caps.append("outbound_call")
         welcome: Dict[str, Any] = {
             "type": "welcome",
             "gateway_version": GATEWAY_VERSION,
@@ -432,7 +613,7 @@ class GatewayServer:
                 "version": self.daemon_version or "agtpd",
                 "server_id": self.server_id or "",
             },
-            "capabilities": ["registered_function"],
+            "capabilities": daemon_caps,
         }
         if self.catalog_version:
             welcome["daemon"]["catalog_version"] = self.catalog_version

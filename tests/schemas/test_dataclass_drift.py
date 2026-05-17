@@ -137,9 +137,10 @@ def test_endpoint_context_alignment() -> None:
     problems = _check_alignment(
         EndpointContext,
         schema,
-        # server_state is the daemon's runtime handle — never serialized,
-        # not part of the wire contract.
-        ignore_dataclass_fields={"server_state"},
+        # Runtime-only handles — never serialized, not on the wire:
+        #   server_state — daemon-side runtime state for advanced handlers
+        #   daemon       — Phase C DaemonClient for sign/fetch RPC
+        ignore_dataclass_fields={"server_state", "daemon"},
     )
     assert not problems, "\n".join(problems)
 
