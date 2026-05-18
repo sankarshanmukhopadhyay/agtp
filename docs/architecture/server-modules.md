@@ -224,7 +224,7 @@ The function call inside `dispatch()` that today invokes a handler in-process be
    [`../../core/schemas/`](../../core/schemas/) with drift-detection
    tests in `tests/schemas/`.
 3. **mod_python.** ✅ Landed as the
-   [`mod_python/`](../../mod_python/) package. Connects to `agtpd`
+   [`mod_python/`](../../runtimes/mod_python/) package. Connects to `agtpd`
    over the gateway socket and serves `@endpoint`-decorated Python
    handlers. End-to-end coverage in `tests/test_gateway_e2e.py` and
    `tests/test_gateway_resume.py`.
@@ -233,70 +233,74 @@ The function call inside `dispatch()` that today invokes a handler in-process be
    `EndpointResponse`, `EndpointError`, `@endpoint`,
    `HandlerRegistry`, `agtp.testing`. Versioned via
    [`../../agtp/CHANGELOG.md`](../../agtp/CHANGELOG.md).
-5. **mod_php and agtp-php.** ✅ Landed under
-   [`../../agtp-php/`](../../agtp-php/) and
-   [`../../mod_php/`](../../mod_php/). The handler-author API
-   (`Agtp\EndpointContext`, `Agtp\EndpointResponse`,
-   `Agtp\EndpointError`, `#[AgtpEndpoint]`,
-   `Agtp\HandlerRegistry`, `Agtp\Testing`) mirrors the Python
-   library. The runtime module (`mod_php`) ports
+5. **mod_php and agtp-php.** ✅ Extracted to the external
+   [`agtp-php`](https://github.com/nomoticai/agtp-php) repo
+   (`agtp/agtp-php` + `agtp/mod-php` on Packagist). The
+   handler-author API (`Agtp\EndpointContext`,
+   `Agtp\EndpointResponse`, `Agtp\EndpointError`,
+   `#[AgtpEndpoint]`, `Agtp\HandlerRegistry`, `Agtp\Testing`)
+   mirrors the Python library. The runtime module (`mod_php`) ports
    `mod_python.client.GatewayClient` value-for-value; end-to-end
-   coverage in `tests/test_gateway_e2e_php.py` (skipped when PHP
-   is not on PATH). PHPUnit unit tests under `agtp-php/tests/`.
-   PHP 8.1+ minimum (matches Drupal 10's floor).
-6. **agtp-drupal.** ✅ Landed under
-   [`../../agtp_drupal/`](../../agtp_drupal/). Drupal 10.2+ / 11
-   module that adopts handler discovery into the Drupal service
+   coverage in `tests/test_gateway_e2e_php.py` (skipped when PHP is
+   not on PATH or `$AGTP_MOD_PHP_DIR`/`../agtp-php/mod_php/` is
+   absent). PHP 8.1+ minimum (matches Drupal 10's floor).
+6. **agtp-drupal.** ✅ Extracted to the external
+   [`agtp-drupal`](https://github.com/nomoticai/agtp-drupal) repo
+   (`agtp/agtp-drupal` on Packagist). Drupal 10.2+ / 11 module
+   that adopts handler discovery into the Drupal service
    container: site builders tag handler services with
    `agtp.endpoint`, and `AgtpHandlerCollector` populates the
    agtp-php registry at boot. Runtime entry point is the drush
    command `agtp:serve --gateway-socket=...`. Handlers stay
-   testable as plain functions via `\Agtp\Testing`. See
-   [`../../agtp_drupal/INSTALL.md`](../../agtp_drupal/INSTALL.md)
-   for the smallest-possible installation walkthrough.
-   Pairing PHP framework integrations landed in **M8**:
-   - **WordPress**: [`../../agtp-wordpress/`](../../agtp-wordpress/).
-     Plugin with `agtp_register_handlers` filter and `agtp_init`
-     action for discovery; `wp agtp serve` WP-CLI command.
-   - **Symfony**: [`../../agtp-symfony/`](../../agtp-symfony/). Bundle
-     with `agtp.endpoint` tagged services collected via a compiler
+   testable as plain functions via `\Agtp\Testing`.
+   Pairing PHP framework integrations also ship as standalone
+   repos so that each framework's user base only pulls what they
+   need:
+   - **WordPress**: [`agtp-wordpress`](https://github.com/nomoticai/agtp-wordpress)
+     (`agtp/agtp-wordpress` on Packagist). Plugin with
+     `agtp_register_handlers` filter and `agtp_init` action for
+     discovery; `wp agtp serve` WP-CLI command.
+   - **Symfony**: [`agtp-symfony`](https://github.com/nomoticai/agtp-symfony)
+     (`agtp/agtp-symfony` on Packagist). Bundle with
+     `agtp.endpoint` tagged services collected via a compiler
      pass; `bin/console agtp:serve` Console command.
-   - **Laravel**: [`../../agtp-laravel/`](../../agtp-laravel/).
-     Auto-discovered service provider; container `tag()` for
-     discovery; `php artisan agtp:serve` Artisan command.
+   - **Laravel**: [`agtp-laravel`](https://github.com/nomoticai/agtp-laravel)
+     (`agtp/agtp-laravel` on Packagist). Auto-discovered service
+     provider; container `tag()` for discovery; `php artisan
+     agtp:serve` Artisan command.
 7. **agentic-drupal.** Independent of AGTP transport. The
    semantic-verb reference connector over Drupal's REST surface.
    Useful on its own; coordinates with agtp-drupal when both are
    installed.
 8. **Subsequent modules.** ✅ mod_go, mod_node, mod_rust all landed.
-   - **Go**: [`../../agtp-go/`](../../agtp-go/) +
-     [`../../mod_go/`](../../mod_go/). Sync `net.Dial` transport;
+   - **Go**: [`../../agtp-go/`](../../sdk/agtp-go/) +
+     [`../../mod_go/`](../../runtimes/mod_go/). Sync `net.Dial` transport;
      `agtp.HandlerFunc` returns `(HandlerResult, error)` with a
      sum-type interface for response/error. Tested by
      `tests/test_gateway_e2e_go.py` against a real `go run` subprocess.
-   - **Node.js / TypeScript**: [`../../agtp-node/`](../../agtp-node/) +
-     [`../../mod_node/`](../../mod_node/). Async-first
+   - **Node.js / TypeScript**: [`../../agtp-node/`](../../sdk/agtp-node/) +
+     [`../../mod_node/`](../../runtimes/mod_node/). Async-first
      (`HandlerFn` returns `HandlerResult | Promise<HandlerResult>`);
      `node:net` transport with `pause()`/`readable` event-driven reads.
      Tested by `tests/test_gateway_e2e_node.py` against a real Node
      subprocess.
-   - **Rust**: [`../../agtp-rust/`](../../agtp-rust/) +
-     [`../../mod_rust/`](../../mod_rust/). Sync `std::net::TcpStream`
+   - **Rust**: [`../../agtp-rust/`](../../sdk/agtp-rust/) +
+     [`../../mod_rust/`](../../runtimes/mod_rust/). Sync `std::net::TcpStream`
      transport; `HandlerFn = fn(&EndpointContext) -> Result<HandlerOutcome, String>`.
      Tested by `tests/test_gateway_e2e_rust.py` against a `cargo build`-ed
      binary.
 9. **Operational modules.** ✅ All three landed in M9.
-   - **mod_cache** ([`../../mod_cache/`](../../mod_cache/)) — response
+   - **mod_cache** ([`../../mod_cache/`](../../operational/mod_cache/)) — response
      caching for endpoints whose semantic block declares
      `impact == "informational"` (or `reversible + is_idempotent`).
      In-memory LRU + TTL backend; multi-process / Redis backend
      deferred. Integrates via the new `DispatchHook` surface in
      [`../../server/hooks.py`](../../server/hooks.py).
-   - **mod_audit** ([`../../mod_audit/`](../../mod_audit/)) — append-only
+   - **mod_audit** ([`../../mod_audit/`](../../operational/mod_audit/)) — append-only
      JSONL log of every dispatch (timestamp, method, path, agent,
      outcome). Same field set the AGTP-LOG draft's signed receipts
      will carry; signing waits for Ed25519 in the daemon.
-   - **mod_proxy** ([`../../mod_proxy/`](../../mod_proxy/)) — new
+   - **mod_proxy** ([`../../mod_proxy/`](../../operational/mod_proxy/)) — new
      `proxy` handler-binding type that forwards AGTP requests to
      an upstream `agtpd`. Parallels the existing HTTP
      `external_service` binding. Preserves `Agent-ID`,

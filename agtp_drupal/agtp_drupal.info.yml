@@ -1,6 +1,0 @@
-name: AGTP for Drupal
-description: 'Serve AGTP traffic from your Drupal site. Sites register handler services tagged with `agtp.endpoint`; the AgtpHandlerCollector populates the agtp-php HandlerRegistry; the `drush agtp:serve` command runs the gateway client against an agtpd instance.'
-type: module
-package: AGTP
-core_version_requirement: ^10.2 || ^11
-configure: agtp_drupal.settings

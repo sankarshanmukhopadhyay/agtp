@@ -58,7 +58,15 @@ elemen              = "client.elemen.app:main"
 yaml = ["pyyaml>=6"]
 
 [tool.setuptools.packages.find]
-where = ["."]
+# The repo layout (see NAMING.md) puts Python packages under three
+# different roots: the project root for the canonical names that
+# can't move (agtp/, core/, server/, client/, ...), runtimes/ for
+# language bridges (mod_python/), and operational/ for daemon
+# plugins (mod_audit/, mod_cache/, mod_proxy/). setuptools finds
+# packages under each root, registering them as top-level Python
+# names so existing `import mod_python` / `import mod_audit` calls
+# keep working.
+where = [".", "runtimes", "operational"]
 include = [
   "core*", "server*", "client*", "registry*",
   "agtp", "agtp.*",  # only the Python `agtp` package, not agtp-php / agtp-go / agtp-rust / agtp-node
@@ -67,12 +75,11 @@ include = [
 ]
 # Non-Python language packages never carry __init__.py so setuptools
 # skips them automatically, but list them explicitly so build output
-# stays quiet.
+# stays quiet. (Paths are relative to each `where` root, so we
+# don't need to prefix them with `sdk/` or `connectors/`.)
 exclude = [
-  "tests*", "elemen*", "ietf*", "docs*", "scripts*", "agtp-mcp*",
-  "agtp-php*", "mod_php*", "agtp_drupal*",
+  "tests*", "elemen*", "ietf*", "docs*", "scripts*",
   "agtp-go*", "mod_go*",
   "agtp-node*", "mod_node*",
   "agtp-rust*", "mod_rust*",
-  "agtp-wordpress*", "agtp-symfony*", "agtp-laravel*",
 ]

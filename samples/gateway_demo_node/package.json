@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./demo.js",
   "dependencies": {
-    "@agtp/agtp-node": "file:../../agtp-node",
-    "@agtp/mod-node": "file:../../mod_node"
+    "@agtp/agtp-node": "file:../../sdk/agtp-node",
+    "@agtp/mod-node": "file:../../runtimes/mod_node"
   }
 }

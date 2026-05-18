@@ -1,21 +1,29 @@
 """
 End-to-end PHP gateway test.
 
-Spawns ``php mod_php/bin/run.php`` as a subprocess, points it at a
-real ``GatewayServer`` on a TCP loopback socket, then exercises the
-round-trip with the sample PHP handlers from
+Spawns ``php <mod_php>/bin/run.php`` as a subprocess, points it at
+a real ``GatewayServer`` on a TCP loopback socket, then exercises
+the round-trip with the sample PHP handlers from
 ``samples/gateway_demo.php``.
 
-The whole test is skipped when ``php`` is not on PATH or when the
-``mod_php`` composer dependencies haven't been installed
-(``mod_php/vendor/`` is absent). CI runners with PHP 8.1+ and
-Composer pre-installed get full coverage; runners without don't fail
-the build.
+The ``mod_php`` runtime lives in the external ``agtp-php`` repo
+(https://github.com/nomoticai/agtp-php). The test discovers it via:
+
+  1. ``$AGTP_MOD_PHP_DIR`` — explicit path to ``mod_php/`` directory.
+  2. ``../agtp-php/mod_php/`` — sibling-checkout convention.
+
+The whole test is skipped when ``php`` is not on PATH, when neither
+location resolves to a ``bin/run.php`` file, or when Composer
+dependencies haven't been installed (``mod_php/vendor/`` is absent).
+CI runners with PHP 8.1+, the agtp-php sibling checkout, and
+Composer pre-installed get full coverage; runners without don't
+fail the build.
 
 Operators replicating this manually:
 
-    composer install --working-dir=agtp-php
-    composer install --working-dir=mod_php
+    git clone https://github.com/nomoticai/agtp-php ../agtp-php
+    composer install --working-dir=../agtp-php/agtp-php
+    composer install --working-dir=../agtp-php/mod_php
     python -m pytest tests/test_gateway_e2e_php.py -v
 """
 
@@ -43,10 +51,24 @@ from server.schema_validation import (
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MOD_PHP_DIR = REPO_ROOT / "mod_php"
-MOD_PHP_RUN = MOD_PHP_DIR / "bin" / "run.php"
-MOD_PHP_VENDOR = MOD_PHP_DIR / "vendor"
 SAMPLE_BOOTSTRAP = REPO_ROOT / "samples" / "gateway_demo.php"
+
+
+def _resolve_mod_php_dir() -> Optional[Path]:
+    env = os.environ.get("AGTP_MOD_PHP_DIR")
+    if env:
+        candidate = Path(env)
+        if (candidate / "bin" / "run.php").exists():
+            return candidate
+    sibling = REPO_ROOT.parent / "agtp-php" / "mod_php"
+    if (sibling / "bin" / "run.php").exists():
+        return sibling
+    return None
+
+
+MOD_PHP_DIR = _resolve_mod_php_dir()
+MOD_PHP_RUN = MOD_PHP_DIR / "bin" / "run.php" if MOD_PHP_DIR else None
+MOD_PHP_VENDOR = MOD_PHP_DIR / "vendor" if MOD_PHP_DIR else None
 
 
 def _php_available() -> bool:
@@ -55,20 +77,25 @@ def _php_available() -> bool:
 
 def _composer_installed() -> bool:
     """True when mod_php has its Composer dependencies in place."""
-    return (MOD_PHP_VENDOR / "autoload.php").exists()
+    return MOD_PHP_VENDOR is not None and (MOD_PHP_VENDOR / "autoload.php").exists()
 
 
-# Whole module is skipped when PHP isn't around. Operators with PHP
-# installed but no composer install can run `composer install --working-dir
-# =mod_php` once and the tests start passing.
+# Whole module is skipped when PHP isn't around or when the external
+# agtp-php checkout isn't available. The mod_php runtime lives in
+# https://github.com/nomoticai/agtp-php — clone it as a sibling
+# (../agtp-php/) or set AGTP_MOD_PHP_DIR explicitly.
 pytestmark = [
     pytest.mark.skipif(
         not _php_available(),
         reason="php interpreter not on PATH; mod_php cannot be exercised",
     ),
     pytest.mark.skipif(
+        MOD_PHP_DIR is None,
+        reason="mod_php not found; set AGTP_MOD_PHP_DIR or clone agtp-php as ../agtp-php",
+    ),
+    pytest.mark.skipif(
         not _composer_installed(),
-        reason="mod_php/vendor/autoload.php missing; run `composer install --working-dir=mod_php`",
+        reason="mod_php/vendor/autoload.php missing; run `composer install` in mod_php/",
     ),
 ]
 

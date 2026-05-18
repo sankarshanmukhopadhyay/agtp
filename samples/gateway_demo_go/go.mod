@@ -7,5 +7,5 @@ require (
 	agtp.io/mod-go v0.0.0
 )
 
-replace agtp.io/agtp-go => ../../agtp-go
-replace agtp.io/mod-go => ../../mod_go
+replace agtp.io/agtp-go => ../../sdk/agtp-go
+replace agtp.io/mod-go => ../../runtimes/mod_go

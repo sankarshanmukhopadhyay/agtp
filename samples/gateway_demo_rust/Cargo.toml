@@ -5,8 +5,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
-agtp = { path = "../../agtp-rust" }
-mod_rust = { path = "../../mod_rust" }
+agtp = { path = "../../sdk/agtp-rust" }
+mod_rust = { path = "../../runtimes/mod_rust" }
 serde_json = "1.0"
 
 [[bin]]

@@ -63,14 +63,46 @@ agtp/
 ├── registry/             AGTP registry product
 │   └── main.py             python -m registry  /  agtp-registry
 │
-├── agtp-mcp/             MCP-on-AGTP bridge product (in development)
+├── agtp/                 Python handler SDK (import name = `agtp`)
+│
+├── sdk/                  Handler libraries — one per language
+│   ├── agtp-go/            Go library + tests
+│   ├── agtp-node/          npm package (TypeScript)
+│   └── agtp-rust/          Cargo crate
+│   (PHP SDK lives in the external agtp-php repo — see NAMING.md)
+│
+├── runtimes/             Gateway-protocol clients — bridge agtpd to a language
+│   ├── mod_go/             Go binary
+│   ├── mod_node/           Node CLI
+│   ├── mod_python/         python -m mod_python
+│   └── mod_rust/           Rust binary
+│   (PHP runtime lives in the external agtp-php repo)
+│
+├── operational/          Daemon-side plugins — load via --load-module
+│   ├── mod_audit/          Append-only JSONL audit log (Ed25519-signed)
+│   ├── mod_cache/          Response cache (LRU + TTL)
+│   └── mod_proxy/          Forward AGTP requests to upstream agtpd
+│
+├── connectors/           Framework + cross-protocol bridges (in-tree)
+│   └── agtp-a2a/           A2A-on-AGTP bridge
+│   (Framework integrations — Drupal, Symfony, Laravel, WordPress —
+│    and the MCP bridge live in their own external repos. See
+│    "External repos" in NAMING.md.)
+│
 ├── ietf/                 IETF Internet-Draft sources
 ├── docs/                 deployment + cross-platform notes
-├── scripts/              VPS deploy automation
 ├── tests/                cross-product test suite
+├── samples/              reference handler programs for each runtime
+├── tools/                catalog diff, openapi import, keygen, agent-cert gen
+├── NAMING.md             which prefix / underscore / hyphen and why
 ├── pyproject.toml        installable: `pip install -e .`
 └── README.md
 ```
+
+See [`NAMING.md`](NAMING.md) for the naming conventions across all
+these directories — why some are forced (Drupal modules require
+underscores; Python imports require valid identifiers) and which
+packages live in their own external repos.
 
 ## Client products
 

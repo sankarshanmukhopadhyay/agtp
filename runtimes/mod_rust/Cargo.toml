@@ -1,0 +1,21 @@
+[package]
+name = "mod_rust"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rust runtime module for AGTP."
+homepage = "https://agtp.io"
+rust-version = "1.70"
+
+[dependencies]
+agtp = { path = "../../sdk/agtp-rust", version = "0.1" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[lib]
+name = "mod_rust"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mod_rust"
+path = "src/bin/mod_rust.rs"
