@@ -3,11 +3,20 @@
 A dedicated application-layer protocol for AI agent traffic.
 Specification, Internet-Draft, and reference implementation.
 
-- **IETF submission:** `draft-hood-independent-agtp-06`
+- **IETF submission:** `draft-hood-independent-agtp-07`
 - **IANA-registered ports:** 4480/TCP (`agtp`) and 4480/UDP (`agtp-quic`)
 - **Reference implementation:** `core/`, `server/`, `client/`, `registry/` (this repository)
 - **First registered agent:** Lauren —
   `agtp://d8dc6f0df55d66c7b30100db3cffbe383c5f814e6e58a08521fb7636c3bcc230`
+
+
+## AGTP Repos
+
+- **AGTP MCP:** `https://github.com/nomoticai/agtp-mcp`
+- **AGTP PHP:** `https://github.com/nomoticai/agtp-php`
+- **AGTP SYMFONY:** `https://github.com/nomoticai/agtp-symfony`
+- **AGTP DRUPAL:** `https://github.com/nomoticai/agtp-drupal`
+- **AGTP WORDPRESS:** `https://github.com/nomoticai/agtp-wordpress`
 
 ## Repository layout
 
