@@ -79,6 +79,12 @@
       "type": ["string", "null"],
       "description": "SHA-256 of the verified Agent Certificate DER, hex-encoded. Null when identity was established via Agent-ID header without mTLS. (Added v1.1.0.)",
       "default": null
+    },
+    "agent_cert_extensions": {
+      "type": "object",
+      "description": "Parsed AGTP X.509 v3 extensions from the verified Agent Certificate (draft-hood-agtp-agent-cert). Keys: subject_agent_id, principal_id, authority_scopes (list[str], sorted), governance_zone, trust_tier (int 1/2/3), archetype, activation_certificate_id. Empty dict when mTLS is off or the cert is transport-only. Read by mod_agent_cert for O(1) scope enforcement. (Added v1.2.0.)",
+      "additionalProperties": true,
+      "default": {}
     }
   }
 }

@@ -13,6 +13,13 @@ Two modes:
     agent cert with an operator-managed CA. The agent cert is then
     valid against any deployment that trusts the same CA.
 
+The CLI also writes the AGTP X.509 v3 extensions defined in
+``draft-hood-agtp-agent-cert-00`` when the matching flags are
+supplied. Without them the cert is a vanilla TLS cert (Phase 2
+shape) and the daemon treats it as transport-only identity. With
+them the cert becomes a full Agent Certificate and unlocks
+``mod_agent_cert``'s O(1) Scope-Enforcement at the daemon edge.
+
 Output:
 
   * ``<output>.key`` — private key (PEM, 0o600)
@@ -25,9 +32,18 @@ verification).
 
 Usage::
 
+    # Transport-only Agent Cert (Phase 2 shape):
     python -m tools.generate_agent_cert agents/lauren
+
+    # CA-signed Agent Cert with full extensions (Phase 3):
     python -m tools.generate_agent_cert agents/lauren \\
-        --ca-cert ca.crt --ca-key ca.key
+        --ca-cert ca.crt --ca-key ca.key \\
+        --principal-id chris@nomotic.ai \\
+        --authority-scope bookings:write --authority-scope ledger:read \\
+        --governance-zone zone:finance \\
+        --trust-tier 1 \\
+        --archetype analyst \\
+        --activation-certificate-id <agent-genesis-hash>
 """
 
 from __future__ import annotations
@@ -50,6 +66,18 @@ from cryptography.x509.oid import NameOID
 # Reuse the daemon's Agent-ID derivation so the CLI's printed value
 # matches what the verifier computes at runtime. Sharing the function
 # is what keeps the off-line and on-line views in lockstep.
+from server.agent_cert_ext import (
+    CertExtensionError,
+    add_activation_certificate_id,
+    add_archetype,
+    add_authority_scope_commitment,
+    add_governance_zone,
+    add_principal_id,
+    add_subject_agent_id,
+    add_trust_tier,
+    VALID_ARCHETYPES,
+    VALID_TRUST_TIERS,
+)
 from server.mtls import derive_agent_id_from_public_key
 
 
@@ -76,10 +104,28 @@ def _build_cert(
     common_name: str,
     valid_days: int,
     is_ca: bool = False,
+    organization: Optional[str] = None,
+    organizational_unit: Optional[str] = None,
+    email: Optional[str] = None,
+    subject_agent_id: Optional[str] = None,
+    principal_id: Optional[str] = None,
+    authority_scopes: Optional[list[str]] = None,
+    governance_zone: Optional[str] = None,
+    trust_tier: Optional[int] = None,
+    archetype: Optional[str] = None,
+    activation_certificate_id: Optional[str] = None,
 ) -> x509.Certificate:
-    subject_name = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
-    ])
+    name_attrs = [x509.NameAttribute(NameOID.COMMON_NAME, common_name)]
+    if organization:
+        name_attrs.append(x509.NameAttribute(NameOID.ORGANIZATION_NAME, organization))
+    if organizational_unit:
+        name_attrs.append(
+            x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, organizational_unit),
+        )
+    if email:
+        name_attrs.append(x509.NameAttribute(NameOID.EMAIL_ADDRESS, email))
+    subject_name = x509.Name(name_attrs)
+
     now = datetime.now(tz=timezone.utc)
     builder = (
         x509.CertificateBuilder()
@@ -109,6 +155,25 @@ def _build_cert(
             ),
             critical=True,
         )
+
+    # AGTP Agent Certificate extensions. Each is opt-in via its CLI
+    # flag; absent flags leave the cert as a vanilla TLS cert that
+    # the daemon treats as transport-only identity.
+    if subject_agent_id is not None:
+        builder = add_subject_agent_id(builder, subject_agent_id)
+    if principal_id is not None:
+        builder = add_principal_id(builder, principal_id)
+    if authority_scopes is not None:
+        builder = add_authority_scope_commitment(builder, authority_scopes)
+    if governance_zone is not None:
+        builder = add_governance_zone(builder, governance_zone)
+    if trust_tier is not None:
+        builder = add_trust_tier(builder, trust_tier)
+    if archetype is not None:
+        builder = add_archetype(builder, archetype)
+    if activation_certificate_id is not None:
+        builder = add_activation_certificate_id(builder, activation_certificate_id)
+
     return builder.sign(private_key=issuer_key, algorithm=None)
 
 
@@ -145,6 +210,70 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Overwrite existing output files.",
     )
+
+    # Standard X.509 subject fields per AGTP-CERT §4.1.1.
+    parser.add_argument(
+        "--organization",
+        help="Subject O field (operator/principal organization).",
+    )
+    parser.add_argument(
+        "--organizational-unit",
+        help="Subject OU field (governance zone label).",
+    )
+    parser.add_argument(
+        "--email",
+        help="Subject emailAddress (contact for the responsible principal).",
+    )
+
+    # AGTP X.509 v3 extensions per AGTP-CERT §4.1.2. All optional;
+    # omitting a flag drops the extension. The cert remains valid TLS
+    # but the daemon treats it as transport-only.
+    parser.add_argument(
+        "--subject-agent-id",
+        help=(
+            "subject-agent-id extension value (64 hex). When omitted, the "
+            "extension is also omitted; the daemon falls back to the "
+            "key-derived Agent-ID. When supplied, MUST equal the "
+            "key-derived value (the daemon refuses mismatched certs)."
+        ),
+    )
+    parser.add_argument(
+        "--principal-id",
+        help="principal-id extension value (UTF-8 string ≤256 bytes).",
+    )
+    parser.add_argument(
+        "--authority-scope",
+        action="append",
+        default=[],
+        help=(
+            "Authority-Scope token to commit to. Repeatable. The "
+            "extension is built from the lexicographically sorted, "
+            "deduplicated set of all supplied values."
+        ),
+    )
+    parser.add_argument(
+        "--governance-zone",
+        help="governance-zone extension value (e.g., 'zone:finance').",
+    )
+    parser.add_argument(
+        "--trust-tier",
+        type=int,
+        choices=list(VALID_TRUST_TIERS),
+        help="trust-tier extension value (1, 2, or 3).",
+    )
+    parser.add_argument(
+        "--archetype",
+        choices=sorted(VALID_ARCHETYPES),
+        help="archetype extension value.",
+    )
+    parser.add_argument(
+        "--activation-certificate-id",
+        help=(
+            "activation-certificate-id extension value (64 hex). "
+            "Cross-layer reference to the Agent Genesis hash."
+        ),
+    )
+
     args = parser.parse_args(argv)
 
     base = Path(args.output)
@@ -187,13 +316,61 @@ def main(argv: list[str] | None = None) -> int:
         issuer_key = agent_key
         signed_by = "self-signed"
 
-    cert = _build_cert(
-        subject_key=agent_pub,
-        issuer_name=issuer_name,
-        issuer_key=issuer_key,
-        common_name=common_name,
-        valid_days=args.valid_days,
+    agent_id = derive_agent_id_from_public_key(agent_pub)
+
+    # When the caller explicitly supplies --subject-agent-id, it MUST
+    # equal the key-derived Agent-ID. The daemon enforces the same
+    # invariant at verification time; refusing here gives a clearer
+    # error message than a 401 on the wire.
+    if args.subject_agent_id and args.subject_agent_id.lower() != agent_id:
+        print(
+            f"--subject-agent-id {args.subject_agent_id!r} does not match "
+            f"the key-derived Agent-ID {agent_id!r}.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Default: when any AGTP extension flag is present, also write
+    # subject-agent-id so the cert is recognizably a full Agent Cert
+    # at the wire layer. A bare TLS cert (no AGTP flags) omits the
+    # extension and lets the daemon fall back to key-derived ID.
+    extension_flags_present = any(
+        v not in (None, [], "")
+        for v in (
+            args.principal_id,
+            args.authority_scope,
+            args.governance_zone,
+            args.trust_tier,
+            args.archetype,
+            args.activation_certificate_id,
+            args.subject_agent_id,
+        )
     )
+    effective_subject_agent_id = args.subject_agent_id or (
+        agent_id if extension_flags_present else None
+    )
+
+    try:
+        cert = _build_cert(
+            subject_key=agent_pub,
+            issuer_name=issuer_name,
+            issuer_key=issuer_key,
+            common_name=common_name,
+            valid_days=args.valid_days,
+            organization=args.organization,
+            organizational_unit=args.organizational_unit,
+            email=args.email,
+            subject_agent_id=effective_subject_agent_id,
+            principal_id=args.principal_id,
+            authority_scopes=args.authority_scope or None,
+            governance_zone=args.governance_zone,
+            trust_tier=args.trust_tier,
+            archetype=args.archetype,
+            activation_certificate_id=args.activation_certificate_id,
+        )
+    except CertExtensionError as exc:
+        print(f"invalid Agent Cert extension: {exc}", file=sys.stderr)
+        return 2
 
     # Write key (PKCS8 PEM).
     key_pem = agent_key.private_bytes(
@@ -215,11 +392,27 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         pass
 
-    agent_id = derive_agent_id_from_public_key(agent_pub)
     print(f"private key:  {key_path}")
     print(f"certificate:  {crt_path}  ({signed_by})")
     print(f"common name:  {common_name}")
     print(f"agent_id:     {agent_id}")
+    if extension_flags_present:
+        print()
+        print("AGTP Agent Cert extensions written:")
+        if effective_subject_agent_id:
+            print(f"  subject-agent-id:          {effective_subject_agent_id}")
+        if args.principal_id:
+            print(f"  principal-id:              {args.principal_id}")
+        if args.authority_scope:
+            print(f"  authority-scope-commitment: {sorted(set(args.authority_scope))}")
+        if args.governance_zone:
+            print(f"  governance-zone:           {args.governance_zone}")
+        if args.trust_tier is not None:
+            print(f"  trust-tier:                {args.trust_tier}")
+        if args.archetype:
+            print(f"  archetype:                 {args.archetype}")
+        if args.activation_certificate_id:
+            print(f"  activation-certificate-id: {args.activation_certificate_id}")
     print()
     print("This Agent-ID is derived from the cert's Ed25519 public key.")
     print("When the daemon verifies a connection presenting this cert, it")

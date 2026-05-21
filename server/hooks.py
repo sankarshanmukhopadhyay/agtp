@@ -37,9 +37,26 @@ import traceback
 from typing import Any, List, Optional, Protocol, Union
 
 from agtp.handlers import EndpointContext, EndpointError, EndpointResponse
+from core import wire
 
 
-HookOutcome = Optional[Union[EndpointResponse, EndpointError]]
+HookOutcome = Optional[Union[EndpointResponse, EndpointError, wire.AGTPResponse]]
+"""What a ``before_dispatch`` hook may return.
+
+  * ``None`` — pass through to the next hook / the handler.
+  * :class:`EndpointResponse` — short-circuit with a success-shape
+    body. The dispatcher runs the endpoint's output schema validator,
+    so this form is appropriate for cache hits returning a body the
+    endpoint's contract describes.
+  * :class:`EndpointError` — short-circuit with a 422 handler-domain
+    error. Use for predictable refusals declared in the endpoint's
+    ``errors`` list.
+  * :class:`wire.AGTPResponse` — short-circuit with a fully formed
+    wire response (specific status code, custom body shape). Bypasses
+    output validation. Use for wire-level refusals like 455 Scope
+    Violation or 457 Zone Violation that don't fit the endpoint's
+    success body shape.
+"""
 
 
 class DispatchHookError(Exception):

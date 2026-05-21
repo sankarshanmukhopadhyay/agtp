@@ -53,7 +53,7 @@ agtpd owns everything inside the protocol boundary. An operator who installs agt
 | 11 | Configuration | Implemented (`agtp-server.toml`) |
 | 12 | Logging | Basic; needs structured format |
 | 13 | Session management | Specified, partial implementation |
-| 14 | Agent Certificate verification | Implemented (`server/mtls.py`, Phase B); standard X.509 + Ed25519 with Agent-ID derived from public-key hash. Full Agent-Cert custom extensions (subject-agent-id, principal-id, authority-scope-commitment, etc.) deferred to a future revision. |
+| 14 | Agent Certificate verification | Implemented (`server/mtls.py`, Phases B + 3); standard X.509 + Ed25519 with Agent-ID derived from public-key hash. All eight AGTP X.509 v3 extensions (`draft-hood-agtp-agent-cert`) parsed and surfaced on `VerifiedCert.extensions` and `EndpointContext.agent_cert_extensions`; SCT extension parses but isn't verified against an AGTP-CTL yet (Phase 8). |
 | 15 | Caching | Implemented (`mod_cache`, M9) |
 | 16 | Reverse proxy | Implemented (`mod_proxy`, M9) |
 | 17 | AGTP-LOG receipt emission | Implemented as Ed25519-signed JSONL (`mod_audit`); COSE/SCITT wrapper deferred |
@@ -101,6 +101,7 @@ Operational modules extend daemon capability without crossing a language boundar
 - `mod_log` — structured logging backends beyond the default.
 - `mod_metrics` — Prometheus and OpenTelemetry exporters.
 - `mod_audit` — AGTP-LOG receipt emission and SCITT transparency log integration.
+- `mod_agent_cert` — Scope-Enforcement-Point gating from AGTP Agent Certificate extensions (`draft-hood-agtp-agent-cert`). Reads the parsed `authority-scope-commitment` and `governance-zone` extensions on the verified peer cert and refuses out-of-scope or out-of-zone requests at the wire layer with 455 / 457 before the handler runs.
 
 Operational modules ship with agtpd or as official add-ons. They are configured the same way runtime modules are, in agtpd's main config file.
 

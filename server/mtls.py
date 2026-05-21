@@ -1,53 +1,60 @@
 """
 Agent Certificate verification for mTLS-secured AGTP connections.
 
-Phase B of the signing / mTLS / gateway-evolution arc. The full
-Agent-Cert specification (``draft-hood-agtp-agent-cert``) defines
-several X.509 v3 custom extensions (subject-agent-id, principal-id,
-authority-scope-commitment, governance-zone, trust-tier, archetype,
-activation-certificate-id, agtp-ctl-sct). This module implements the
-**transport-layer subset** that's actually load-bearing: validate a
-standard X.509 chain, extract the Ed25519 public key, derive the
-canonical Agent-ID from its SHA-256 hash.
-
-The custom extensions land in a future revision and consume the same
-``CertVerifier`` plumbing; the Agent-ID binding is the part the
-trust block in the gateway request frame and the
-``EndpointContext.agent_verified`` field depend on right now.
+This module implements the full set of AGTP Agent Certificate
+extensions defined in ``draft-hood-agtp-agent-cert-00``:
+``subject-agent-id``, ``principal-id``,
+``authority-scope-commitment``, ``governance-zone``, ``trust-tier``,
+``archetype``, ``activation-certificate-id``, and ``agtp-ctl-sct``.
+The extension OIDs, value formats, and encode/decode helpers live in
+:mod:`server.agent_cert_ext`. This module is the verifier — what runs
+on every TLS handshake to surface a :class:`VerifiedCert`.
 
 ## Agent-ID binding
 
-The transport-layer Agent-ID is::
+The transport-layer Agent-ID derivation is::
 
     sha256(public_key_raw_bytes).hexdigest()
 
 where ``public_key_raw_bytes`` is the 32-byte Ed25519 public key.
-This produces a 64-hex-char identifier, matching the format used
-elsewhere in the protocol (e.g., Lauren's agent_id). The binding
-is cryptographic — anyone who can prove possession of the matching
-private key can prove they're that agent.
+This produces a 64-hex-char identifier matching the format used
+elsewhere in the protocol.
 
-The future ``subject-agent-id`` X.509 extension will carry the
-governance-layer Agent Genesis hash, which may differ from the
-transport-layer key-derived Agent-ID. This implementation does
-NOT yet check that extension; when it lands, the verifier prefers
-the extension value when present and falls back to the key-derived
-form when absent (preserving backward compatibility with
-transport-only certs).
+When the cert carries a ``subject-agent-id`` extension, that value
+is the canonical Agent-ID and **MUST** equal the key-derived form;
+a mismatch is refused with ``detail="extension-mismatch"``. The
+extension's value is what eventually ties the cert to the agent's
+governance-layer Agent Genesis (Phase 4 adds the Genesis-document
+fetch + hash verification). When the extension is absent — a vanilla
+TLS cert without Agent-Cert extensions — the key-derived form is
+authoritative; the daemon treats this as "transport-only" identity.
+
+## Scope-Enforcement at the daemon
+
+The full :class:`AgentCertExtensions` block is surfaced on every
+:class:`VerifiedCert` and is what ``mod_agent_cert`` reads in its
+``before_dispatch`` hook to enforce Authority-Scope and governance
+zone constraints at O(1) per request, without parsing the body.
 """
 
 from __future__ import annotations
 
 import hashlib
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+from server.agent_cert_ext import (
+    AgentCertExtensions,
+    CertExtensionError,
+    parse_extensions,
+)
 
 
 class MtlsError(Exception):
@@ -66,6 +73,11 @@ class CertVerificationError(MtlsError):
       * ``expired``            current time is outside not_before/not_after
       * ``agent-id-mismatch``  header Agent-ID doesn't match cert-derived
       * ``chain-untrusted``    chain doesn't validate against the CA bundle
+      * ``malformed-extension``  one of the AGTP-specific X.509 v3
+                                 extensions (draft-hood-agtp-agent-cert)
+                                 carries a malformed value
+      * ``extension-mismatch``  a cert extension binds an Agent-ID that
+                                disagrees with the key-derived value
     """
 
     def __init__(self, message: str, *, detail: str) -> None:
@@ -82,10 +94,23 @@ class VerifiedCert:
     connection's state and surfaced into the gateway request frame
     as the ``trust`` block; in-daemon dispatch reads
     ``ctx.agent_verified`` and ``ctx.agent_cert_fingerprint``.
+
+    The ``extensions`` block carries the parsed AGTP X.509 v3
+    extensions (``draft-hood-agtp-agent-cert``). A vanilla TLS cert
+    without those extensions yields an ``AgentCertExtensions`` with
+    every field ``None`` — the daemon and operational modules
+    (``mod_agent_cert``) treat that as "transport-only" identity and
+    skip extension-driven enforcement. Full Agent Certs populate the
+    extension fields and unlock Scope-Enforcement-Point checks.
     """
 
     agent_id: str
-    """Hex-encoded SHA-256 of the cert's Ed25519 public key (64 chars)."""
+    """Canonical Agent-ID for this cert. Sourced from the
+    ``subject-agent-id`` extension when present; falls back to the
+    SHA-256 of the cert's Ed25519 public key. The two values are
+    cross-checked: a cert whose ``subject-agent-id`` disagrees with
+    the key-derived hash is refused with detail
+    ``extension-mismatch``."""
 
     fingerprint: str
     """Hex-encoded SHA-256 of the certificate DER bytes (64 chars)."""
@@ -98,6 +123,10 @@ class VerifiedCert:
 
     subject_common_name: str
     """The CN from the cert's subject; informational only."""
+
+    extensions: AgentCertExtensions = field(default_factory=AgentCertExtensions)
+    """Parsed AGTP X.509 v3 extensions. Default is an all-``None``
+    instance for transport-only certs."""
 
 
 def derive_agent_id_from_public_key(public_key: Ed25519PublicKey) -> str:
@@ -174,9 +203,41 @@ class CertVerifier:
                 detail="expired",
             )
 
-        agent_id = derive_agent_id_from_public_key(pub)
+        key_derived_agent_id = derive_agent_id_from_public_key(pub)
         fingerprint = hashlib.sha256(der_bytes).hexdigest()
         cn = self._extract_cn(cert)
+
+        # Parse the AGTP X.509 v3 extensions. Missing extensions are
+        # fine (transport-only cert); malformed extension values are a
+        # protocol violation and refuse the connection.
+        try:
+            extensions = parse_extensions(cert)
+        except CertExtensionError as exc:
+            raise CertVerificationError(
+                f"AGTP certificate extension malformed: {exc}",
+                detail="malformed-extension",
+            ) from exc
+
+        # When the cert carries a ``subject-agent-id`` extension, it
+        # MUST match the key-derived Agent-ID. The extension is the
+        # canonical Agent-ID per the Phase-3 design; the key-derived
+        # form is what the daemon computes transport-side. A mismatch
+        # means the cert is binding a different identity than the key
+        # it actually controls, which is exactly the substitution
+        # attack the cross-check defends against.
+        if (
+            extensions.subject_agent_id is not None
+            and extensions.subject_agent_id != key_derived_agent_id
+        ):
+            raise CertVerificationError(
+                f"subject-agent-id extension {extensions.subject_agent_id!r} "
+                f"does not match key-derived Agent-ID {key_derived_agent_id!r}",
+                detail="extension-mismatch",
+            )
+
+        # Authoritative Agent-ID: the extension when present, the
+        # key-derived form otherwise.
+        agent_id = extensions.subject_agent_id or key_derived_agent_id
 
         return VerifiedCert(
             agent_id=agent_id,
@@ -184,6 +245,7 @@ class CertVerifier:
             not_before=not_before,
             not_after=not_after,
             subject_common_name=cn,
+            extensions=extensions,
         )
 
     @staticmethod

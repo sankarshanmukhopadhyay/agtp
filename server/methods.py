@@ -1595,6 +1595,7 @@ def _build_endpoint_context(
     agent_cert_fingerprint = (
         verified_cert.fingerprint if verified_cert is not None else None
     )
+    agent_cert_extensions = _extensions_dict(verified_cert)
     return EndpointContext(
         input=body,
         agent_id=agent_doc.agent_id if agent_doc is not None else "",
@@ -1612,7 +1613,40 @@ def _build_endpoint_context(
         headers=headers_lower,
         agent_verified=agent_verified,
         agent_cert_fingerprint=agent_cert_fingerprint,
+        agent_cert_extensions=agent_cert_extensions,
     )
+
+
+def _extensions_dict(verified_cert: Any) -> Dict[str, Any]:
+    """Project the parsed Agent-Cert extensions onto a plain dict.
+
+    The agtp library cannot depend on server-side types; this helper
+    flattens :class:`server.agent_cert_ext.AgentCertExtensions` into
+    JSON-friendly types so ``EndpointContext.agent_cert_extensions``
+    stays a plain dict regardless of how the dispatcher surfaces them.
+    Empty dict when mTLS is off or no extensions are present.
+    """
+    if verified_cert is None:
+        return {}
+    ext = getattr(verified_cert, "extensions", None)
+    if ext is None:
+        return {}
+    out: Dict[str, Any] = {}
+    if ext.subject_agent_id is not None:
+        out["subject_agent_id"] = ext.subject_agent_id
+    if ext.principal_id is not None:
+        out["principal_id"] = ext.principal_id
+    if ext.authority_scopes is not None:
+        out["authority_scopes"] = list(ext.authority_scopes)
+    if ext.governance_zone is not None:
+        out["governance_zone"] = ext.governance_zone
+    if ext.trust_tier is not None:
+        out["trust_tier"] = ext.trust_tier
+    if ext.archetype is not None:
+        out["archetype"] = ext.archetype
+    if ext.activation_certificate_id is not None:
+        out["activation_certificate_id"] = ext.activation_certificate_id
+    return out
 
 
 def _check_required_scopes(

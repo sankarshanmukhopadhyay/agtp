@@ -121,6 +121,18 @@ class EndpointContext:
     # DER bytes, hex-encoded; null when not verified via cert.
     agent_verified: bool = False
     agent_cert_fingerprint: Optional[str] = None
+    # Phase 3 Agent-Cert extensions. When the cert presented during
+    # mTLS carries the AGTP X.509 v3 extensions defined in
+    # draft-hood-agtp-agent-cert (subject-agent-id, principal-id,
+    # authority-scope-commitment, governance-zone, trust-tier,
+    # archetype, activation-certificate-id), the dispatcher surfaces
+    # them here as a plain dict so handlers (and operational modules
+    # like mod_agent_cert) can read them without depending on
+    # server-internal dataclasses. Keys mirror the field names of
+    # server.agent_cert_ext.AgentCertExtensions; values are plain
+    # JSON-friendly types (str / list[str] / int). Empty / None when
+    # mTLS is off or the cert is transport-only.
+    agent_cert_extensions: Dict[str, Any] = field(default_factory=dict)
     # Phase C: handler-side access to the daemon's gateway capabilities.
     # When running inside a runtime module that negotiated the
     # ``sign_request`` and/or ``outbound_call`` capabilities, this
