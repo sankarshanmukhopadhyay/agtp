@@ -12,8 +12,8 @@ list lookups:
 
 Failures return one of two new AGTP-specific status codes:
 
-* **459 Method Grammar Violation** — verb is not in the catalog.
-* **460 Endpoint Grammar Violation** — path violates path grammar.
+* **459 Method Violation** — verb is not in the catalog.
+* **460 Endpoint Violation** — path violates path grammar.
 
 This document describes the catalog and path-grammar surface.
 
@@ -110,9 +110,9 @@ The server's `dispatch()` runs gates in this order:
 
 1. **Synthesis-Id** — route to the synthesis runtime if the header
    names an active synthesis.
-2. **459 Method Grammar Violation** — verb not in the catalog and
+2. **459 Method Violation** — verb not in the catalog and
    not legacy-opted-in.
-3. **460 Endpoint Grammar Violation** — path violates path grammar.
+3. **460 Endpoint Violation** — path violates path grammar.
 4. **405 Method Not Allowed** — the server's `policies.methods`
    block refuses this verb.
 5. **Redirect** — `policies.methods.redirects` rewrites
@@ -124,14 +124,14 @@ Embedded methods bypass the policy gate (4) so a mis-authored
 
 ## Status codes
 
-### 459 Method Grammar Violation
+### 459 Method Violation
 
 Returned when the dispatcher refuses an unrecognized verb. Body:
 
 ```json
 {
   "error": {
-    "code": "method-grammar-violation",
+    "code": "method-violation",
     "message": "'FROBNICATE' is not a recognized AGTP verb.",
     "method": "FROBNICATE",
     "suggestions": ["FETCH", "CREATE"]
@@ -143,14 +143,14 @@ Returned when the dispatcher refuses an unrecognized verb. Body:
 distance against the approved set. For legacy HTTP methods, the
 preferred replacement leads the list (`GET → FETCH`).
 
-### 460 Endpoint Grammar Violation
+### 460 Endpoint Violation
 
 Returned when the dispatcher refuses a malformed path. Body:
 
 ```json
 {
   "error": {
-    "code": "endpoint-grammar-violation",
+    "code": "endpoint-violation",
     "message": "Path segment 'fetch' contains a recognized AGTP verb. Verbs belong in the method, not the path.",
     "path": "/fetch/orders",
     "segment": "fetch"

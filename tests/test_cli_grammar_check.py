@@ -189,7 +189,7 @@ class ResponseRenderingTests(unittest.TestCase):
         # list comes from core.methods.find_close_matches.
         resp = _result({
             "error": {
-                "code": "method-grammar-violation",
+                "code": "method-violation",
                 "method": "FROBNICATE",
                 "explanation": "not in catalog",
                 "suggestions": ["FROBOZIFY"],

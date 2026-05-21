@@ -273,15 +273,15 @@ Validation reduces to two cheap checks:
 
   * **Method-name lookup** ([`core/methods.py`](core/methods.py)):
     `is_approved_verb(name)` against the catalog. Verbs absent from
-    the catalog return **459 Method Grammar Violation** with
+    the catalog return **459 Method Violation** with
     close-match suggestions in the body.
   * **Path grammar** ([`core/path_grammar.py`](core/path_grammar.py)):
     `validate_path(path)` rejects paths that don't start with `/`,
     have a trailing slash on a non-root path, or embed a verb token
-    in any segment. Failures return **460 Endpoint Grammar Violation**.
+    in any segment. Failures return **460 Endpoint Violation**.
 
 > **Status of 460.** The path-grammar validator and the **460
-> Endpoint Grammar Violation** status code are wired through every
+> Endpoint Violation** status code are wired through every
 > layer (dispatcher, status helpers, CLI, drawer) and tested in
 > isolation. They are reserved and ready, but **460 does not yet
 > fire on real wire traffic**: the current AGTPRequest carries a
@@ -343,9 +343,9 @@ The dispatcher applies these gates in order:
 
   1. **Synthesis-Id** — route to the synthesis runtime if the
      header names an active synthesis.
-  2. **459 Method Grammar Violation** — verb not in the catalog
+  2. **459 Method Violation** — verb not in the catalog
      (and not opted into via `policies.methods.legacy`).
-  3. **460 Endpoint Grammar Violation** — path malformed or
+  3. **460 Endpoint Violation** — path malformed or
      contains a verb token.
   4. **405 Method Not Allowed** — `policies.methods` refuses this
      verb on this server.
@@ -423,8 +423,8 @@ HTTP codes carried in payloads.
 | 456 | Budget Exceeded | Method execution would exceed the Budget-Limit declared in the request. *AGTP-specific.* |
 | 457 | Zone Violation | Request would route outside the AGTP-Zone-ID boundary; SEP-enforced. *AGTP-specific.* |
 | 458 | Counterparty Unverified | PURCHASE counterparty failed merchant identity verification (Merchant-ID absent, Merchant-Manifest-Fingerprint mismatch, or merchant in non-Active lifecycle state). *AGTP-specific.* |
-| 459 | Method Grammar Violation | Method name is not in the AGTP verb catalog. The body carries close-match suggestions (Levenshtein-2 against the approved set; legacy verbs surface their canonical replacement first). *AGTP-specific.* |
-| 460 | Endpoint Grammar Violation | Path violates AGTP path grammar — must begin with `/`, must not end with `/` (except the root), must not embed a verb token in any segment. *AGTP-specific.* |
+| 459 | Method Violation | Method name is not in the AGTP verb catalog. The body carries close-match suggestions (Levenshtein-2 against the approved set; legacy verbs surface their canonical replacement first). *AGTP-specific.* |
+| 460 | Endpoint Violation | Path violates AGTP path grammar — must begin with `/`, must not end with `/` (except the root), must not embed a verb token in any segment. *AGTP-specific.* |
 | 463 | Proposal Rejected | PROPOSE refused; body carries `error.code='proposal-rejected'`, `error.reason` (one of `out-of-scope` / `policy-refused` / `composition-impossible` / `ambiguous`), and optional `error.counter_proposal`. *AGTP-specific (§7).* |
 | 500 | Server Error | Internal failure in the responding system |
 | 503 | Unavailable | Responding agent or system temporarily unavailable or Suspended |
@@ -455,7 +455,7 @@ admits. Their semantics now ride existing codes, with the body's
 | 451 Scope Violation | **455** Scope Violation | Renumbered |
 | 452 Method Not Permitted for Agent | **403** + `error.code='method-not-permitted-for-agent'` | Folded into Forbidden |
 | 453 Zone Violation | **457** Zone Violation | Renumbered |
-| 454 Grammar Violation | (split) | Method-name failures now ride **459 Method Grammar Violation**; path failures ride **460 Endpoint Grammar Violation**. The Method-Grammar header pathway was retired; the catalog gate at the top of dispatch carries the same job. |
+| 454 Grammar Violation | (split) | Method-name failures now ride **459 Method Violation**; path failures ride **460 Endpoint Violation**. The Method-Grammar header pathway was retired; the catalog gate at the top of dispatch carries the same job. |
 | 460 Negotiation Refused | **422** + `error.code='negotiation-refused'` | Folded into Unprocessable |
 | 461 Counter-Proposal | **422** with `counter_proposal` body | Folded into Unprocessable |
 | 462 Wildcards Refused | **403** + `error.code='wildcards-refused'` | Folded into Forbidden |
@@ -718,7 +718,7 @@ issuer:          agtp.io
 Deliberate scope cuts, listed for future revisions:
 
 - **Cryptographic signatures.** Agent Documents are unsigned in v1;
-  v2 wires in Birth Certificate signing.
+  v2 wires in Agent Genesis signing.
 - **Trust scores.** Mentioned in the spec but not yet computed.
 - **Public registration UI** at `https://register.agtp.io`.
 - **AGTP-CERT integration** at `https://ca.agtp.io`.

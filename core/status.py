@@ -35,8 +35,8 @@ Active codes
   * 456 Budget Exceeded              (AGTP-specific)
   * 457 Zone Violation               (AGTP-specific)
   * 458 Counterparty Unverified      (AGTP-specific)
-  * 459 Method Grammar Violation     (AGTP-specific)
-  * 460 Endpoint Grammar Violation   (AGTP-specific)
+  * 459 Method Violation             (AGTP-specific)
+  * 460 Endpoint Violation           (AGTP-specific)
   * 463 Proposal Rejected            (AGTP-specific; PROPOSE refuse)
   * 500 Server Error
   * 503 Unavailable      (Suspended or temporarily down)
@@ -57,7 +57,7 @@ admits. Their semantics have been folded into the codes above:
   * 452 Method Not Permitted for Agent -> 403 Forbidden
                                           (error.code='method-not-permitted-for-agent')
   * 453 Zone Violation                -> 457 Zone Violation
-  * 454 Grammar Violation             -> 459 Method Grammar Violation
+  * 454 Grammar Violation             -> 459 Method Violation
   * 461 Counter-Proposal              -> 463 Proposal Rejected
                                           (body carries 'counter_proposal'
                                           under error.counter_proposal)
@@ -111,8 +111,8 @@ SCOPE_VIOLATION             = (455, "Scope Violation")
 BUDGET_EXCEEDED             = (456, "Budget Exceeded")
 ZONE_VIOLATION              = (457, "Zone Violation")
 COUNTERPARTY_UNVERIFIED     = (458, "Counterparty Unverified")
-METHOD_GRAMMAR_VIOLATION    = (459, "Method Grammar Violation")
-ENDPOINT_GRAMMAR_VIOLATION  = (460, "Endpoint Grammar Violation")
+METHOD_GRAMMAR_VIOLATION    = (459, "Method Violation")
+ENDPOINT_GRAMMAR_VIOLATION  = (460, "Endpoint Violation")
 DELEGATION_FAILURE          = (550, "Delegation Failure")
 AUTHORITY_CHAIN_BROKEN      = (551, "Authority Chain Broken")
 
@@ -748,7 +748,7 @@ def counterparty_unverified(
     return _build(COUNTERPARTY_UNVERIFIED, body=body)
 
 
-# -- 459 Grammar Violation ---------------------------------------------
+# -- 459 Method Violation / 460 Endpoint Violation ---------------------
 
 
 def method_grammar_violation(
@@ -761,7 +761,7 @@ def method_grammar_violation(
     Wire-level rejection for an unrecognized method name. Returned
     by the dispatcher when a method is not in the canonical AGTP
     method list (``core/methods.json``). Wire status: **459 Method
-    Grammar Violation**.
+    Violation**.
 
     ``suggestions`` (typically the result of
     :func:`core.methods.find_close_matches`) is included in the body
@@ -770,7 +770,7 @@ def method_grammar_violation(
     upper = method.upper()
     body: Dict[str, Any] = {
         "error": {
-            "code": "method-grammar-violation",
+            "code": "method-violation",
             "message": message
             or f"{upper!r} is not a recognized AGTP verb.",
             "method": upper,
@@ -786,14 +786,13 @@ def endpoint_grammar_violation(
     reason: str,
     *,
     segment: Optional[str] = None,
-    code: str = "endpoint-grammar-violation",
+    code: str = "endpoint-violation",
 ) -> wire.AGTPResponse:
     """
     Wire-level rejection for a path that violates AGTP path grammar.
     Returned by the dispatcher when the path does not begin with
     ``/``, has a trailing slash, or contains a recognized AGTP verb
-    in any of its segments. Wire status: **460 Endpoint Grammar
-    Violation**.
+    in any of its segments. Wire status: **460 Endpoint Violation**.
     """
     body: Dict[str, Any] = {
         "error": {

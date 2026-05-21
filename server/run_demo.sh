@@ -298,7 +298,7 @@ fi
 # 460 (path violates path grammar). These exercise the front-line
 # validators that gate method dispatch.
 
-run_scenario 27 "Unknown verb FROBNICATE on Orchestrator (459 method-grammar-violation, suggestions in body)" \
+run_scenario 27 "Unknown verb FROBNICATE on Orchestrator (459 method-violation, suggestions in body)" \
     $CLIENT "agtp://$ORCH_ID" FROBNICATE \
     "${CLIENT_ARGS[@]}"
 

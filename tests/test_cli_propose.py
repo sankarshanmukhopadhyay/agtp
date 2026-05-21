@@ -9,7 +9,7 @@ Covers the endpoint editor:
   * Non-interactive submission (``-d`` and ``--params-file``).
   * Interactive walkthrough (mocked stdin script).
   * Response rendering for 200 / 422 negotiation-refused / 422
-    counter-proposal / 459 method-grammar-violation.
+    counter-proposal / 459 method-violation.
 """
 
 from __future__ import annotations
@@ -404,7 +404,7 @@ class ResponseRenderingTests(unittest.TestCase):
         rc = cli_propose._render_propose_response(
             _ok_result({
                 "error": {
-                    "code": "method-grammar-violation",
+                    "code": "method-violation",
                     "method": "FROBNICATE",
                     "message": "'FROBNICATE' is not a recognized AGTP verb.",
                     "suggestions": ["FETCH"],

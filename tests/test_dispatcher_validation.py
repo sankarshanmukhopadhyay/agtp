@@ -4,9 +4,9 @@ End-to-end tests for the dispatcher's catalog-based validation gates.
 Resolution order:
 
   1. Synthesis-Id: routes to the runtime if active.
-  2. **459 Method Grammar Violation**: method not in
+  2. **459 Method Violation**: method not in
      ``core/methods.json``.
-  3. **460 Endpoint Grammar Violation**: path malformed or contains
+  3. **460 Endpoint Violation**: path malformed or contains
      a verb token.
   4. **405 Method Not Allowed**: per-server policies.methods
      refuses the verb.
@@ -115,7 +115,7 @@ def _decode_json(resp):
 
 
 # ===========================================================================
-# 459 Method Grammar Violation
+# 459 Method Violation
 # ===========================================================================
 
 
@@ -147,7 +147,7 @@ class MethodGrammarValidationTests(unittest.TestCase):
         resp = _send(self.server, ORCH_ID, "FROBNICATE")
         self.assertEqual(resp.status_code, 459)
         payload = _decode_json(resp)
-        self.assertEqual(payload["error"]["code"], "method-grammar-violation")
+        self.assertEqual(payload["error"]["code"], "method-violation")
         self.assertEqual(payload["error"]["method"], "FROBNICATE")
 
     def test_459_includes_close_match_suggestions(self):

@@ -797,7 +797,7 @@ def handle_describe(
         headers={
             "Content-Type": content_type,
             "Content-Length": str(len(body)),
-            "Server-Agent-ID": agent_doc.agent_id,
+            "Agent-ID": agent_doc.agent_id,
             # Header-first dispatch: this is an Agent Document, not a
             # Server Manifest. A renderer can pick the right view
             # without first parsing the body. See core/identity.py
@@ -1951,10 +1951,10 @@ def _dispatch_inner(
       1. **Synthesis-Id** — if the header is present and names an
          active synthesis, the runtime walks its plan and returns;
          an unrecognized id returns 404 ``synthesis-not-found``.
-      2. **459 Method Grammar Violation** — if the method name is
+      2. **459 Method Violation** — if the method name is
          not in the canonical AGTP method list (``core/methods.json``),
          refuse with close-match suggestions in the body.
-      3. **460 Endpoint Grammar Violation** — if the request path
+      3. **460 Endpoint Violation** — if the request path
          is malformed or contains a verb token, refuse with the
          offending segment in the body.
       4. **405 Method Not Allowed (per policy)** — when the server's
@@ -1993,7 +1993,7 @@ def _dispatch_inner(
                 extra={"synthesis_id": syn_id},
             )
 
-    # 459 Method Grammar Violation. Local imports keep the methods
+    # 459 Method Violation. Local imports keep the methods
     # module free of core-side imports at module load time.
     from core import status as _status
     from core.methods import (
@@ -2047,7 +2047,7 @@ def _dispatch_inner(
             method_name, suggestions=suggestions,
         )
 
-    # 460 Endpoint Grammar Violation.
+    # 460 Endpoint Violation.
     try:
         validate_path(request_path)
     except PathGrammarError as exc:

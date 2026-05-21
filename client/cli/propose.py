@@ -600,7 +600,7 @@ def _render_propose_response(
     # _check_verb gate worked, but render cleanly if it does.
     if code == 459:
         err = payload.get("error", {}) or {}
-        print(_red(f"{_bad()} Server: 459 Method Grammar Violation"), file=out)
+        print(_red(f"{_bad()} Server: 459 Method Violation"), file=out)
         if err.get("message"):
             print(f"  {err['message']}", file=out)
         sugs = err.get("suggestions") or []

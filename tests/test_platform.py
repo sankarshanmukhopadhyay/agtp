@@ -201,7 +201,7 @@ class FullStackSubprocessTests(unittest.TestCase):
 
     def test_unknown_method_returns_459(self) -> None:
         # Catalog-based dispatcher: unknown verbs surface as 459
-        # Method Grammar Violation.
+        # Method Violation.
         out = self._run(
             "client",
             f"agtp://{LAUREN_ID}@127.0.0.1:{self.srv_port}",
@@ -210,7 +210,7 @@ class FullStackSubprocessTests(unittest.TestCase):
             "--insecure",
         )
         self.assertNotEqual(out.returncode, 0)
-        self.assertIn("method-grammar-violation", out.stdout)
+        self.assertIn("method-violation", out.stdout)
 
 
 class PlatformDetectionTests(unittest.TestCase):

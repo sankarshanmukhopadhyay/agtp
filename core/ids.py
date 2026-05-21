@@ -198,11 +198,11 @@ def generate_agent_id() -> str:
     """
     Generate a fresh random 256-bit Agent ID, returned as 64-char lowercase hex.
 
-    In production AGTP, Agent IDs are derived from Birth Certificate hashes
-    at ACTIVATE time (see v06 §5.1). For v1 we generate them randomly because
-    the Birth Certificate machinery doesn't exist yet. The cryptographic
-    properties are equivalent at the wire level; the difference is purely
-    in provenance.
+    In production AGTP, Agent IDs are derived from Agent Genesis hashes
+    at ACTIVATE time (see AGTP-LOG §2 Identity Taxonomy). For v1 we
+    generate them randomly because the Agent Genesis machinery doesn't
+    exist yet. The cryptographic properties are equivalent at the wire
+    level; the difference is purely in provenance.
     """
     return secrets.token_hex(AGENT_ID_BYTES)
 

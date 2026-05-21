@@ -28,7 +28,7 @@ is cryptographic — anyone who can prove possession of the matching
 private key can prove they're that agent.
 
 The future ``subject-agent-id`` X.509 extension will carry the
-governance-layer Birth Certificate hash, which may differ from the
+governance-layer Agent Genesis hash, which may differ from the
 transport-layer key-derived Agent-ID. This implementation does
 NOT yet check that extension; when it lands, the verifier prefers
 the extension value when present and falls back to the key-derived

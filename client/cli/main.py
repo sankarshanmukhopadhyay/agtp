@@ -431,7 +431,7 @@ def _do_grammar_check(args, parsed: ParsedURI) -> int:
              for a probe with no body (the handler reports missing
              required parameters); we treat that as proof of
              admission.
-           * **459 method-grammar-violation** — the server's
+           * **459 method-violation** — the server's
              catalog (or its ``policies.methods``) refused the
              name. Suggestions printed.
            * **405 method-not-implemented** — the verb is in the
@@ -498,7 +498,7 @@ def _do_grammar_check(args, parsed: ParsedURI) -> int:
     # changed the answer). Render suggestions if present.
     if code == 459:
         print(
-            f"459 Method Grammar Violation: {method_name!r} is not "
+            f"459 Method Violation: {method_name!r} is not "
             f"admissible on this server.",
             file=sys.stderr,
         )

@@ -192,7 +192,7 @@ Two-stage check:
         and reached the handler. ``400 missing-required-params`` is
         the common case for a bodyless probe and is treated as
         proof of admission.
-      * **459** Method Grammar Violation — the server's catalog (or
+      * **459** Method Violation — the server's catalog (or
         ``policies.methods``) refused the name. Suggestions are
         printed when the body carries them.
       * **405 method-not-implemented** — the verb is in the AGTP

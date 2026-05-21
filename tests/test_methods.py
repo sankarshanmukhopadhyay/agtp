@@ -8,7 +8,7 @@ For every method:
     returns 405.
 
 Plus a small batch of cross-cutting tests:
-  * unknown methods return 459 (Method Grammar Violation);
+  * unknown methods return 459 (Method Violation);
   * the registry exposes complete semantic metadata for every entry;
   * DESCRIBE content-negotiates JSON / YAML / HTML.
 
@@ -351,14 +351,14 @@ class MethodSetTests(unittest.TestCase):
 
     def test_unknown_method_returns_459(self) -> None:
         # FAKEMETHOD is not in the curated AGTP verb list. The
-        # dispatcher refuses with 459 Method Grammar Violation
+        # dispatcher refuses with 459 Method Violation
         # before reaching the registry. Earlier revisions returned
         # 501; the new spec separates "name not in catalog" (459)
         # from "valid name but no handler" (405).
         resp = _send(self.server, ORCH_ID, "FAKEMETHOD", body={})
         self.assertEqual(resp.status_code, 459)
         payload = _decode_json(resp)
-        self.assertEqual(payload["error"]["code"], "method-grammar-violation")
+        self.assertEqual(payload["error"]["code"], "method-violation")
         self.assertEqual(payload["error"]["method"], "FAKEMETHOD")
 
     # ---- DESCRIBE content negotiation ----

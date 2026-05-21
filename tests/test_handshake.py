@@ -265,7 +265,7 @@ class SoftDenyEnforcementTests(unittest.TestCase):
         # methods so the response surfaces "verb unrecognized"
         # rather than "agent doesn't declare X"). With the new
         # catalog-based validator the dispatcher then returns 459
-        # Method Grammar Violation; older revisions returned 501.
+        # Method Violation; older revisions returned 501.
         resp = _send(self.server, LAUREN_ID, "FAKEMETHOD", body={"x": 1})
         self.assertEqual(resp.status_code, 459)
 
