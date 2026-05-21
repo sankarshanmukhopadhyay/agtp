@@ -429,6 +429,12 @@ class AttributionRecordTests(unittest.TestCase):
             tmp.cleanup()
 
     def test_present_when_enabled(self):
+        """Attribution-Record is emitted as JWS Compact (RFC 7515 §3.1).
+        With signing disabled, the daemon emits an ``alg: none``
+        unsecured JWS of the same shape so consumers see one format."""
+        from server.signing import (
+            audit_id_for, parse_attribution_record,
+        )
         tmp, srv = self._make_server(
             audit=AuditConfig(attribution_records_enabled=True),
         )
@@ -436,13 +442,23 @@ class AttributionRecordTests(unittest.TestCase):
             resp = _send(srv, "DESCRIBE", {"Agent-ID": ORCH_ID})
             record = wire.header(resp, "Attribution-Record")
             self.assertTrue(record)
-            parsed = json.loads(record)
-            self.assertEqual(parsed["status"], resp.status_code)
-            self.assertIn("server_id", parsed)
-            self.assertIn("issued_at", parsed)
-            # v00 placeholder: signature is "placeholder" until §5
-            # JWS infrastructure lands.
-            self.assertEqual(parsed["signature"], "placeholder")
+
+            # Three dot-separated base64url segments.
+            parts = record.split(".")
+            self.assertEqual(len(parts), 3)
+            # Unsecured JWS: empty signature segment per RFC 7515 §6.
+            self.assertEqual(parts[2], "")
+
+            header, payload, _ = parse_attribution_record(record)
+            self.assertEqual(header["alg"], "none")
+            self.assertEqual(payload["status"], resp.status_code)
+            self.assertIn("server_id", payload)
+            self.assertIn("issued_at", payload)
+
+            # Audit-ID header carries sha256(JWS).
+            self.assertEqual(
+                wire.header(resp, "Audit-ID"), audit_id_for(record),
+            )
         finally:
             srv.stop()
             tmp.cleanup()

@@ -21,8 +21,14 @@
     },
     "headers": {
       "type": ["object", "null"],
-      "description": "Optional response headers added alongside agtpd-injected headers (Content-Type, Content-Length, Server-ID, Task-ID echo, Attribution-Record).",
+      "description": "Optional response headers added alongside agtpd-injected headers (Content-Type, Content-Length, Server-ID, Task-ID echo, Request-ID echo, Response-ID, Audit-ID, Owner-ID, Attribution-Record).",
       "additionalProperties": { "type": "string" },
+      "default": null
+    },
+    "attribution_extra": {
+      "type": ["object", "null"],
+      "description": "Handler-supplied governance metadata that rides under a top-level 'extra' key in the response's Attribution-Record JWS payload. Use for action_id, evaluation_id, decision_id, intent_assertion_jti, and similar fields the daemon doesn't itself produce. JSON-serializable. Null (the default) omits the extra block from the JWS.",
+      "additionalProperties": true,
       "default": null
     }
   }

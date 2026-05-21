@@ -196,34 +196,135 @@ def test_key_id_differs_across_keys(tmp_path: Path) -> None:
 
 
 def test_attribution_record_round_trip(tmp_path: Path) -> None:
+    """A signed Attribution-Record is a valid JWS Compact form that
+    verifies against the service's public key."""
+    from server.signing import (
+        parse_attribution_record,
+        verify_attribution_record,
+        audit_id_for,
+    )
+
     service = SigningService.from_key_path(str(_write_key(tmp_path)))
     record = service.build_attribution_record(
+        agent_id="a" * 64,
         server_id="agents.example.com",
         issued_at="2026-05-15T14:23:11Z",
         status=200,
+        request_id="req-1",
     )
-    assert record["kid"] == service.key_id
-    assert record["alg"] == "Ed25519"
-    assert record["payload"]["server_id"] == "agents.example.com"
-    assert record["payload"]["status"] == 200
 
-    # Decode the signature and verify it against the canonical payload.
-    sig = record["signature"]
-    # base64url, no padding — pad back for decoding.
-    padded = sig + "=" * (-len(sig) % 4)
-    signature_bytes = base64.urlsafe_b64decode(padded)
-    canonical = json.dumps(
-        record["payload"], sort_keys=True, separators=(",", ":"),
-    )
-    assert service.verify(canonical.encode("utf-8"), signature_bytes) is True
+    # Three dot-separated base64url segments.
+    parts = record.jws.split(".")
+    assert len(parts) == 3
+    assert all(parts)  # signed JWS: no segment is empty
+
+    # Header carries EdDSA and the daemon's kid.
+    header, payload, signature = parse_attribution_record(record.jws)
+    assert header["alg"] == "EdDSA"
+    assert header["typ"] == "JWT"
+    assert header["kid"] == service.key_id
+
+    # Payload carries the daemon-known fields; empty values are omitted.
+    assert payload["server_id"] == "agents.example.com"
+    assert payload["status"] == 200
+    assert payload["agent_id"] == "a" * 64
+    assert payload["request_id"] == "req-1"
+    assert "owner_id" not in payload  # not set
+
+    # Verifier accepts a valid signature.
+    verified = verify_attribution_record(record.jws, service.public_key)
+    assert verified == payload
+
+    # audit_id is sha256 of the compact JWS.
+    assert record.audit_id == audit_id_for(record.jws)
 
 
 def test_attribution_record_extras(tmp_path: Path) -> None:
+    """Handler-supplied `attribution_extra` rides under a top-level
+    `extra` key in the JWS payload."""
+    from server.signing import parse_attribution_record
+
     service = SigningService.from_key_path(str(_write_key(tmp_path)))
     record = service.build_attribution_record(
         server_id="x",
         issued_at="2026-05-15T00:00:00Z",
         status=200,
-        extra={"trace_id": "trace-abc"},
+        extra={"intent_assertion_jti": "jti-abc"},
     )
-    assert record["payload"]["trace_id"] == "trace-abc"
+    _, payload, _ = parse_attribution_record(record.jws)
+    assert payload["extra"] == {"intent_assertion_jti": "jti-abc"}
+
+
+def test_attribution_record_chain_field(tmp_path: Path) -> None:
+    """previous_audit_id rides in the payload when supplied."""
+    from server.signing import parse_attribution_record
+
+    service = SigningService.from_key_path(str(_write_key(tmp_path)))
+    record = service.build_attribution_record(
+        server_id="x",
+        issued_at="2026-05-15T00:00:00Z",
+        status=200,
+        previous_audit_id="aud-prev",
+    )
+    _, payload, _ = parse_attribution_record(record.jws)
+    assert payload["previous_audit_id"] == "aud-prev"
+
+
+def test_attribution_record_omits_empty_fields(tmp_path: Path) -> None:
+    """Empty-string identifier fields drop from the payload so
+    verifiers see only what the daemon actually observed."""
+    from server.signing import parse_attribution_record
+
+    service = SigningService.from_key_path(str(_write_key(tmp_path)))
+    record = service.build_attribution_record(
+        server_id="x",
+        issued_at="2026-05-15T00:00:00Z",
+        status=200,
+    )
+    _, payload, _ = parse_attribution_record(record.jws)
+    # Mandatory always-present fields.
+    assert set(payload.keys()) == {"server_id", "issued_at", "status"}
+
+
+def test_unsigned_attribution_record(tmp_path: Path) -> None:
+    """alg:none records carry an empty signature segment but the
+    payload is otherwise identical and parseable with the same
+    helper."""
+    from server.signing import parse_attribution_record
+
+    service = SigningService.from_key_path(str(_write_key(tmp_path)))
+    record = service.build_unsigned_attribution_record(
+        server_id="x",
+        issued_at="2026-05-15T00:00:00Z",
+        status=200,
+        agent_id="b" * 64,
+    )
+    parts = record.jws.split(".")
+    assert len(parts) == 3
+    assert parts[2] == ""  # empty signature segment per RFC 7515 §6
+    header, payload, signature = parse_attribution_record(record.jws)
+    assert header["alg"] == "none"
+    assert "kid" not in header
+    assert signature == b""
+    assert payload["agent_id"] == "b" * 64
+
+
+def test_verify_rejects_tampered_payload(tmp_path: Path) -> None:
+    """A modified payload segment must fail verification."""
+    from server.signing import (
+        AttributionRecordError,
+        verify_attribution_record,
+    )
+
+    service = SigningService.from_key_path(str(_write_key(tmp_path)))
+    record = service.build_attribution_record(
+        server_id="x", issued_at="2026-05-15T00:00:00Z", status=200,
+    )
+    # Re-encode payload with a status change, keep the original signature.
+    parts = record.jws.split(".")
+    parts[1] = base64.urlsafe_b64encode(
+        b'{"server_id":"x","issued_at":"2026-05-15T00:00:00Z","status":500}'
+    ).rstrip(b"=").decode("ascii")
+    tampered = ".".join(parts)
+    with pytest.raises(AttributionRecordError):
+        verify_attribution_record(tampered, service.public_key)

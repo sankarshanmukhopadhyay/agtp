@@ -25,7 +25,7 @@ import ssl
 import sys
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import json as _json
 from core import status as status_codes
@@ -543,79 +543,174 @@ def _finalize_response(
     response: wire.AGTPResponse,
     request: Optional[wire.AGTPRequest],
     config: Optional[ServerConfig],
+    *,
+    attribution_extra: Optional[Dict[str, Any]] = None,
+    owner_id: str = "",
+    principal_id: str = "",
 ) -> None:
     """Apply §10 response-header policy to every outbound response.
 
-    Three concerns:
+    Concerns:
 
       * **Server-ID** (mandatory) — every response identifies which
         server produced it. Value comes from
         ``config.server.server_id``.
       * **Task-ID** echo — when the request carried a ``Task-ID``
-        header the response echoes it back so the client can
-        correlate (and so audit logs can trace the operation
-        across multiple requests).
-      * **Attribution-Record** (optional) — when the server's
-        ``[audit] attribution_records_enabled = true``, the
-        response carries a JSON-encoded attestation. The v00
-        attestation is a structural placeholder; future revisions
-        replace the payload with a JWS-signed compact serialization
-        once §5 manifest signing lands.
+        header the response echoes it back so clients can correlate.
+      * **Request-ID** echo — same pattern for ``Request-ID``.
+      * **Response-ID** (synthesized) — every response carries a
+        fresh ``Response-ID`` so the caller can correlate this
+        specific response among multiple parallel requests.
+      * **Audit-ID** — when Attribution-Records are enabled,
+        ``sha256(jws)`` of the Attribution-Record JWS. Anchors the
+        per-agent hash chain via ``previous_audit_id`` on the next
+        record.
+      * **Owner-ID** — when the agent's owner is known, stamped on
+        the response so clients see the legal entity responsible for
+        the agent's behavior.
+      * **Attribution-Record** — when
+        ``[audit] attribution_records_enabled = true``, a JWS Compact
+        Serialization (RFC 7515 §3.1) signed receipt. When signing
+        is disabled the daemon still emits an ``alg: none`` unsecured
+        JWS of the same shape so consumers see one format.
+
+    ``attribution_extra`` is opt-in handler-supplied data that rides
+    in the JWS payload's ``extra`` block. Used for handler-specific
+    governance metadata (action_id, evaluation_id, intent_assertion_jti)
+    that the daemon doesn't itself produce.
+
+    ``owner_id`` and ``principal_id`` are passed by the dispatcher
+    after it resolves the Agent Document; they're not derivable from
+    the request headers alone.
     """
     if response is None:
         return
     headers = dict(response.headers or {})
+
     # Mandatory Server-ID.
+    server_id = ""
     if config is not None and getattr(config, "server", None) is not None:
         server_id = getattr(config.server, "server_id", "") or ""
         if server_id and "Server-ID" not in headers:
             headers["Server-ID"] = server_id
-    # Task-ID echo.
+
+    # Inbound correlation echoes (Task-ID, Request-ID) and synthesis
+    # (Response-ID, Agent-ID readback).
+    task_id = ""
+    request_id = ""
+    agent_id = ""
+    session_id = ""
     if request is not None:
         task_id = wire.header(request, "Task-ID")
         if task_id and "Task-ID" not in headers:
             headers["Task-ID"] = task_id
-    # Attribution-Record. When the daemon has a loaded SigningService
-    # AND attribution_records_enabled is true, the header carries a
-    # real Ed25519-signed envelope. Without a signing service, the
-    # header falls back to the pre-§5 unsigned placeholder so
-    # existing deployments don't see header churn until they opt in
-    # to signing via [signing].enabled=true in their config.
+        request_id = wire.header(request, "Request-ID")
+        if request_id and "Request-ID" not in headers:
+            headers["Request-ID"] = request_id
+        session_id = wire.header(request, "Session-ID")
+        agent_id = wire.read_agent_id(request)
+
+    # Response-ID: fresh every time. Independent of any inbound id.
+    if "Response-ID" not in headers:
+        import uuid as _uuid
+        response_id = f"resp-{_uuid.uuid4().hex[:12]}"
+        headers["Response-ID"] = response_id
+    else:
+        response_id = headers["Response-ID"]
+
+    # Owner-ID surfacing. The agent's owner is a property of the
+    # agent's identity (registered at Genesis time); stamped on the
+    # response so callers see the legal entity responsible for this
+    # agent's behavior without parsing the body.
+    if owner_id and "Owner-ID" not in headers:
+        headers["Owner-ID"] = owner_id
+
+    # Attribution-Record + Audit-ID. When attribution_records_enabled
+    # is true the daemon stamps both headers. The JWS is signed when
+    # [signing].enabled is true; otherwise an alg:none unsecured JWS
+    # carries the same payload shape so verifiers see one format.
     audit = getattr(config, "audit", None) if config is not None else None
     if audit is not None and getattr(
         audit, "attribution_records_enabled", False
     ):
-        import json as _json
         from datetime import datetime as _dt, timezone as _tz
-        server_id = (
-            getattr(config.server, "server_id", "") or ""
-            if config and getattr(config, "server", None) is not None
-            else ""
+        from server.audit_chain import (
+            AuditChainStore as _AuditChainStore,
+            default_chain_head_root as _default_chain_head_root,
         )
+
         issued_at = _dt.now(tz=_tz.utc).isoformat().replace("+00:00", "Z")
         signing_service = (
             getattr(config, "signing_service", None) if config is not None else None
         )
-        if signing_service is not None:
-            attestation_obj = signing_service.build_attribution_record(
-                server_id=server_id,
-                issued_at=issued_at,
-                status=response.status_code,
-            )
-        else:
-            attestation_obj = {
-                "server_id": server_id,
-                "issued_at": issued_at,
-                "status": response.status_code,
-                # Pre-§5 placeholder: only emitted when signing is
-                # disabled. Operators who enable [signing] get real
-                # Ed25519 signatures via build_attribution_record().
-                "signature": "placeholder",
-            }
-        headers["Attribution-Record"] = _json.dumps(
-            attestation_obj, separators=(",", ":"),
+
+        # Per-agent chain head: read predecessor before signing,
+        # write the new head after. Store path is configurable; the
+        # platform default keeps a vanilla install operator-free.
+        chain_head_root = getattr(audit, "chain_head_root", "") or ""
+        chain_store = _AuditChainStore(
+            Path(chain_head_root).expanduser() if chain_head_root
+            else _default_chain_head_root()
         )
+        prior_head = chain_store.head(agent_id) if agent_id else None
+        previous_audit_id = prior_head.audit_id if prior_head is not None else ""
+
+        builder = (
+            signing_service.build_attribution_record
+            if signing_service is not None
+            else _build_unsigned_attribution_record
+        )
+        record = builder(
+            agent_id=agent_id,
+            owner_id=owner_id,
+            principal_id=principal_id,
+            server_id=server_id,
+            session_id=session_id,
+            task_id=task_id,
+            request_id=request_id,
+            response_id=response_id,
+            issued_at=issued_at,
+            status=response.status_code,
+            previous_audit_id=previous_audit_id,
+            extra=attribution_extra,
+        )
+        headers["Attribution-Record"] = record.jws
+        headers["Audit-ID"] = record.audit_id
+
+        # Chain head update — best-effort. A failure (disk full,
+        # permission denied) is logged but doesn't fail the response.
+        if agent_id:
+            try:
+                chain_store.write(agent_id, record.audit_id, issued_at)
+            except OSError as exc:  # pragma: no cover - defensive
+                import sys as _sys
+                print(
+                    f"[server] chain head write failed for {agent_id}: {exc}",
+                    file=_sys.stderr,
+                )
+
     response.headers = headers
+
+
+def _build_unsigned_attribution_record(**kwargs):
+    """Standalone alg:none builder used when no signing service is loaded.
+
+    Constructs a SigningService-less instance just to call into the
+    same canonical-encoding helpers. Cheap — no key material is
+    handled.
+    """
+    from server.signing import (
+        SigningService as _SigningService,
+    )
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey as _Ed25519PrivateKey,
+    )
+    # alg:none doesn't actually sign anything; use a throwaway key
+    # so we can call into the unsigned builder. The key bytes never
+    # leave this function and never sign anything.
+    throwaway = _Ed25519PrivateKey.generate()
+    svc = _SigningService(private_key=throwaway)
+    return svc.build_unsigned_attribution_record(**kwargs)
 
 
 def handle_connection(
@@ -830,7 +925,22 @@ def handle_connection(
                 return
 
         response = dispatch(request, registry, agent_doc, config=config)
-        _finalize_response(response, request, config)
+        # Handler may have stashed attribution_extra on the wire response
+        # via _translate_endpoint_result; pop it for the finalizer.
+        attribution_extra = getattr(response, "_attribution_extra", None)
+        if attribution_extra is not None:
+            try:
+                delattr(response, "_attribution_extra")
+            except AttributeError:
+                pass
+        _finalize_response(
+            response,
+            request,
+            config,
+            attribution_extra=attribution_extra,
+            owner_id=getattr(agent_doc, "owner_id", "") or "",
+            principal_id=getattr(agent_doc, "principal_id", "") or "",
+        )
         conn.sendall(response.serialize())
     except wire.WireFormatError as exc:
         try:

@@ -155,11 +155,22 @@ class EndpointResponse:
       * ``headers`` optional response headers the dispatcher should
                     include alongside ``Content-Type`` and
                     ``Content-Length``.
+      * ``attribution_extra`` optional dict that rides in the JWS
+                    payload of the response's Attribution-Record as a
+                    top-level ``extra`` block. Handlers populate this
+                    with governance-runtime metadata (``action_id``,
+                    ``evaluation_id``, ``decision_id``,
+                    ``intent_assertion_jti``, etc.) the daemon
+                    doesn't itself produce. The daemon never invents
+                    these fields; they're strictly handler-supplied
+                    and pass through verbatim. ``None`` (the default)
+                    omits the ``extra`` block entirely.
     """
 
     body: Dict[str, Any]
     status: int = 200
     headers: Optional[Dict[str, str]] = None
+    attribution_extra: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------

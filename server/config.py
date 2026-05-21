@@ -510,15 +510,26 @@ class AuditConfig:
     can index without parser-specific configuration.
 
     ``attribution_records_enabled`` (§10) controls whether every
-    response carries an ``Attribution-Record`` header containing a
-    signed attestation of the response's origin. Default ``False``.
-    The v00 attestation is a JSON placeholder; future revisions
-    replace the payload with a JWS compact serialization once §5
-    manifest signing lands.
+    response carries an ``Attribution-Record`` header. The record
+    is emitted as JWS Compact Serialization (RFC 7515); when
+    ``[signing].enabled`` is true the daemon signs with EdDSA, and
+    otherwise emits an ``alg: none`` unsecured JWS so the shape
+    stays consistent for verifiers. The companion ``Audit-ID``
+    header carries ``sha256(jws)`` and chains via
+    ``previous_audit_id`` in the next response's payload.
+
+    ``chain_head_root`` is the filesystem directory the daemon uses
+    to persist per-agent chain heads. Empty string selects the
+    platform default
+    (``~/.agtp/audit/chain_heads/`` on POSIX,
+    ``%APPDATA%\\agtp\\audit\\chain_heads\\`` on Windows). Operators
+    who run multiple daemons on one host MUST set this explicitly so
+    chains don't collide.
     """
 
     path: str = "stderr"
     attribution_records_enabled: bool = False
+    chain_head_root: str = ""
 
 
 @dataclass
@@ -759,6 +770,7 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         attribution_records_enabled=bool(
             audit_block.get("attribution_records_enabled", False)
         ),
+        chain_head_root=str(audit_block.get("chain_head_root") or ""),
     )
 
     gateway_block = data.get("gateway", {}) or {}

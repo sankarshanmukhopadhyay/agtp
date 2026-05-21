@@ -43,11 +43,12 @@ manifest) MAY omit `Agent-ID` when
 `policies.anonymous_discovery = true`; otherwise the dispatcher
 refuses with 262 `anonymous-discovery-disabled`.
 
-## Required response header
+## Required response headers
 
 | Header | Required | Notes |
 |---|---|---|
 | `Server-ID` | MUST | Identifies the server that produced the response. Value mirrors the server's configured `server_id` (per `agtp-api §7` manifest discussion). Useful for audit, load-balanced deployments, and verifying which server processed a request. The dispatcher injects this header at response-finalization time so every code path that produces a response carries it. |
+| `Response-ID` | MUST | A daemon-synthesized identifier (`resp-<12-hex>`) for this specific response. Distinct from `Request-ID`; multiple responses to the same request (retries, intermediate 202s) MUST each carry a fresh Response-ID. Used by audit chains, replay-detection, and correlation across parallel requests. |
 
 ## Optional request headers
 
@@ -109,26 +110,97 @@ The header is documented as Future Work in §10 — its eventual
 shape (delegation chain format, signature scheme, authority
 verification rules) is undefined in v00.
 
-## Optional response header
+## Optional request headers — correlation
+
+### Request-ID
+
+Caller-supplied correlation identifier for this specific request.
+The daemon echoes it back as the `Request-ID` response header so
+callers can correlate request/response pairs across parallel
+operations. When the caller omits it, no echo is emitted; callers
+that need correlation MUST send the header.
+
+```
+Request-ID: req-2026-05-21-001
+```
+
+## Optional response headers
 
 ### Attribution-Record
 
-A signed attestation of the response's origin. Opt-in via
+A signed receipt of the response's origin, emitted as JWS Compact
+Serialization (RFC 7515 §3.1). Opt-in via
 `[audit] attribution_records_enabled = true` in `agtp-server.toml`.
 When enabled, every response carries:
 
 ```
-Attribution-Record: <JSON>
+Attribution-Record: <base64url(header)>.<base64url(payload)>.<base64url(signature)>
 ```
 
-The v00 attestation is a JSON-encoded placeholder containing
-`server_id`, `issued_at`, `status`, and a `signature` placeholder.
-A future revision will replace the payload with a JWS-signed
-compact serialization once §5 manifest signing infrastructure
-lands.
+The header is a JOSE object:
 
-When `attribution_records_enabled = false` (default), the header
-is absent from responses.
+```json
+{ "alg": "EdDSA", "typ": "JWT", "kid": "<server signing key id>" }
+```
+
+When `[signing].enabled` is true the daemon signs with the loaded
+Ed25519 key. Otherwise the daemon emits an unsecured JWS
+(`alg: "none"` per RFC 7515 §6) with an empty signature segment so
+verifiers see one structural shape regardless of signing state.
+Unsecured JWSes MUST be treated as advisory only.
+
+The payload carries the AGTP identifier chain. Empty-valued fields
+are omitted so verifiers see only values the daemon actually
+observed:
+
+| Field | When present | Source |
+|---|---|---|
+| `server_id` | always | daemon config |
+| `issued_at` | always | UTC ISO 8601 timestamp |
+| `status` | always | response status code |
+| `agent_id` | when known | request's `Agent-ID` header |
+| `owner_id` | when known | agent's registered owner (legal entity) |
+| `principal_id` | when known | resolved from the Agent Document |
+| `session_id` | when set | request's `Session-ID` header |
+| `task_id` | when set | request's `Task-ID` header |
+| `request_id` | when set | request's `Request-ID` header |
+| `response_id` | always | daemon-synthesized |
+| `previous_audit_id` | after agent's first record | per-agent chain head |
+| `extra` | when handler supplied | `EndpointResponse.attribution_extra` |
+
+When `attribution_records_enabled = false` (default), both the
+`Attribution-Record` and `Audit-ID` headers are absent from
+responses.
+
+### Audit-ID
+
+`sha256(Attribution-Record)` hex-encoded. Stamped on every
+response that carries an Attribution-Record. The next record from
+the same agent references this value as its `previous_audit_id`,
+forming a per-agent hash chain.
+
+```
+Audit-ID: e42bac416ea7c9249f182a4d93e12fd749bcb0e5d6254b21fc98a898a5f93617
+```
+
+Chain heads are persisted by the daemon at
+`[audit].chain_head_root` (default `~/.agtp/audit/chain_heads/` on
+POSIX, `%APPDATA%\agtp\audit\chain_heads\` on Windows). Operators
+running multiple daemons on one host MUST set this explicitly to
+prevent chain collisions.
+
+### Owner-ID
+
+When the agent's owner (the legal entity that registered the agent)
+is known, the daemon stamps it on the response so callers see who is
+legally responsible for the agent's behavior without parsing the
+body. Sourced from the agent's Agent Document / Agent Genesis;
+clients MUST NOT supply this on requests — it is a daemon-stamped
+property of the agent's identity.
+
+```
+Owner-ID: nomotic.inc
+```
 
 ## Headers that are NOT part of §10
 
@@ -140,7 +212,7 @@ rejects or moves elsewhere:
 | `AGTP-Version` | The version is in the request/response line. |
 | `AGTP-Method` | The method is in the request line. |
 | `AGTP-Status` | The status is in the response line. |
-| `Principal-ID` | The principal is in the agent document; servers look it up by `Agent-ID`. |
+| `Principal-ID` | The principal is resolved from the Agent Document; servers look it up by `Agent-ID`. |
 | `Priority`, `TTL`, `Budget-Limit` | Not in scope for v00; reserved for future or implementation-specific use. |
 | `AGTP-Zone-ID` | Not in scope for v00. |
 | `Content-Schema` | Not in scope for v00. |
@@ -173,9 +245,12 @@ Implementations MAY include implementation-specific headers
 - **Additional optional headers** if deployment experience
   surfaces real needs (Priority, TTL, Budget-Limit, Zone-ID —
   currently uncertain).
-- **JWS signing for Attribution-Record** — the header structure is
-  fixed in v00 but the signature payload is a placeholder until
-  the §5 manifest-signing infrastructure lands.
+- **COSE_Sign1 / SCITT envelope** — Attribution-Record is currently
+  emitted as JWS Compact (RFC 7515). The AGTP-LOG transparency-log
+  draft anticipates a COSE_Sign1 form (RFC 9943) for SCITT
+  interoperability. JWS stays the wire default; SCITT receipts will
+  ride alongside as a parallel emission once the log protocol is
+  implemented.
 
 ## Migration from pre-§10
 
@@ -184,8 +259,9 @@ Operators upgrading from pre-§10 servers:
 1. **Update header emission**: clients should emit `Agent-ID`
    instead of `Target-Agent`. The server-side back-compat keeps
    old clients working with a deprecation warning per request.
-2. **Verify Server-ID in responses**: every response now carries
-   `Server-ID`. Clients that pin headers should accept it.
+2. **Verify Server-ID and Response-ID in responses**: every response
+   now carries `Server-ID` and `Response-ID`. Clients that pin
+   headers should accept them.
 3. **Reject Delegation-Chain** is a new behavior: clients that
    experimentally sent the header will now receive 501. Strip it
    before sending if you depended on the previous "header silently

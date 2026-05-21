@@ -1598,6 +1598,9 @@ def _build_endpoint_context(
     return EndpointContext(
         input=body,
         agent_id=agent_doc.agent_id if agent_doc is not None else "",
+        principal_id=(
+            getattr(agent_doc, "principal_id", "") if agent_doc is not None else ""
+        ),
         agent_scopes=list(getattr(agent_doc.requires, "scopes", []) or []),
         authority_scope=authority_scope,
         session_id=session_id,
@@ -1661,13 +1664,20 @@ def _translate_endpoint_result(
                 f"schema: {exc}",
                 extra={"field": exc.field, "schema_path": exc.schema_path},
             )
-        return json_response(
+        wire_response = json_response(
             result.status,
             "OK" if 200 <= result.status < 300 else "Error",
             validated,
             method_name=spec.name,
             extra_headers=result.headers or None,
         )
+        # Plumb the handler's attribution_extra dict to _finalize_response
+        # via a private stash on the wire response. The finalizer reads
+        # and removes it before serialization; nothing in the wire
+        # output layer sees this attribute.
+        if result.attribution_extra is not None:
+            wire_response._attribution_extra = dict(result.attribution_extra)
+        return wire_response
     # Built-in handlers (DISCOVER /methods, QUERY /proposals, ...)
     # occasionally need to return non-output-schema responses
     # (404 not-found, 261 in-progress). Pass-through a raw
