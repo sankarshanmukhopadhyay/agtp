@@ -94,6 +94,9 @@ FIELD_ORDER = [
     "owner_id",
     "issued_at",
     "issuer",
+    "manifest_issuer",
+    "manifest_issuer_public_key",
+    "manifest_signature",
 ]
 
 
@@ -184,6 +187,21 @@ class AgentDocument:
     # dispatch path; ``merchant`` triggers mod_merchant's PURCHASE
     # gate when that module is loaded.
     role: str = DEFAULT_ROLE
+    # Tier 3.2 — optional registrar attestation of the AgentDocument
+    # itself (separate from the Agent Genesis attestation). A signed
+    # manifest lets verifiers confirm the document's mutable fields
+    # (skills, requires, trust_tier claim, etc.) reflect what the
+    # registrar attested — not just what the operator unilaterally
+    # wrote. Empty strings = unsigned manifest (operator-only
+    # assertion, the default).
+    manifest_issuer: str = ""
+    manifest_issuer_public_key: str = ""
+    """PEM-encoded Ed25519 public key. Verifier uses this to check
+    the signature."""
+    manifest_signature: str = ""
+    """base64url-encoded Ed25519 signature over the canonical-JSON
+    form of this document with manifest_signature set to "" (so the
+    signature isn't self-referential)."""
 
     def __post_init__(self) -> None:
         if self.trust_tier not in VALID_TRUST_TIERS:
@@ -257,7 +275,13 @@ class AgentDocument:
                 continue
             value = raw[key]
             # Elide empty-string optional fields.
-            if key in ("trust_warning", "owner_id") and not value:
+            if key in (
+                "trust_warning",
+                "owner_id",
+                "manifest_issuer",
+                "manifest_issuer_public_key",
+                "manifest_signature",
+            ) and not value:
                 continue
             # Elide default role to keep agent.json files clean —
             # only merchant role is interesting at the document level.
@@ -266,12 +290,97 @@ class AgentDocument:
             out[key] = value
         return out
 
-    def to_canonical_json(self) -> str:
+    def to_canonical_json(self, *, exclude_signature: bool = False) -> str:
         """Return RFC 8785-style canonical JSON: sorted keys, no
         whitespace. The form Merchant-Manifest-Fingerprint hashes
         over (Phase 7); also a stable byte form for any other
-        cryptographic binding that wants a content hash."""
-        return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+        cryptographic binding that wants a content hash.
+
+        When ``exclude_signature`` is true, the
+        ``manifest_signature`` field is removed before serializing —
+        the form that the manifest signature itself covers. The
+        ``manifest_issuer`` and ``manifest_issuer_public_key`` fields
+        STAY in the signed form so a verifier can identify which key
+        to use without trusting an untrusted in-band lookup.
+        """
+        d = self.to_dict()
+        if exclude_signature:
+            d.pop("manifest_signature", None)
+        return json.dumps(d, sort_keys=True, separators=(",", ":"))
+
+    def sign_manifest(self, issuer_private_key) -> None:
+        """Sign this document in place with the supplied Ed25519
+        registrar key. Sets ``manifest_signature`` (base64url).
+        Caller is responsible for populating ``manifest_issuer`` and
+        ``manifest_issuer_public_key`` before signing (otherwise
+        verifiers can't tell which key to use).
+        """
+        if not self.manifest_issuer_public_key:
+            raise ValueError(
+                "manifest_issuer_public_key must be set before signing"
+            )
+        import base64 as _b64
+        canonical = self.to_canonical_json(exclude_signature=True)
+        sig = issuer_private_key.sign(canonical.encode("utf-8"))
+        self.manifest_signature = (
+            _b64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
+        )
+
+    def verify_manifest_signature(self) -> None:
+        """Verify the embedded manifest signature against
+        ``manifest_issuer_public_key``.
+
+        Raises ``ValueError`` on any failure (missing signature,
+        malformed key, bad signature). Returns ``None`` on success.
+
+        Callers MUST additionally verify the issuer's identity
+        (i.e., that ``manifest_issuer_public_key`` belongs to a
+        trusted registrar) — this method only checks the signature
+        is intact, not that the signer is trusted.
+        """
+        if not self.manifest_signature:
+            raise ValueError("AgentDocument has no manifest_signature")
+        if not self.manifest_issuer_public_key:
+            raise ValueError(
+                "AgentDocument has no manifest_issuer_public_key — "
+                "can't verify"
+            )
+        import base64 as _b64
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PublicKey,
+        )
+        try:
+            issuer = serialization.load_pem_public_key(
+                self.manifest_issuer_public_key.encode("utf-8"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(
+                f"manifest_issuer_public_key is not a valid PEM key: {exc}"
+            ) from exc
+        if not isinstance(issuer, Ed25519PublicKey):
+            raise ValueError(
+                f"manifest_issuer_public_key is not Ed25519: "
+                f"{type(issuer).__name__}"
+            )
+        padded = self.manifest_signature + "=" * (
+            -len(self.manifest_signature) % 4
+        )
+        try:
+            sig_bytes = _b64.urlsafe_b64decode(padded)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                f"manifest_signature is not valid base64url: {exc}"
+            ) from exc
+        canonical = self.to_canonical_json(exclude_signature=True)
+        try:
+            issuer.verify(sig_bytes, canonical.encode("utf-8"))
+        except InvalidSignature as exc:
+            raise ValueError(
+                "manifest_signature does not verify against "
+                "manifest_issuer_public_key"
+            ) from exc
 
     def manifest_fingerprint(self) -> str:
         """Compute ``sha256(canonical AgentDocument JSON)`` hex-encoded.
@@ -426,6 +535,11 @@ def from_dict(data: Dict[str, Any]) -> AgentDocument:
         trust_warning=str(data.get("trust_warning") or ""),
         owner_id=str(data.get("owner_id") or ""),
         role=str(data.get("role") or DEFAULT_ROLE),
+        manifest_issuer=str(data.get("manifest_issuer") or ""),
+        manifest_issuer_public_key=str(
+            data.get("manifest_issuer_public_key") or ""
+        ),
+        manifest_signature=str(data.get("manifest_signature") or ""),
         issued_at=str(data["issued_at"]),
         issuer=str(data["issuer"]),
     )

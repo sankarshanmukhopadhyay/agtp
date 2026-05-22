@@ -128,6 +128,18 @@
       "description": "Identity role per draft-hood-agtp-merchant-identity-01. 'agent' (default) follows the standard dispatch path; 'merchant' triggers mod_merchant's PURCHASE counterparty gate. Mirrors the Agent Genesis's role field. (Added v1.3.0.)",
       "enum": ["agent", "merchant"],
       "default": "agent"
+    },
+    "manifest_issuer": {
+      "type": "string",
+      "description": "Identifier of the registrar that signed this AgentDocument (Tier 3.2). Empty when the manifest is unsigned (operator-only assertion). (Added v1.3.0.)"
+    },
+    "manifest_issuer_public_key": {
+      "type": "string",
+      "description": "PEM-encoded Ed25519 public key the verifier uses to validate manifest_signature. Empty when the manifest is unsigned. (Added v1.3.0.)"
+    },
+    "manifest_signature": {
+      "type": "string",
+      "description": "base64url-encoded Ed25519 signature over the canonical-JSON form of this document with manifest_signature set to empty string. Empty when the manifest is unsigned. Daemons MUST verify on load and refuse to host agents whose signature does not validate. (Added v1.3.0.)"
     }
   }
 }

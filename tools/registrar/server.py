@@ -175,9 +175,15 @@ class _Handler(BaseHTTPRequestHandler):
     # ----- POST -----
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/issue":
-            self._error(404, "unknown path")
+        if self.path == "/issue":
+            self._handle_issue()
             return
+        if self.path == "/sign-manifest":
+            self._handle_sign_manifest()
+            return
+        self._error(404, "unknown path")
+
+    def _handle_issue(self) -> None:
         body = self._read_body()
         if body is None:
             return  # _read_body already wrote the error response
@@ -197,6 +203,42 @@ class _Handler(BaseHTTPRequestHandler):
             genesis.to_pretty_json().encode("utf-8"),
             "application/json",
         )
+
+    def _handle_sign_manifest(self) -> None:
+        """POST /sign-manifest — sign an operator-supplied
+        AgentDocument with the registrar's Ed25519 key.
+
+        Body is the AgentDocument JSON (the shape the operator
+        would otherwise persist to {name}.agent.json). Response is
+        the same document with manifest_issuer / _public_key /
+        _signature populated. Operator saves the response verbatim;
+        the daemon verifies on load.
+        """
+        body = self._read_body()
+        if body is None:
+            return
+        content_type = (self.headers.get("Content-Type") or "").lower()
+        if "application/json" not in content_type:
+            self._error(
+                415,
+                f"sign-manifest requires application/json; got {content_type!r}",
+            )
+            return
+        try:
+            doc_dict = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self._error(400, f"invalid JSON body: {exc}")
+            return
+        if not isinstance(doc_dict, dict):
+            self._error(400, "body must be a JSON object (AgentDocument)")
+            return
+        try:
+            signed = self.store.sign_manifest(doc_dict)
+        except (ValueError, KeyError) as exc:
+            self._error(400, f"could not sign manifest: {exc}")
+            return
+        out = json.dumps(signed, indent=2).encode("utf-8")
+        self._send(200, out, "application/json")
 
     # ----- helpers -----
 

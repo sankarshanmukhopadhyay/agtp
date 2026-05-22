@@ -229,11 +229,256 @@ def test_cycle_detection() -> None:
             start_audit_id=a_aid,
         )
 
-    # Walker: A → B → (A again, in seen) → cycle step → break.
-    assert len(steps) == 3
+    # Walker BFS: visit A, enqueue B. Visit B, enqueue A (cycle).
+    # A is already visited → register the new parent edge and skip
+    # the re-fetch. Output: 2 unique steps, with A pointing back to B
+    # via parent_step_ids.
+    assert len(steps) == 2
     assert steps[0].audit_id == a_aid
     assert steps[1].audit_id == b_aid
-    assert "cycle" in steps[2].fetch_error.lower()
+    # B was reached from A (step 0 was A's first visit).
+    assert steps[1].parent_step_ids == [0]
+    # A picked up B as an additional parent on the cycle attempt.
+    assert 1 in steps[0].parent_step_ids
+
+
+# ---------------------------------------------------------------------------
+# Cross-agent traversal (T3.1).
+# ---------------------------------------------------------------------------
+
+
+def _record_with_prior_actions(
+    svc: SigningService,
+    *,
+    agent_id: str,
+    prior_actions: list,
+    previous_audit_id: str = "",
+) -> Dict[str, Any]:
+    """Build a JWS-shaped INSPECT response whose payload carries
+    extra.prior_actions cross-agent references."""
+    rec = svc.build_attribution_record(
+        agent_id=agent_id,
+        server_id="t.local",
+        issued_at="2026-05-21T10:00:00Z",
+        status=200,
+        previous_audit_id=previous_audit_id,
+        extra={"prior_actions": prior_actions},
+    )
+    return {
+        "method": "INSPECT", "target": "audit", "audit_id": rec.audit_id,
+        "jws": rec.jws,
+        "header": {"alg": "EdDSA", "kid": svc.key_id, "typ": "JWT"},
+        "payload": rec.payload,
+        "issued_at": "2026-05-21T10:00:00Z",
+    }
+
+
+def test_follows_cross_agent_via_inline_uri() -> None:
+    """A record whose extra.prior_actions entry carries agent_uri is
+    self-describing — the walker doesn't need known_agents."""
+    svc = _signing_service()
+    # B's record (upstream agent).
+    upstream = _build_chain_record(svc, agent_id="b" * 64)
+    # A's record references B via inline URI.
+    downstream = _record_with_prior_actions(
+        svc, agent_id="a" * 64,
+        prior_actions=[{
+            "agent_id": "b" * 64,
+            "audit_id": upstream["audit_id"],
+            "agent_uri": "agtp://b.example",
+        }],
+    )
+    records = {
+        downstream["audit_id"]: downstream,
+        upstream["audit_id"]: upstream,
+    }
+    with mock.patch(
+        "tools.chain_inspector.walker.invoke_method",
+        side_effect=_mock_invoke(records),
+    ):
+        steps = walk_chain(
+            agent_uri="agtp://a.example",
+            start_audit_id=downstream["audit_id"],
+        )
+
+    assert len(steps) == 2
+    # Downstream first (the starting point).
+    assert steps[0].audit_id == downstream["audit_id"]
+    # Then upstream, fetched via the inline URI.
+    assert steps[1].audit_id == upstream["audit_id"]
+    assert steps[1].agent_uri == "agtp://b.example"
+    assert steps[1].parent_step_ids == [0]
+
+
+def test_follows_cross_agent_via_known_agents_map() -> None:
+    """When prior_actions entries omit agent_uri, the walker uses the
+    known_agents map to resolve the URI."""
+    svc = _signing_service()
+    upstream = _build_chain_record(svc, agent_id="b" * 64)
+    downstream = _record_with_prior_actions(
+        svc, agent_id="a" * 64,
+        prior_actions=[{
+            "agent_id": "b" * 64,
+            "audit_id": upstream["audit_id"],
+            # no agent_uri — falls back to known_agents
+        }],
+    )
+    records = {
+        downstream["audit_id"]: downstream,
+        upstream["audit_id"]: upstream,
+    }
+    with mock.patch(
+        "tools.chain_inspector.walker.invoke_method",
+        side_effect=_mock_invoke(records),
+    ):
+        steps = walk_chain(
+            agent_uri="agtp://a.example",
+            start_audit_id=downstream["audit_id"],
+            known_agents={"b" * 64: "agtp://b.example"},
+        )
+    assert len(steps) == 2
+    assert steps[1].audit_id == upstream["audit_id"]
+    assert steps[1].agent_uri == "agtp://b.example"
+
+
+def test_unresolvable_cross_agent_records_fetch_error() -> None:
+    """When prior_actions has no agent_uri AND known_agents doesn't
+    know the agent, the cross-agent step gets a fetch_error and the
+    branch stops there."""
+    svc = _signing_service()
+    downstream = _record_with_prior_actions(
+        svc, agent_id="a" * 64,
+        prior_actions=[{
+            "agent_id": "c" * 64,  # unknown
+            "audit_id": "d" * 64,
+        }],
+    )
+    records = {downstream["audit_id"]: downstream}
+    with mock.patch(
+        "tools.chain_inspector.walker.invoke_method",
+        side_effect=_mock_invoke(records),
+    ):
+        steps = walk_chain(
+            agent_uri="agtp://a.example",
+            start_audit_id=downstream["audit_id"],
+        )
+    assert len(steps) == 2
+    assert "no agent_uri available" in steps[1].fetch_error
+
+
+def test_diamond_converges_to_one_step() -> None:
+    """Two paths into the same audit_id should produce ONE step with
+    two parent_step_ids — not two duplicate steps."""
+    svc = _signing_service()
+    # Upstream U.
+    upstream = _build_chain_record(svc, agent_id="u" * 64)
+    # Two intermediate records both reference U.
+    intermediate_b = _record_with_prior_actions(
+        svc, agent_id="b" * 64,
+        prior_actions=[{
+            "agent_id": "u" * 64,
+            "audit_id": upstream["audit_id"],
+            "agent_uri": "agtp://u.example",
+        }],
+    )
+    intermediate_c = _record_with_prior_actions(
+        svc, agent_id="c" * 64,
+        prior_actions=[{
+            "agent_id": "u" * 64,
+            "audit_id": upstream["audit_id"],
+            "agent_uri": "agtp://u.example",
+        }],
+    )
+    # Root A references both B and C.
+    root = _record_with_prior_actions(
+        svc, agent_id="a" * 64,
+        prior_actions=[
+            {
+                "agent_id": "b" * 64,
+                "audit_id": intermediate_b["audit_id"],
+                "agent_uri": "agtp://b.example",
+            },
+            {
+                "agent_id": "c" * 64,
+                "audit_id": intermediate_c["audit_id"],
+                "agent_uri": "agtp://c.example",
+            },
+        ],
+    )
+    records = {
+        r["audit_id"]: r
+        for r in (root, intermediate_b, intermediate_c, upstream)
+    }
+    with mock.patch(
+        "tools.chain_inspector.walker.invoke_method",
+        side_effect=_mock_invoke(records),
+    ):
+        steps = walk_chain(
+            agent_uri="agtp://a.example",
+            start_audit_id=root["audit_id"],
+        )
+    # 4 unique audit_ids → 4 steps. Upstream gets two parents (B & C).
+    assert len(steps) == 4
+    by_aid = {s.audit_id: s for s in steps}
+    upstream_step = by_aid[upstream["audit_id"]]
+    assert len(upstream_step.parent_step_ids) == 2
+
+
+def test_inline_uri_wins_over_known_agents_map() -> None:
+    """When both an inline agent_uri and a known_agents entry exist,
+    the inline value wins (self-describing references shouldn't be
+    overridden by a possibly-stale local map)."""
+    svc = _signing_service()
+    upstream = _build_chain_record(svc, agent_id="b" * 64)
+    downstream = _record_with_prior_actions(
+        svc, agent_id="a" * 64,
+        prior_actions=[{
+            "agent_id": "b" * 64,
+            "audit_id": upstream["audit_id"],
+            "agent_uri": "agtp://b-inline.example",
+        }],
+    )
+    records = {
+        downstream["audit_id"]: downstream,
+        upstream["audit_id"]: upstream,
+    }
+    with mock.patch(
+        "tools.chain_inspector.walker.invoke_method",
+        side_effect=_mock_invoke(records),
+    ):
+        steps = walk_chain(
+            agent_uri="agtp://a.example",
+            start_audit_id=downstream["audit_id"],
+            known_agents={"b" * 64: "agtp://b-from-map.example"},
+        )
+    assert steps[1].agent_uri == "agtp://b-inline.example"
+
+
+def test_malformed_prior_actions_ignored_gracefully() -> None:
+    """Defensive: garbage in prior_actions doesn't crash the walker;
+    the malformed entries are skipped."""
+    svc = _signing_service()
+    downstream = _record_with_prior_actions(
+        svc, agent_id="a" * 64,
+        prior_actions=[
+            "not-a-dict",                           # ignored
+            {"agent_id": 12345, "audit_id": "x"},   # non-string agent_id
+            {"agent_id": "a" * 64},                 # missing audit_id
+            {},                                     # empty
+        ],
+    )
+    records = {downstream["audit_id"]: downstream}
+    with mock.patch(
+        "tools.chain_inspector.walker.invoke_method",
+        side_effect=_mock_invoke(records),
+    ):
+        steps = walk_chain(
+            agent_uri="agtp://a.example",
+            start_audit_id=downstream["audit_id"],
+        )
+    # Only the downstream step. No phantom branches from garbage.
+    assert len(steps) == 1
+    assert steps[0].prior_actions == []
 
 
 def test_max_steps_caps_runaway_chains() -> None:

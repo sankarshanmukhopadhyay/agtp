@@ -43,6 +43,7 @@ _WEB_FORM = """<!doctype html>
             background: #fafafa; }
     .step h3 { margin: 0 0 0.4em 0; font-size: 0.95em;
                font-family: ui-monospace, monospace; word-break: break-all; }
+    .step h3 .agent { color: #2563eb; }
     .badge { display: inline-block; padding: 0.1em 0.5em;
              border-radius: 3px; font-size: 0.75em;
              margin-right: 0.4em; vertical-align: middle; }
@@ -73,6 +74,14 @@ _WEB_FORM = """<!doctype html>
              placeholder="64-char hex (the Audit-ID response header)"
              required pattern="[0-9a-f]{64}">
     </label>
+    <label>Known agents (optional, JSON map)
+      <textarea name="known_agents"
+                placeholder='{"&lt;agent_id&gt;": "agtp://...", "&lt;agent_id&gt;": "agtp://..."}'
+                style="font-family: ui-monospace, monospace; height: 4em;"></textarea>
+      <div class="hint">For cross-agent traversal: when a record's
+        <code>extra.prior_actions</code> entry doesn't carry an inline
+        <code>agent_uri</code>, the walker looks up the agent here.</div>
+    </label>
     <label>
       <input type="checkbox" name="insecure"> Connect over plaintext
       (test daemons only)
@@ -89,10 +98,25 @@ form.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   results.innerHTML = '<p>Walking...</p>';
   const fd = new FormData(form);
+  let known = {};
+  const knownText = (fd.get('known_agents') || '').trim();
+  if (knownText) {
+    try {
+      known = JSON.parse(knownText);
+      if (typeof known !== 'object' || Array.isArray(known)) {
+        throw new Error('known_agents must be a JSON object');
+      }
+    } catch (e) {
+      results.innerHTML = '<p class="err">known_agents JSON: ' +
+                          escapeHtml(e.message) + '</p>';
+      return;
+    }
+  }
   const body = JSON.stringify({
-    agent_uri: fd.get('agent_uri').trim(),
-    audit_id:  fd.get('audit_id').trim().toLowerCase(),
-    insecure:  fd.get('insecure') === 'on',
+    agent_uri:     fd.get('agent_uri').trim(),
+    audit_id:      fd.get('audit_id').trim().toLowerCase(),
+    insecure:      fd.get('insecure') === 'on',
+    known_agents:  known,
   });
   let data;
   try {
@@ -122,31 +146,41 @@ function renderChain(steps) {
     results.innerHTML = '<p>No steps returned.</p>';
     return;
   }
-  let html = '<h2>Chain (' + steps.length + ' record' +
-             (steps.length === 1 ? '' : 's') + ', newest first)</h2>';
-  steps.forEach((step, idx) => {
-    if (idx > 0) {
-      html += '<div class="arrow">↓ previous_audit_id ↓</div>';
-    }
+  // Group steps by agent_uri (or agent_id when uri is empty) so the
+  // tree-shaped graph is easier to scan.
+  let html = '<h2>Chain (' + steps.length + ' step' +
+             (steps.length === 1 ? '' : 's') +
+             ', BFS visit order)</h2>';
+  steps.forEach((step) => {
     html += '<div class="step">';
-    html += '<h3>' + step.audit_id + '</h3>';
+    const label = step.agent_uri || step.agent_id || '(unknown agent)';
+    html += '<h3><span class="agent">' + escapeHtml(label) + '</span> &nbsp;' +
+            step.audit_id + '</h3>';
+    html += '<div>';
+    html += badge('step ' + step.step_id, 'info');
+    if (step.parent_step_ids && step.parent_step_ids.length > 0) {
+      html += badge('parents: ' + step.parent_step_ids.join(', '), 'info');
+    }
     if (step.fetch_error) {
       html += badge('fetch failed', 'err');
-      html += '<div class="kv">' + escapeHtml(step.fetch_error) + '</div>';
-      html += '</div>';
-      return;
-    }
-    if (step.signed) {
+    } else if (step.signed) {
       if (step.verified === true)      html += badge('signed + verified', 'ok');
       else if (step.verified === false) html += badge('SIGNATURE INVALID', 'err');
       else                              html += badge('signed (no key supplied)', 'info');
     } else {
       html += badge('unsigned (alg: none)', 'warn');
     }
+    html += '</div>';
+    if (step.fetch_error) {
+      html += '<div class="kv">' + escapeHtml(step.fetch_error) + '</div>';
+      html += '</div>';
+      return;
+    }
     const p = step.payload || {};
+    html += '<div>';
     if (p.server_id)    html += badge('server: ' + p.server_id, 'info');
-    if (p.agent_id)     html += badge('agent: ' + p.agent_id.slice(0, 12) + '…', 'info');
     if (p.status)       html += badge('status: ' + p.status, 'info');
+    html += '</div>';
     html += '<div class="kv">';
     if (p.issued_at)    html += '<b>issued_at:</b>   ' + p.issued_at + '\\n';
     if (p.principal_id) html += '<b>principal_id:</b> ' + p.principal_id + '\\n';
@@ -155,10 +189,19 @@ function renderChain(steps) {
     if (p.task_id)      html += '<b>task_id:</b>     ' + p.task_id + '\\n';
     if (p.request_id)   html += '<b>request_id:</b>  ' + p.request_id + '\\n';
     if (p.response_id)  html += '<b>response_id:</b> ' + p.response_id + '\\n';
-    if (p.previous_audit_id) html += '<b>previous_audit_id:</b> ' + p.previous_audit_id + '\\n';
-    if (p.extra)        html += '<b>extra:</b>       ' + escapeHtml(JSON.stringify(p.extra)) + '\\n';
-    html += '</div>';
-    html += '</div>';
+    if (p.previous_audit_id) {
+      html += '<b>previous_audit_id:</b>  ' + p.previous_audit_id + '\\n';
+    }
+    if (step.prior_actions && step.prior_actions.length > 0) {
+      html += '<b>prior_actions:</b>\\n';
+      step.prior_actions.forEach((pa) => {
+        const where = pa.agent_uri || '(unresolved)';
+        html += '  → agent ' + pa.agent_id.slice(0, 12) + '… @ ' +
+                escapeHtml(where) +
+                ', audit ' + pa.audit_id.slice(0, 12) + '…\\n';
+      });
+    }
+    html += '</div></div>';
   });
   results.innerHTML = html;
 }
@@ -205,10 +248,18 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(400, "agent_uri and audit_id are required")
             return
 
+        known_agents = data.get("known_agents") or {}
+        if not isinstance(known_agents, dict):
+            self._error(400, "known_agents must be a JSON object {agent_id: agent_uri}")
+            return
+
         try:
             steps = walk_chain(
                 agent_uri=agent_uri,
                 start_audit_id=audit_id,
+                known_agents={
+                    str(k).lower(): str(v) for k, v in known_agents.items()
+                },
                 insecure=bool(data.get("insecure")),
                 insecure_skip_verify=bool(data.get("insecure_skip_verify")),
             )

@@ -25,9 +25,24 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
 
 def _cmd_walk(args: argparse.Namespace) -> int:
+    known_agents = {}
+    if args.known_agents:
+        try:
+            with open(args.known_agents, "r", encoding="utf-8") as f:
+                known_agents = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"could not read --known-agents: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(known_agents, dict):
+            print(
+                "--known-agents must be a JSON object {agent_id: agent_uri}",
+                file=sys.stderr,
+            )
+            return 2
     steps = walk_chain(
         agent_uri=args.uri,
         start_audit_id=args.audit_id,
+        known_agents={str(k).lower(): str(v) for k, v in known_agents.items()},
         insecure=args.insecure,
         insecure_skip_verify=args.insecure_skip_verify,
     )
@@ -52,6 +67,14 @@ def main(argv: Optional[list] = None) -> int:
     p_walk = sub.add_parser("walk", help="Walk a chain from the CLI.")
     p_walk.add_argument("uri", help="agtp:// URI of the agent's daemon.")
     p_walk.add_argument("audit_id", help="Starting audit_id (64-char hex).")
+    p_walk.add_argument(
+        "--known-agents",
+        help=(
+            "Path to a JSON file mapping {agent_id: agent_uri}. The "
+            "walker uses this to resolve cross-agent prior_actions "
+            "references that don't carry an inline agent_uri."
+        ),
+    )
     p_walk.add_argument("--insecure", action="store_true",
                         help="Connect over plaintext (test fixtures only).")
     p_walk.add_argument("--insecure-skip-verify", action="store_true",

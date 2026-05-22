@@ -73,11 +73,39 @@ The walker stops when:
 
 ## Cross-agent chains
 
-Out of scope for v1. When a payload's `extra.prior_actions`
-references another agent's audit_id, the walker stops at the
-boundary; the operator restarts it against the other agent. A
-future revision will follow these links automatically once we have
-a discovery mechanism (ANS) to look up where each agent lives.
+The walker follows `extra.prior_actions[]` references across
+agents. Each entry carries `agent_id`, `audit_id`, and an optional
+`agent_uri`. When `agent_uri` is present (self-describing), the
+walker uses it directly. When absent, it consults the
+`--known-agents` map (CLI) / `known_agents` field (POST /walk
+body) — a JSON object mapping `agent_id` → `agtp://...` URI.
+
+Walk order is breadth-first. Each step records the indices of
+upstream steps that point to it (`parent_step_ids`), so renderers
+can rebuild the tree shape. Diamond cases (the same audit_id
+reachable via two different paths) appear once with two parents.
+
+When a cross-agent reference can't be resolved (no inline URI,
+not in the known-agents map), the step records a `fetch_error`
+and the branch stops there — the rest of the walk continues.
+
+```bash
+# CLI: --known-agents takes a JSON file mapping agent_id → URI.
+python -m tools.chain_inspector walk \
+    agtp://lauren.example \
+    e42bac... \
+    --known-agents ./agents-known.json
+```
+
+Where `agents-known.json` looks like:
+
+```json
+{
+  "f82d6e7f3e701beaab480d69aa620ba13e0113b722534f866cc3eb16bb3a1017":
+    "agtp://lauren.example.com",
+  "a99c8b1f...": "agtp://acme.tld"
+}
+```
 
 ## Authentication
 

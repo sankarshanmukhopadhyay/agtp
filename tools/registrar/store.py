@@ -187,6 +187,52 @@ class RegistrarStore:
             return None
         return load_genesis_json(path.read_text(encoding="utf-8"))
 
+    def sign_manifest(self, agent_doc_dict: dict) -> dict:
+        """Sign an operator-supplied AgentDocument with the
+        registrar's Ed25519 key (Tier 3.2).
+
+        The input is the dict shape ``AgentDocument.to_dict`` emits.
+        We construct an AgentDocument, set the manifest_issuer fields
+        to this registrar, sign with the registrar's private key,
+        and return the dict shape that callers persist to
+        ``{name}.agent.json``.
+
+        The signature covers the canonical-JSON of the document with
+        ``manifest_signature`` set to ``""`` — same exclude-the-
+        signature-field convention Genesis uses. A daemon loading the
+        signed document recomputes the same canonical form and
+        verifies against ``manifest_issuer_public_key``.
+
+        Raises ``ValueError`` when ``agent_doc_dict`` is structurally
+        invalid (missing required AgentDocument fields).
+        """
+        from core.identity import from_dict
+        # Strip any operator-provided manifest_* fields; we set them
+        # ourselves from the registrar's identity.
+        clean = {
+            k: v for k, v in agent_doc_dict.items()
+            if k not in (
+                "manifest_issuer",
+                "manifest_issuer_public_key",
+                "manifest_signature",
+            )
+        }
+        doc = from_dict(clean)
+        doc.manifest_issuer = self.issuer_id
+        doc.manifest_issuer_public_key = self._public_key_pem
+        doc.sign_manifest(self._private_key)
+        return doc.to_dict()
+
+        """Read a previously-issued Genesis from disk. ``None`` when
+        the agent_id is unknown to this registrar."""
+        # Defensive: refuse path separators in agent_id so a caller
+        # can't escape the issued/ directory.
+        safe = agent_id.strip().replace("/", "").replace("\\", "")
+        path = self._issued_dir / f"{safe}.json"
+        if not path.exists():
+            return None
+        return load_genesis_json(path.read_text(encoding="utf-8"))
+
     def list_issued(self) -> List[str]:
         """Return the agent_ids of every Genesis issued by this
         registrar."""

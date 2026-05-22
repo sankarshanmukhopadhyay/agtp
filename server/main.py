@@ -467,12 +467,32 @@ class AgentRegistry:
             try:
                 data = json.loads(json_path.read_text(encoding="utf-8"))
                 doc = from_dict(data)
-                self.agents[doc.agent_id] = doc
-                self.agent_paths[doc.agent_id] = json_path
-                print(f"[server] loaded {doc.name} ({doc.agent_id[:12]}...)")
             except (json.JSONDecodeError, ValueError) as exc:
                 print(f"[server] skipping {json_path}: {exc}", file=sys.stderr)
                 continue
+            # Tier 3.2: when the AgentDocument carries a registrar
+            # signature, verify it on load. A bad signature is
+            # treated as adversarial — refuse to host the agent
+            # rather than silently accept its claims (e.g. an
+            # operator forging a Tier-1 trust posture on what would
+            # otherwise be a Tier-2 manifest).
+            if doc.manifest_signature:
+                try:
+                    doc.verify_manifest_signature()
+                    print(
+                        f"[server]   manifest signed by "
+                        f"{doc.manifest_issuer!r}"
+                    )
+                except ValueError as exc:
+                    print(
+                        f"[server] skipping {json_path.name}: "
+                        f"manifest signature did not verify ({exc})",
+                        file=sys.stderr,
+                    )
+                    continue
+            self.agents[doc.agent_id] = doc
+            self.agent_paths[doc.agent_id] = json_path
+            print(f"[server] loaded {doc.name} ({doc.agent_id[:12]}...)")
 
             # Phase 4: optionally load the matching Agent Genesis.
             # Naming convention: ``{stem}.genesis.json`` next to
