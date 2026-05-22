@@ -525,11 +525,19 @@ class AuditConfig:
     ``%APPDATA%\\agtp\\audit\\chain_heads\\`` on Windows). Operators
     who run multiple daemons on one host MUST set this explicitly so
     chains don't collide.
+
+    ``records_root`` is the filesystem directory the daemon uses to
+    persist per-audit-id JWS records (the Phase-6 INSPECT read
+    surface). Empty string selects the platform default
+    (``~/.agtp/audit/records/`` on POSIX,
+    ``%APPDATA%\\agtp\\audit\\records\\`` on Windows). Sharded by
+    a 2-char hex prefix to keep directory sizes manageable.
     """
 
     path: str = "stderr"
     attribution_records_enabled: bool = False
     chain_head_root: str = ""
+    records_root: str = ""
 
 
 @dataclass
@@ -771,6 +779,7 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
             audit_block.get("attribution_records_enabled", False)
         ),
         chain_head_root=str(audit_block.get("chain_head_root") or ""),
+        records_root=str(audit_block.get("records_root") or ""),
     )
 
     gateway_block = data.get("gateway", {}) or {}

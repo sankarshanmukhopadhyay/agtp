@@ -728,6 +728,10 @@ def _finalize_response(
             AuditChainStore as _AuditChainStore,
             default_chain_head_root as _default_chain_head_root,
         )
+        from server.audit_records import (
+            AuditRecordStore as _AuditRecordStore,
+            default_records_root as _default_records_root,
+        )
 
         issued_at = _dt.now(tz=_tz.utc).isoformat().replace("+00:00", "Z")
         signing_service = (
@@ -766,6 +770,25 @@ def _finalize_response(
         )
         headers["Attribution-Record"] = record.jws
         headers["Audit-ID"] = record.audit_id
+
+        # Phase 6: persist the JWS under its audit_id so INSPECT can
+        # serve it later. Independent of chain-head update — even
+        # server-level operations (empty agent_id, no chain head)
+        # produce a JWS that the INSPECT surface can return.
+        records_root = getattr(audit, "records_root", "") or ""
+        record_store = _AuditRecordStore(
+            Path(records_root).expanduser() if records_root
+            else _default_records_root()
+        )
+        try:
+            record_store.write(record.audit_id, record.jws)
+        except OSError as exc:  # pragma: no cover - defensive
+            import sys as _sys
+            print(
+                f"[server] audit record write failed for "
+                f"{record.audit_id[:12]}...: {exc}",
+                file=_sys.stderr,
+            )
 
         # Chain head update — best-effort. A failure (disk full,
         # permission denied) is logged but doesn't fail the response.

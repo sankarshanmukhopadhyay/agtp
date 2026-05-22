@@ -50,6 +50,7 @@ agtpd owns everything inside the protocol boundary. An operator who installs agt
 | 8 | Agent-ID resolution | Implemented |
 | 9 | Agent Manifest serving | Implemented (`server/manifest.py`) |
 | 10 | DISCOVER and discovery routing | Implemented; supports `target` ∈ {methods, agents, tools, apis, genesis}. Phase 4's `target=genesis` returns the agent's Agent Genesis when one is loaded next to the AgentDocument. Phase 5: `target=agents` entries carry `trust_tier`, `verification_path`, optional `trust_warning` (auto-set for Tier 2 per §6.2) and `owner_id` (lifted from the agent's Genesis when one is loaded). |
+| 10b | INSPECT audit read surface | Implemented (Phase 6); embedded verb #13. `target=audit` returns the signed JWS for a given `audit_id`; `target=chain_head` returns the latest `audit_id` for a given `agent_id`. JWSes persisted under `[audit].records_root` (default `~/.agtp/audit/records/`, sharded by 2-char hex prefix). Powers the chain inspector at `tools/chain_inspector/`. |
 | 11 | Configuration | Implemented (`agtp-server.toml`) |
 | 12 | Logging | Basic; needs structured format |
 | 13 | Session management | Specified, partial implementation |

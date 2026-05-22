@@ -214,10 +214,12 @@ class MethodSetTests(unittest.TestCase):
 
     # ---- registry / semantic metadata ----
 
-    def test_registry_has_all_twelve_embedded_methods(self) -> None:
+    def test_registry_has_all_embedded_methods(self) -> None:
+        # 12 original protocol primitives + Phase 6 INSPECT.
         expected = {
             "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
             "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
+            "INSPECT",
         }
         from core.methods import EMBEDDED_VERBS
         embedded = {
@@ -227,7 +229,10 @@ class MethodSetTests(unittest.TestCase):
         self.assertEqual(embedded, expected)
 
     def test_registry_entries_are_semantic_complete(self) -> None:
-        cognitive = {"QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE"}
+        cognitive = {
+            "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
+            "INSPECT",  # Phase 6: audit read surface
+        }
         mechanics = {"DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY"}
         for name, spec in REGISTRY.items():
             self.assertEqual(spec.name, name, f"{name}: name field mismatch")
@@ -520,6 +525,7 @@ class EmbeddedSemanticBlockTests(unittest.TestCase):
     EMBEDDED = (
         "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
         "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
+        "INSPECT",
     )
 
     def test_every_embedded_method_has_semantic_block(self):

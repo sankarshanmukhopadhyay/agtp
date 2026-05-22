@@ -288,12 +288,14 @@ class ServerManifestTests(unittest.TestCase):
         self.assertIn("issued", d["server"])
         self.assertIn("updated", d["server"])
 
-    def test_manifest_lists_all_twelve_embedded_methods(self):
+    def test_manifest_lists_all_embedded_methods(self):
         m = generate(self.config, self.registry.agents)
         names = {e["name"] for e in m.embedded_methods}
+        # 12 original protocol primitives + Phase 6 INSPECT.
         expected = {
             "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
             "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
+            "INSPECT",
         }
         self.assertEqual(names, expected)
 
@@ -341,7 +343,8 @@ class ServerManifestTests(unittest.TestCase):
         )
         payload = json.loads(resp.body_bytes.decode("utf-8"))
         self.assertEqual(payload["server"]["server_id"], "test.agtp.local")
-        self.assertEqual(len(payload["embedded_methods"]), 12)
+        # 12 original primitives + Phase 6 INSPECT.
+        self.assertEqual(len(payload["embedded_methods"]), 13)
         self.assertEqual(payload["agent_disclosure"], "public")
         # Policy block has the five operational toggles.
         self.assertIn("policies", payload)
@@ -597,14 +600,14 @@ class EndpointsInManifestTests(unittest.TestCase):
     def test_embedded_methods_still_listed_alongside_endpoints(self):
         # Phase 2 doesn't take embedded primitives off the wire when
         # endpoints are registered. Top-level ``embedded_methods``
-        # keeps its 12 entries.
+        # keeps its full set (13 after Phase 6 added INSPECT).
         reg = self._populated_registry()
         m = generate(
             self.config, self.registry.agents,
             endpoint_registry=reg,
         )
         d = m.to_dict()
-        self.assertEqual(len(d["embedded_methods"]), 12)
+        self.assertEqual(len(d["embedded_methods"]), 13)
 
     def test_endpoint_section_surfaces_handler_block_with_type(self):
         # ``handler: {type: ...}`` exposed; ``handler.reference``

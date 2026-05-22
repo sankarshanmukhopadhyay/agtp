@@ -147,12 +147,13 @@ class ElemenBridgeTests(unittest.TestCase):
         )
         self.assertEqual(result["summary"]["embedded_count"], 8)
 
-    def test_discover_against_orchestrator_lists_twelve(self):
+    def test_discover_against_orchestrator_lists_all_embedded(self):
         result = elemen_client.discover_methods(
             self._uri(ORCH_ID), insecure=True, insecure_skip_verify=True
         )
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["summary"]["embedded_count"], 12)
+        # 12 original protocol primitives + Phase 6 INSPECT.
+        self.assertEqual(result["summary"]["embedded_count"], 13)
 
     # ---- invoke_method ----
 

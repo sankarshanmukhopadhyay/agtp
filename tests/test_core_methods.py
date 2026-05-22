@@ -32,11 +32,15 @@ from core.methods import (
 
 class CatalogShapeTests(unittest.TestCase):
 
-    def test_embedded_set_has_twelve(self):
-        self.assertEqual(len(EMBEDDED_VERBS), 12)
+    def test_embedded_set_has_thirteen(self):
+        # 12 original protocol primitives + Phase 6 INSPECT (audit
+        # read surface). Every embedded verb is implemented by every
+        # AGTP server identically.
+        self.assertEqual(len(EMBEDDED_VERBS), 13)
         for name in (
             "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
             "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
+            "INSPECT",
         ):
             self.assertIn(name, EMBEDDED_VERBS)
 

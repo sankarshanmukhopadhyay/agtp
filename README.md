@@ -745,6 +745,31 @@ without a follow-up `DESCRIBE`:
 Tier 2 entries also carry `"trust_warning": "verification-incomplete"`
 per draft-hood-independent-agtp §6.2.
 
+## Walking the audit chain
+
+Every response with `attribution_records_enabled` carries an
+`Audit-ID` header that anchors a per-agent hash chain. To follow
+that chain, point the chain inspector at the agent's daemon and the
+starting audit_id:
+
+```bash
+python -m tools.chain_inspector serve --port 4482
+# then open http://localhost:4482/
+```
+
+or from the CLI:
+
+```bash
+python -m tools.chain_inspector walk agtp://lauren.example.com \
+    e42bac416ea7c9249f182a4d93e12fd749bcb0e5d6254b21fc98a898a5f93617
+```
+
+The inspector uses the **INSPECT** method (Phase 6, embedded verb
+#13) to fetch each signed JWS from the agent's daemon and walks
+`previous_audit_id` backwards. See
+[`tools/chain_inspector/`](tools/chain_inspector/README.md) for the
+full UX and `--insecure` / verification options.
+
 ## What's not in v1
 
 Deliberate scope cuts, listed for future revisions:

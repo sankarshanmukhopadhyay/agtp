@@ -189,6 +189,25 @@ POSIX, `%APPDATA%\agtp\audit\chain_heads\` on Windows). Operators
 running multiple daemons on one host MUST set this explicitly to
 prevent chain collisions.
 
+The full JWS for every audit_id is additionally persisted under
+`[audit].records_root` (default `~/.agtp/audit/records/`, sharded
+by 2-char hex prefix). The Phase-6 **INSPECT** method reads from
+this store:
+
+```
+AGTP/1.0 INSPECT
+Agent-ID: <agent>
+Content-Type: application/agtp+json
+
+{"target": "audit", "audit_id": "<64-hex>"}
+```
+
+Response body carries `{jws, header, payload, ...}`. A second
+shape, `{"target": "chain_head", "agent_id": "<64-hex>"}`, returns
+the latest audit_id for the given agent. Both are read by the
+chain inspector at `tools/chain_inspector/` to walk the chain
+backwards.
+
 ### Owner-ID
 
 When the agent's owner (the legal entity that registered the agent)

@@ -39,6 +39,7 @@ OUTPUT = REPO_ROOT / "core" / "methods.json"
 EMBEDDED = [
     "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
     "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
+    "INSPECT",
 ]
 
 

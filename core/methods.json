@@ -12,7 +12,8 @@
     "CONFIRM",
     "SUSPEND",
     "PROPOSE",
-    "NOTIFY"
+    "NOTIFY",
+    "INSPECT"
   ],
   "legacy": {
     "GET": {

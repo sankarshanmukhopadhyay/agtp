@@ -31,6 +31,7 @@ import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Protocol
 
 from core import wire
@@ -841,6 +842,177 @@ def handle_describe(
             HEADER_DOCUMENT_TYPE: DOC_TYPE_AGENT_DOCUMENT,
         },
         body_bytes=body,
+    )
+
+
+@method(
+    name="INSPECT",
+    category="cognitive",
+    semantic_class="action-intent",
+    idempotent=True,
+    state_modifying=False,
+    required_params=["target"],
+    optional_params=["audit_id", "agent_id"],
+    error_codes=[400, 404, 422],
+    description=(
+        "Read a record from this server's audit store. target=audit "
+        "returns the JWS for a given audit_id; target=chain_head "
+        "returns the latest audit_id for a given agent_id."
+    ),
+    intent="Fetch a signed Attribution-Record by its identifier.",
+    actor="agent",
+    outcome="The signed JWS for the requested audit record is returned.",
+    capability="discovery",
+    confidence=0.95,
+    impact="informational",
+    is_idempotent=True,
+)
+def handle_inspect(
+    request: wire.AGTPRequest,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+) -> wire.AGTPResponse:
+    """Phase-6 audit read surface. Two shapes:
+
+      * ``{"target": "audit", "audit_id": "<64-hex>"}`` returns the
+        JWS (compact-form) plus the decoded payload so the inspector
+        can verify and walk in one round-trip.
+      * ``{"target": "chain_head", "agent_id": "<64-hex>"}`` returns
+        the latest known audit_id for that agent.
+
+    No auth in v1 — the records are designed to be publicly readable
+    so chain inspectors and regulators can walk arbitrary chains
+    without credentials. Operators who want to lock this down put
+    the daemon behind a SEP (mod_agent_cert) that requires a
+    specific scope before INSPECT is admitted.
+    """
+    spec = REGISTRY["INSPECT"]
+    try:
+        params = parse_body(request)
+    except ValueError as exc:
+        return error_response(400, "Bad Request", "invalid-body", str(exc))
+
+    err = require_params(spec, params)
+    if err:
+        return err
+
+    target = str(params["target"]).lower()
+
+    if target == "audit":
+        audit_id = str(params.get("audit_id") or "").strip().lower()
+        if not audit_id:
+            return error_response(
+                400, "Bad Request",
+                "missing-audit-id",
+                "target=audit requires an audit_id parameter",
+            )
+        # Read from the configured records root. Falls back to the
+        # platform default when the operator didn't set one.
+        record_store = _resolve_record_store(server_state)
+        jws = record_store.read(audit_id) if record_store else None
+        if jws is None:
+            return error_response(
+                404, "Not Found",
+                "audit-record-not-found",
+                f"no audit record stored under {audit_id!r}",
+                extra={"audit_id": audit_id},
+            )
+        # Parse the JWS so callers get the payload alongside the
+        # opaque form. The JWS itself is the verifiable artifact;
+        # the payload is convenience.
+        from server.signing import (
+            AttributionRecordError as _ARErr,
+            parse_attribution_record as _parse,
+        )
+        try:
+            header, payload, _sig = _parse(jws)
+        except _ARErr as exc:
+            return error_response(
+                500, "Internal Server Error",
+                "stored-record-corrupt",
+                f"stored JWS for {audit_id!r} did not parse: {exc}",
+            )
+        return json_response(
+            200, "OK",
+            {
+                "method": "INSPECT",
+                "target": "audit",
+                "audit_id": audit_id,
+                "jws": jws,
+                "header": header,
+                "payload": payload,
+                "issued_at": _utc_now_iso(),
+            },
+            method_name="INSPECT",
+        )
+
+    if target == "chain_head":
+        agent_id_param = str(params.get("agent_id") or "").strip().lower()
+        if not agent_id_param:
+            return error_response(
+                400, "Bad Request",
+                "missing-agent-id",
+                "target=chain_head requires an agent_id parameter",
+            )
+        chain_store = _resolve_chain_store(server_state)
+        head = chain_store.head(agent_id_param) if chain_store else None
+        if head is None:
+            return error_response(
+                404, "Not Found",
+                "chain-head-not-found",
+                f"no chain head recorded for agent {agent_id_param!r}",
+                extra={"agent_id": agent_id_param},
+            )
+        return json_response(
+            200, "OK",
+            {
+                "method": "INSPECT",
+                "target": "chain_head",
+                "agent_id": agent_id_param,
+                "audit_id": head.audit_id,
+                "last_at": head.at_iso,
+                "issued_at": _utc_now_iso(),
+            },
+            method_name="INSPECT",
+        )
+
+    return error_response(
+        422, "Unprocessable Entity",
+        "unknown-inspect-target",
+        f"target must be one of: audit, chain_head (got {target!r})",
+    )
+
+
+def _resolve_record_store(server_state: Any):
+    """Resolve the AuditRecordStore for INSPECT lookups, sharing
+    config knobs with ``_finalize_response``. Returns ``None`` when
+    Attribution-Records are disabled — there's nothing to read in
+    that case."""
+    config = getattr(server_state, "config", None)
+    audit = getattr(config, "audit", None) if config is not None else None
+    if audit is None or not getattr(audit, "attribution_records_enabled", False):
+        return None
+    from server.audit_records import (
+        AuditRecordStore, default_records_root,
+    )
+    root = getattr(audit, "records_root", "") or ""
+    return AuditRecordStore(
+        Path(root).expanduser() if root else default_records_root()
+    )
+
+
+def _resolve_chain_store(server_state: Any):
+    """Same as :func:`_resolve_record_store` for the chain head store."""
+    config = getattr(server_state, "config", None)
+    audit = getattr(config, "audit", None) if config is not None else None
+    if audit is None or not getattr(audit, "attribution_records_enabled", False):
+        return None
+    from server.audit_chain import (
+        AuditChainStore, default_chain_head_root,
+    )
+    root = getattr(audit, "chain_head_root", "") or ""
+    return AuditChainStore(
+        Path(root).expanduser() if root else default_chain_head_root()
     )
 
 
