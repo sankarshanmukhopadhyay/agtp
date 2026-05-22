@@ -635,17 +635,55 @@ def handle_query(
     )
 
 
+#: T4.1: protocol-reserved DISCOVER paths. The daemon implements
+#: each identically across deployments; operator-registered custom
+#: paths (``DISCOVER /products``, etc.) live in the endpoint
+#: registry and MUST NOT collide with these (per the path-grammar
+#: ``validate_discover_path`` check).
+_DISCOVER_PATH_TO_TARGET: Dict[str, str] = {
+    "/methods": "methods",
+    "/agents":  "agents",
+    "/tools":   "tools",
+    "/apis":    "apis",
+    "/genesis": "genesis",
+}
+
+
+_DISCOVER_LEGACY_WARNED: set = set()
+
+
+def _warn_legacy_discover_target(agent_id: str) -> None:
+    """One-shot stderr warning per agent_id when a caller uses the
+    legacy ``target=`` body parameter form. Logged once so a chatty
+    legacy client doesn't drown the server log."""
+    if agent_id in _DISCOVER_LEGACY_WARNED:
+        return
+    _DISCOVER_LEGACY_WARNED.add(agent_id)
+    import sys as _sys
+    _sys.stderr.write(
+        f"[server] DISCOVER from {agent_id[:12]}... used the legacy "
+        f"body-`target` form. Migrate to path-keyed form "
+        f"(DISCOVER /methods, /agents, /tools, /apis, /genesis) — "
+        f"the body form is accepted during transition but will be "
+        f"removed in a future revision.\n"
+    )
+
+
 @method(
     name="DISCOVER",
     category="cognitive",
     semantic_class="action-intent",
     idempotent=True,
     state_modifying=False,
-    required_params=["target"],
-    optional_params=["filter"],
-    error_codes=[400, 405, 422],
+    required_params=[],
+    optional_params=["target", "filter"],
+    error_codes=[400, 404, 405, 422, 460],
     description=(
-        "Enumerate available agents, methods, APIs, or tools on this server."
+        "Enumerate available agents, methods, APIs, tools, or other "
+        "operator-defined collections. T4.1 makes DISCOVER path-keyed: "
+        "DISCOVER /methods, DISCOVER /agents, DISCOVER /tools, "
+        "DISCOVER /apis, DISCOVER /genesis are protocol-reserved. The "
+        "body-target form is accepted during transition."
     ),
     intent="Enumerate the methods or capabilities a server exposes.",
     actor="agent",
@@ -666,11 +704,59 @@ def handle_discover(
     except ValueError as exc:
         return error_response(400, "Bad Request", "invalid-body", str(exc))
 
-    err = require_params(spec, params)
-    if err:
-        return err
+    # T4.1 path-keyed dispatch. ``request.path`` is already grammar-
+    # validated by the dispatcher; we just map it onto a target.
+    request_path = (getattr(request, "path", "/") or "/").lower()
+    path_target = _DISCOVER_PATH_TO_TARGET.get(request_path)
 
-    target = str(params["target"]).lower()
+    # Back-compat: accept the legacy body-target form on requests
+    # whose path is the default "/". When path is non-default the
+    # path wins outright.
+    body_target = ""
+    if isinstance(params, dict):
+        raw = params.get("target")
+        if isinstance(raw, str) and raw:
+            body_target = raw.lower()
+
+    if path_target is not None:
+        target = path_target
+        if body_target and body_target != path_target:
+            return error_response(
+                400, "Bad Request",
+                "discover-target-conflict",
+                (
+                    f"DISCOVER request path {request_path!r} maps to "
+                    f"target {path_target!r}, but the body specifies "
+                    f"target={body_target!r}. Remove the body "
+                    f"`target` and rely on the path."
+                ),
+            )
+    elif request_path == "/":
+        if body_target:
+            target = body_target
+            _warn_legacy_discover_target(agent_doc.agent_id)
+        else:
+            # T4.1: no target supplied. Return the directory of
+            # protocol-reserved DISCOVER endpoints so the caller
+            # can navigate without prior knowledge of the spec.
+            return _discover_index(agent_doc)
+    else:
+        # Path doesn't match a reserved root and isn't the default.
+        # In a future revision the endpoint registry will accept
+        # operator-defined custom paths here; until then any
+        # non-reserved path returns 460 (the same 460 the path-
+        # grammar would raise for collision).
+        return error_response(
+            460, "Endpoint Violation",
+            "discover-unknown-path",
+            (
+                f"DISCOVER path {request_path!r} is not a "
+                f"protocol-reserved root and no custom DISCOVER "
+                f"endpoint is registered for it. Reserved roots: "
+                f"{sorted(_DISCOVER_PATH_TO_TARGET)}."
+            ),
+            extra={"path": request_path},
+        )
 
     if target == "methods":
         # Bucket by source: embedded vs custom. Each bucket is sorted
@@ -784,6 +870,33 @@ def handle_discover(
             "target": target,
             "items": items,
             "item_count": len(items),
+            "issued_at": _utc_now_iso(),
+        },
+        method_name="DISCOVER",
+    )
+
+
+def _discover_index(agent_doc: AgentDocument) -> wire.AGTPResponse:
+    """Return the directory of DISCOVER endpoints available on this
+    server. Used when a caller invokes ``DISCOVER`` on the bare
+    URI without a target — gives them a self-describing way to
+    learn what they can DISCOVER without prior catalog knowledge.
+    """
+    endpoints = []
+    for path, target in sorted(_DISCOVER_PATH_TO_TARGET.items()):
+        endpoints.append({
+            "path": path,
+            "target": target,
+            "reserved": True,
+        })
+    return json_response(
+        200, "OK",
+        {
+            "method": "DISCOVER",
+            "agent_id": agent_doc.agent_id,
+            "target": "index",
+            "endpoints": endpoints,
+            "endpoint_count": len(endpoints),
             "issued_at": _utc_now_iso(),
         },
         method_name="DISCOVER",
@@ -1022,23 +1135,59 @@ def handle_inspect(
         lifecycle_store = _resolve_lifecycle_store(server_state)
         events = lifecycle_store.read_all(agent_id_param) if lifecycle_store else []
 
-        # Parse each JWS so callers get the decoded payload alongside
-        # the opaque form. Bad lines surface as None entries — better
-        # to expose a corrupt entry than silently drop it from the
-        # historical record.
+        # T4.2: each stored line is one of:
+        #   * a JWS Compact (three dot-separated base64url segments) —
+        #     mode=jws records, default form
+        #   * "cose:<base64url(COSE_Sign1 bytes)>" — mode=scitt
+        #     records
+        # The reader sniffs the prefix per line so a mode flip
+        # mid-stream stays readable. Bad lines surface as
+        # {"parse_error": True} entries — better to expose a corrupt
+        # entry than silently drop it from the historical record.
         from server.signing import (
             AttributionRecordError as _ARErr,
             parse_attribution_record as _parse,
         )
         decoded: List[Dict[str, Any]] = []
-        for jws in events:
+        for line in events:
+            if line.startswith("cose:"):
+                import base64 as _b64
+                from server.cose import (
+                    CoseError as _CErr,
+                    parse_cose_payload as _parse_cose,
+                )
+                try:
+                    raw = _b64.urlsafe_b64decode(
+                        line[len("cose:"):] + "=" * (
+                            -len(line[len("cose:"):]) % 4
+                        )
+                    )
+                    parsed = _parse_cose(raw)
+                except (ValueError, _CErr):
+                    decoded.append({
+                        "format": "cose",
+                        "line": line,
+                        "parse_error": True,
+                    })
+                    continue
+                decoded.append({
+                    "format": "cose",
+                    "line": line,
+                    "header": parsed["header"],
+                    "payload": parsed["payload"],
+                })
+                continue
+            # JWS Compact (default form).
             try:
-                header, payload, _sig = _parse(jws)
+                header, payload, _sig = _parse(line)
             except _ARErr:
-                decoded.append({"jws": jws, "parse_error": True})
+                decoded.append({
+                    "format": "jws", "jws": line, "parse_error": True,
+                })
                 continue
             decoded.append({
-                "jws": jws, "header": header, "payload": payload,
+                "format": "jws", "jws": line,
+                "header": header, "payload": payload,
             })
         return json_response(
             200, "OK",
@@ -1434,9 +1583,19 @@ def _emit_lifecycle_event(
     new_status: str,
     reason: str,
 ) -> str:
-    """Sign a lifecycle event JWS and append it to the agent's stream.
-    Returns the audit_id (sha256 of the JWS) so the caller can stamp
-    it on the response."""
+    """Sign a lifecycle event and append it to the agent's stream.
+
+    Dispatches on ``[audit].mode``:
+
+      * ``jws`` (default) — emit a JWS Compact Attribution-Record
+        and store the compact string verbatim. ``audit_id`` =
+        sha256(jws).
+      * ``scitt`` — emit an RFC 9943 COSE_Sign1 statement over the
+        same JSON payload, store as ``cose:<base64url>``.
+        ``audit_id`` = sha256(COSE bytes).
+
+    Returns the audit_id so the caller stamps it on the response.
+    """
     from datetime import datetime as _dt, timezone as _tz
     issued_at = _dt.now(tz=_tz.utc).isoformat().replace("+00:00", "Z")
     server_id = (
@@ -1453,6 +1612,36 @@ def _emit_lifecycle_event(
     }
     if reason:
         extra["reason"] = reason
+
+    audit = getattr(config, "audit", None) if config is not None else None
+    mode = (getattr(audit, "mode", "jws") or "jws") if audit else "jws"
+
+    if mode == "scitt":
+        # SCITT mode: COSE_Sign1 over the canonical payload JSON.
+        import json as _json
+        from server.cose import build_cose_sign1, cose_audit_id
+        payload = {
+            "agent_id": agent_id,
+            "server_id": server_id,
+            "issued_at": issued_at,
+            "response_id": response_id,
+            "status": 200,
+            "extra": extra,
+        }
+        # Canonical JSON so SCITT verifiers reproduce the same bytes
+        # we signed.
+        payload_bytes = _json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+        cose_bytes = build_cose_sign1(
+            private_key=signing_service._key,
+            payload_bytes=payload_bytes,
+            kid=signing_service.key_id,
+        )
+        lifecycle_store.append_cose(agent_id, cose_bytes)
+        return cose_audit_id(cose_bytes)
+
+    # Default: JWS Compact (same shape as Attribution-Record).
     record = signing_service.build_attribution_record(
         agent_id=agent_id,
         server_id=server_id,

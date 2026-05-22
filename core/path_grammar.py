@@ -36,6 +36,18 @@ from core.methods import APPROVED_VERBS, LEGACY_VERBS
 PATH_PROTOCOL_VERBS = APPROVED_VERBS | LEGACY_VERBS
 
 
+#: Reserved DISCOVER roots — protocol-level paths every AGTP daemon
+#: must answer to identically. Custom DISCOVER endpoints (operator-
+#: registered ``DISCOVER /products``, ``DISCOVER /projects``, etc.)
+#: MUST NOT collide with these by starting with a reserved-root name
+#: (per the T4.1 design). The rule blocks the obvious collisions
+#: (``/agents``) plus prefix-shadowing (``/agents-products``,
+#: ``/methodsv2``) that would invite confusion.
+DISCOVER_RESERVED_ROOTS = frozenset({
+    "agents", "methods", "tools", "apis", "genesis",
+})
+
+
 class PathGrammarError(ValueError):
     """
     Raised when a path violates AGTP path grammar.
@@ -113,8 +125,63 @@ def validate_path(path: str) -> None:
             )
 
 
+def validate_discover_path(path: str) -> None:
+    """Validate the path token on a custom (operator-registered)
+    ``DISCOVER`` endpoint.
+
+    Custom paths MAY use any first segment that does not start with
+    one of the protocol-reserved roots (``agents``, ``methods``,
+    ``tools``, ``apis``, ``genesis``). Exact-match reserved paths
+    (``/agents``, ``/methods``, etc.) are handled by the daemon's
+    hardcoded protocol routes and aren't passed through this
+    validator — callers register only their custom endpoints.
+
+    Examples that PASS:
+      ``/products``, ``/projects``, ``/catalog``,
+      ``/customers/active``
+
+    Examples that FAIL with ``discover-reserved-prefix``:
+      ``/agents-products``  (starts with ``agents``)
+      ``/methodsv2``        (starts with ``methods``)
+      ``/genesis-archive``  (starts with ``genesis``)
+
+    Path-grammar invariants (start with ``/``, no trailing slash,
+    no verb-in-path) are enforced first via :func:`validate_path`.
+    """
+    validate_path(path)
+    segments = [s for s in path.split("/") if s]
+    if not segments:
+        return  # bare root — server-manifest case, daemon handles
+    first = segments[0].lower()
+    # Skip parameterized first segments — operators expressing
+    # ``DISCOVER /{tenant_id}/products`` aren't shadowing a reserved
+    # root; the variable is filled in at request time.
+    if first.startswith("{") and first.endswith("}"):
+        return
+    # Exact-match reserved roots are protocol-owned. The DISCOVER
+    # handler short-circuits them before the validator sees the path,
+    # but accept them here too so the function is safe to call on any
+    # candidate DISCOVER path.
+    if first in DISCOVER_RESERVED_ROOTS:
+        return
+    for root in DISCOVER_RESERVED_ROOTS:
+        if first.startswith(root):
+            raise PathGrammarError(
+                "discover-reserved-prefix",
+                (
+                    f"DISCOVER path segment {first!r} collides with "
+                    f"reserved root {root!r}. Operators must choose a "
+                    f"first segment that does not begin with any of: "
+                    f"{sorted(DISCOVER_RESERVED_ROOTS)}."
+                ),
+                segment=first,
+            )
+
+
 __all__ = [
+    "DISCOVER_RESERVED_ROOTS",
     "PATH_PROTOCOL_VERBS",
     "PathGrammarError",
+    "validate_discover_path",
     "validate_path",
 ]

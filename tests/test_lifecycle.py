@@ -392,26 +392,8 @@ def test_inspect_lifecycle_missing_agent_id_returns_400(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# [audit].mode = scitt boot refusal.
+# [audit].mode validation.
 # ---------------------------------------------------------------------------
-
-
-def test_scitt_mode_is_refused_at_boot(tmp_path: Path) -> None:
-    """Phase 8 reserves scitt for future work. Configuring it must
-    fail boot with a clear message so operators know not to ship
-    SCITT-dependent verifiers yet."""
-    from server.main import run
-    cfg = ServerConfig(
-        server=ServerInfo(server_id="t.local", operator="o", contact="c"),
-        audit=AuditConfig(
-            attribution_records_enabled=True, mode="scitt",
-        ),
-    )
-    with pytest.raises(RuntimeError) as exc_info:
-        run(host="127.0.0.1", port=0, agents_dir=tmp_path / "agents", config=cfg)
-    msg = str(exc_info.value).lower()
-    assert "scitt" in msg
-    assert "future" in msg or "reserved" in msg
 
 
 def test_unknown_audit_mode_is_refused(tmp_path: Path) -> None:

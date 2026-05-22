@@ -803,13 +803,23 @@ Agents transition through three states:
 | `DEACTIVATE` | `suspended` | yes (ACTIVATE) |
 | `REVOKE` | `retired` | no — Agent-ID never reused (AGTP-LOG §2) |
 
-Each transition appends a signed JWS to the agent's lifecycle
+Each transition appends a signed receipt to the agent's lifecycle
 stream at `~/.agtp/audit/lifecycle/{agent_id}.jsonl`. Read the
 stream with `INSPECT {target: lifecycle, agent_id: ...}` or via
-the chain inspector at `tools/chain_inspector/`. SCITT
-(RFC 9943 COSE_Sign1) is reserved via `[audit].mode = scitt`
-but isn't implemented yet — set it and the daemon refuses to
-boot with a "future work" message.
+the chain inspector at `tools/chain_inspector/`.
+
+Two on-disk forms are supported, chosen by `[audit].mode`:
+
+| Mode | Per-line format | Notes |
+|---|---|---|
+| `jws` (default) | JWS Compact-form Attribution-Record | AGTP-native; the same record shape per-action audit uses |
+| `scitt` | `cose:<base64url(COSE_Sign1 bytes)>` | RFC 9943 SCITT statement; consumable by any SCITT verifier without AGTP-specific knowledge |
+
+The same Ed25519 signing key signs both forms — one key, one
+verifier model regardless of mode. The two forms can coexist in
+the same file across a mode flip; `INSPECT target=lifecycle`
+sniffs each line by prefix and returns `{format: "jws" | "cose",
+...}` entries so existing receipts stay readable.
 
 ## Walking the audit chain
 

@@ -329,12 +329,17 @@ Implementations MAY include implementation-specific headers
 - **Additional optional headers** if deployment experience
   surfaces real needs (Priority, TTL, Budget-Limit, Zone-ID —
   currently uncertain).
-- **COSE_Sign1 / SCITT envelope** — Attribution-Record is currently
-  emitted as JWS Compact (RFC 7515). The AGTP-LOG transparency-log
-  draft anticipates a COSE_Sign1 form (RFC 9943) for SCITT
-  interoperability. JWS stays the wire default; SCITT receipts will
-  ride alongside as a parallel emission once the log protocol is
-  implemented.
+- **COSE_Sign1 / SCITT envelope** — per-action Attribution-Records
+  are emitted as JWS Compact (RFC 7515) on the wire. The lifecycle
+  stream (ACTIVATE / DEACTIVATE / REVOKE / REINSTATE / DEPRECATE)
+  also supports a SCITT form via `[audit].mode = scitt`: each
+  on-disk line becomes `cose:<base64url(COSE_Sign1 bytes)>` per
+  RFC 9943, signed by the same daemon Ed25519 key. JWS stays the
+  default and the wire form; SCITT mode is for operators who want
+  their lifecycle log directly consumable by a SCITT verifier
+  without AGTP-specific tooling. Mixed `jws` + `cose:` lines in a
+  single file are tolerated across a mode flip — the INSPECT
+  reader sniffs each line by prefix.
 
 ## Migration from pre-§10
 
