@@ -745,6 +745,54 @@ without a follow-up `DESCRIBE`:
 Tier 2 entries also carry `"trust_warning": "verification-incomplete"`
 per draft-hood-independent-agtp §6.2.
 
+## Agentic commerce
+
+Agents can transact with verified merchants. The plumbing is:
+
+- **Genesis is identity-only.** It never carries a `role` — the role is
+  a manifest-level attribute that can change over the agent's life.
+  This is what lets an agent registered today as a plain agent later
+  acquire merchant capabilities without minting a new Agent-ID or
+  orphaning its audit chain.
+- **Declaring an agent a merchant**: set `"role": "merchant"` in its
+  `*.agent.json` manifest. No registrar round-trip needed; the role is
+  a property of the manifest the operator publishes.
+- **`mod_merchant`** — operational module that gates inbound PURCHASE
+  with `Merchant-ID` and `Merchant-Manifest-Fingerprint` header checks.
+  Returns 458 Counterparty Unverified on mismatch.
+- **Intent Assertion** — buyer-side JWT that commits in writing to the
+  purchase intent (amount, currency, merchant, product). Built by the
+  handler using [`agtp.intent.build_intent_assertion`](agtp/intent.py);
+  the daemon signs but never issues. The JWT verifies independently
+  against the buyer's public key, providing a bridge to payment
+  networks that don't speak AGTP.
+
+Buyer-side example:
+
+```python
+from agtp.intent import build_intent_assertion
+
+def handle_buy(ctx):
+    asn = build_intent_assertion(
+        daemon=ctx.daemon,                # uses the daemon's signing key
+        issuer=ctx.agent_id,
+        subject=ctx.principal_id,
+        audience=merchant_agent_id,
+        amount="9.99", currency="USD",
+        merchant_id=merchant_agent_id,
+        product_ref="sku:coffee-monthly",
+    )
+    return EndpointResponse(
+        body={"intent_assertion": asn["jwt"], "ok": True},
+        attribution_extra={"intent_assertion_jti": asn["jti"]},
+    )
+```
+
+The `intent_assertion_jti` rides in the response's Attribution-Record
+audit chain, so [the inspector](tools/chain_inspector/README.md) can
+walk from any subsequent action back to the assertion that authorized
+it.
+
 ## Walking the audit chain
 
 Every response with `attribution_records_enabled` carries an

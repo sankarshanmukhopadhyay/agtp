@@ -124,6 +124,41 @@ that need correlation MUST send the header.
 Request-ID: req-2026-05-21-001
 ```
 
+## Optional request headers — PURCHASE counterparty verification
+
+These two headers ride on **PURCHASE** requests. Per
+`draft-hood-agtp-merchant-identity-01 §4`, they let the receiving
+merchant verify that the buyer's intent matches the actual
+counterparty (substitution-attack defense). The headers are
+processed by `mod_merchant`; servers without that module loaded
+treat them as advisory only.
+
+### Merchant-ID
+
+The Canonical Agent-ID (64-hex) the buyer believes they are
+addressing. The merchant's daemon refuses with **458 Counterparty
+Unverified** if the value doesn't equal the receiving agent's
+Agent-ID. Protects against DNS poisoning / SEP routing errors that
+silently redirect a buyer to a different merchant.
+
+```
+Merchant-ID: 0a3f...
+```
+
+### Merchant-Manifest-Fingerprint
+
+`sha256` of the merchant's canonical Agent Document JSON at the
+time the buyer fetched it. Sent with PURCHASE so the merchant can
+verify the manifest hasn't changed between fetch and purchase.
+Mismatch returns **458 Counterparty Unverified** with
+`error.reason = "merchant-manifest-fingerprint-mismatch"`. Compute
+by hashing the same bytes `DESCRIBE` returned, in canonical JSON
+form.
+
+```
+Merchant-Manifest-Fingerprint: 0933f121379f54a0b90d2971ae1fdbf3b2a9c0512e024e2acd4cfec3ca107db4
+```
+
 ## Optional response headers
 
 ### Attribution-Record

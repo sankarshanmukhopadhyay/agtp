@@ -80,6 +80,7 @@ FIELD_ORDER = [
     "document_version",
     "agent_id",
     "name",
+    "role",
     "principal",
     "principal_id",
     "description",
@@ -107,8 +108,17 @@ VALID_VERIFICATION_PATHS = frozenset({
     "self-signed",
 })
 
+# Identity role per draft-hood-agtp-merchant-identity-01. ``agent``
+# is the default; ``merchant`` agents gate inbound PURCHASE through
+# mod_merchant.
+VALID_ROLES = frozenset({
+    "agent",
+    "merchant",
+})
+
 DEFAULT_TRUST_TIER = 2
 DEFAULT_VERIFICATION_PATH = "self-signed"
+DEFAULT_ROLE = "agent"
 
 # Per draft-hood-independent-agtp §6.2: every Tier 2 Agent Document
 # MUST carry a trust_warning field declaring the verification status.
@@ -169,6 +179,11 @@ class AgentDocument:
     # Empty string when no Genesis backs this agent (transport-only
     # identity).
     owner_id: str = ""
+    # Phase 7 role per draft-hood-agtp-merchant-identity-01. Mirrors
+    # AgentGenesis.role. ``agent`` (default) follows the standard
+    # dispatch path; ``merchant`` triggers mod_merchant's PURCHASE
+    # gate when that module is loaded.
+    role: str = DEFAULT_ROLE
 
     def __post_init__(self) -> None:
         if self.trust_tier not in VALID_TRUST_TIERS:
@@ -181,6 +196,10 @@ class AgentDocument:
                 f"verification_path must be one of "
                 f"{sorted(VALID_VERIFICATION_PATHS)}; "
                 f"got {self.verification_path!r}"
+            )
+        if self.role not in VALID_ROLES:
+            raise ValueError(
+                f"role must be one of {sorted(VALID_ROLES)}; got {self.role!r}"
             )
         # Per §6.2: Tier 2 documents MUST carry trust_warning.
         # Auto-populate when the operator hasn't set it explicitly so
@@ -240,8 +259,35 @@ class AgentDocument:
             # Elide empty-string optional fields.
             if key in ("trust_warning", "owner_id") and not value:
                 continue
+            # Elide default role to keep agent.json files clean —
+            # only merchant role is interesting at the document level.
+            if key == "role" and value == DEFAULT_ROLE:
+                continue
             out[key] = value
         return out
+
+    def to_canonical_json(self) -> str:
+        """Return RFC 8785-style canonical JSON: sorted keys, no
+        whitespace. The form Merchant-Manifest-Fingerprint hashes
+        over (Phase 7); also a stable byte form for any other
+        cryptographic binding that wants a content hash."""
+        return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+
+    def manifest_fingerprint(self) -> str:
+        """Compute ``sha256(canonical AgentDocument JSON)`` hex-encoded.
+
+        Used by Phase-7 ``mod_merchant`` to verify the inbound
+        ``Merchant-Manifest-Fingerprint`` header: the buyer fetched
+        the AgentDocument, hashed it, and sent the hash with their
+        PURCHASE. The merchant verifies by recomputing locally and
+        comparing — proves the manifest didn't change between fetch
+        and purchase. The same helper drives DISCOVER /agents listing
+        entries so clients can pin a manifest by its fingerprint.
+        """
+        import hashlib as _hashlib
+        return _hashlib.sha256(
+            self.to_canonical_json().encode("utf-8"),
+        ).hexdigest()
 
     def to_json(self, *, pretty: bool = True) -> str:
         if pretty:
@@ -379,6 +425,7 @@ def from_dict(data: Dict[str, Any]) -> AgentDocument:
         ),
         trust_warning=str(data.get("trust_warning") or ""),
         owner_id=str(data.get("owner_id") or ""),
+        role=str(data.get("role") or DEFAULT_ROLE),
         issued_at=str(data["issued_at"]),
         issuer=str(data["issuer"]),
     )
@@ -442,6 +489,7 @@ __all__ = [
     "CONTENT_TYPE_YAML",
     "CONTENT_TYPE_HTML",
     "CONTENT_TYPE_MANIFEST_JSON",
+    "DEFAULT_ROLE",
     "DEFAULT_TRUST_TIER",
     "DEFAULT_VERIFICATION_PATH",
     "DOC_TYPE_AGENT_DOCUMENT",
@@ -454,6 +502,7 @@ __all__ = [
     "HEADER_APPLICATION_VERSION",
     "HEADER_DOCUMENT_TYPE",
     "TIER_2_TRUST_WARNING",
+    "VALID_ROLES",
     "VALID_TRUST_TIERS",
     "VALID_VERIFICATION_PATHS",
     "AgentDocument",

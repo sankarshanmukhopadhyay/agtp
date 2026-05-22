@@ -73,6 +73,7 @@ include = [
   "samples*", "tools*", "mod_python*",
   "mod_cache*", "mod_audit*", "mod_proxy*",  # M9 operational modules (Python)
   "mod_agent_cert*",  # Phase 3: Agent-Cert extension enforcement
+  "mod_merchant*",    # Phase 7: PURCHASE counterparty verification
 ]
 # Non-Python language packages never carry __init__.py so setuptools
 # skips them automatically, but list them explicitly so build output

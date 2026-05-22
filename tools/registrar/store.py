@@ -135,6 +135,12 @@ class RegistrarStore:
     ) -> AgentGenesis:
         """Mint and sign a new Agent Genesis. Persists to disk.
 
+        Genesis is identity-only — the agent's permanent Agent-ID
+        anchor. Whether the resulting agent acts as a plain agent or
+        also as a merchant is an AgentDocument-level decision the
+        operator makes by setting the ``role`` field on the agent's
+        manifest; the registrar doesn't mint that distinction.
+
         Returns the signed :class:`AgentGenesis`. Caller hands it to
         the requester (downloads it, attaches it to a cert
         generation flow, etc.).

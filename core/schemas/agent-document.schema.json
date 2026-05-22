@@ -122,6 +122,12 @@
     "owner_id": {
       "type": "string",
       "description": "Legal owner — the entity that registered this agent. Mirrors the Agent Genesis's owner_id when one is loaded. Surfaced on responses as the Owner-ID header. Empty when no Genesis backs this agent. (Added v1.2.0.)"
+    },
+    "role": {
+      "type": "string",
+      "description": "Identity role per draft-hood-agtp-merchant-identity-01. 'agent' (default) follows the standard dispatch path; 'merchant' triggers mod_merchant's PURCHASE counterparty gate. Mirrors the Agent Genesis's role field. (Added v1.3.0.)",
+      "enum": ["agent", "merchant"],
+      "default": "agent"
     }
   }
 }

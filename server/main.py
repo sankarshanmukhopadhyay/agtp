@@ -544,6 +544,13 @@ def _derive_trust_from_genesis(
         doc.trust_tier = int(genesis.trust_tier)
     if not declared_path:
         doc.verification_path = str(genesis.verification_path)
+    # NOTE: role is NOT derived from Genesis. Genesis is identity
+    # (immutable, hash-bound to Agent-ID); role is a manifest-level
+    # capability that may change over an agent's life. To upgrade an
+    # agent to a merchant the operator edits role in the agent.json
+    # manifest; the Genesis stays untouched and the Agent-ID is
+    # preserved.
+    #
     # The dataclass __post_init__ auto-populated trust_warning at
     # construction time based on the *default* trust_tier. If the
     # tier changed during derivation, re-evaluate.

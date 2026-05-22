@@ -97,6 +97,15 @@ VALID_ARCHETYPES = frozenset({
     "monitor",
 })
 
+# Note: ``role`` (agent vs merchant) is deliberately NOT a Genesis
+# field. Genesis is identity-only — permanent, immutable, and
+# hash-bound to the Agent-ID. Role is a manifest-level capability
+# attribute that may change over an agent's life (an agent acquires
+# merchant capabilities, retires merchant capabilities, etc.) and
+# therefore lives on the AgentDocument. Putting role here would
+# force every capability change to mint a new Agent-ID, which
+# defeats the AGTP-LOG §2 immutability guarantee.
+
 
 # ---------------------------------------------------------------------------
 # Dataclass.
@@ -327,6 +336,11 @@ def parse_genesis(data: Dict[str, Any]) -> AgentGenesis:
         raise GenesisFormatError(
             f"trust_tier must be one of {VALID_TRUST_TIERS}; got {trust_tier!r}"
         )
+    # ``role`` was briefly part of the Genesis schema during Phase 7
+    # development. It's now AgentDocument-only — Genesis is identity,
+    # role is capability. Silently ignore the field if present in a
+    # legacy file so old fixtures don't crash boot.
+    data.pop("role", None) if isinstance(data, dict) else None
     verification_path = data.get("verification_path", "self-signed")
     if verification_path not in VALID_VERIFICATION_PATHS:
         raise GenesisFormatError(
