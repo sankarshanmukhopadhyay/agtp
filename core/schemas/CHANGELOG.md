@@ -21,7 +21,7 @@ entry, each schema lists the version transition.
 
 - **Major bump** (e.g. v1 → v2): breaking change. Only allowed when
   the gateway protocol itself cuts a new major (see
-  [`gateway-protocol-v1.md` §12.1](../../docs/architecture/gateway-protocol-v1.md#121-when-v2-cuts)).
+  [`gateway-protocol.md` §12.1](../../docs/architecture/gateway-protocol.md#121-when-v2-cuts)).
 - **Minor bump** (e.g. v1.0 → v1.1): additive, backward-compatible.
   New optional field, new enum value, looser constraint.
 - **Patch bump** (e.g. v1.0.0 → v1.0.1): documentation-only or
@@ -86,6 +86,6 @@ Initial schema freeze. Six public-contract schemas:
   `welcome`, `register`, `register_resume`, `register_ack`,
   `request`, `response`, `error`, `ping`, `pong`, `goodbye`).
   No source dataclass; defined directly from
-  [`gateway-protocol-v1.md`](../../docs/architecture/gateway-protocol-v1.md).
+  [`gateway-protocol.md`](../../docs/architecture/gateway-protocol.md).
 
 Frozen for the lifetime of gateway protocol v1.

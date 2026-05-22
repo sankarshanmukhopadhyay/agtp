@@ -18,7 +18,7 @@ from typing import Any, BinaryIO, Dict
 
 
 #: Gateway protocol version this implementation speaks. See
-#: ``docs/architecture/gateway-protocol-v1.md`` §12.
+#: ``docs/architecture/gateway-protocol.md`` §12.
 GATEWAY_VERSION = "1.0"
 
 

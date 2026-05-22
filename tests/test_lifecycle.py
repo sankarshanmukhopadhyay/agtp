@@ -27,7 +27,8 @@ from server.config import (
 )
 from server.main import AgentRegistry
 from server.methods import (
-    handle_activate, handle_deactivate, handle_inspect, handle_revoke,
+    handle_activate, handle_deactivate, handle_deprecate,
+    handle_inspect, handle_reinstate, handle_revoke,
 )
 from server.signing import SigningService
 
@@ -198,6 +199,111 @@ def test_noop_when_already_in_target_state(tmp_path: Path) -> None:
     body = json.loads(resp.body_bytes)
     assert body["noop"] is True
     assert body["status"] == "active"
+
+
+def test_reinstate_restores_revoked_to_active(tmp_path: Path) -> None:
+    """REINSTATE preserves the Agent-ID — per AGTP-LOG §2 Genesis is
+    permanent. The agent restored is the same agent."""
+    reg, aid, cfg, doc = _stage(tmp_path)
+    handle_revoke(_req("REVOKE", aid, {"reason": "compromised"}), reg, doc)
+    assert doc.status == "retired"
+
+    resp = handle_reinstate(_req("REINSTATE", aid, {"reason": "key-rotated"}), reg, doc)
+    assert resp.status_code == 200
+    body = json.loads(resp.body_bytes)
+    assert body["previous_status"] == "retired"
+    assert body["status"] == "active"
+    assert body["event_type"] == "reinstate"
+    assert doc.status == "active"
+    # Agent-ID unchanged.
+    assert doc.agent_id == aid
+
+
+def test_deprecate_keeps_agent_operational(tmp_path: Path) -> None:
+    """DEPRECATE is a soft retirement signal — status changes but the
+    agent stays addressable (clients SHOULD migrate)."""
+    reg, aid, cfg, doc = _stage(tmp_path)
+    resp = handle_deprecate(_req("DEPRECATE", aid, {"reason": "v2-available"}), reg, doc)
+    assert resp.status_code == 200
+    body = json.loads(resp.body_bytes)
+    assert body["previous_status"] == "active"
+    assert body["status"] == "deprecated"
+    assert body["event_type"] == "deprecate"
+    assert doc.status == "deprecated"
+
+
+def test_reinstate_from_deprecated(tmp_path: Path) -> None:
+    """Deprecated → active also works."""
+    reg, aid, cfg, doc = _stage(tmp_path)
+    handle_deprecate(_req("DEPRECATE", aid), reg, doc)
+    resp = handle_reinstate(_req("REINSTATE", aid), reg, doc)
+    assert resp.status_code == 200
+    assert json.loads(resp.body_bytes)["previous_status"] == "deprecated"
+    assert doc.status == "active"
+
+
+# ---------------------------------------------------------------------------
+# Persistent status across daemon restart (Phase 8 T2.2).
+# ---------------------------------------------------------------------------
+
+
+def test_lifecycle_persists_status_to_disk(tmp_path: Path) -> None:
+    """REVOKE writes the updated status to {name}.agent.json so a
+    daemon restart picks up the new state."""
+    reg, aid, cfg, doc = _stage(tmp_path)
+    handle_revoke(_req("REVOKE", aid, {"reason": "test"}), reg, doc)
+    assert doc.status == "retired"
+
+    # Verify on disk.
+    agent_path = reg.agent_paths[aid]
+    on_disk = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert on_disk["status"] == "retired"
+
+    # Restart simulation: fresh AgentRegistry pointing at the same dir.
+    reg2 = AgentRegistry(reg.agents_dir)
+    doc2 = reg2.lookup(aid)
+    assert doc2 is not None
+    assert doc2.status == "retired"
+
+
+def test_lifecycle_persist_survives_reinstate(tmp_path: Path) -> None:
+    reg, aid, cfg, doc = _stage(tmp_path)
+    handle_deactivate(_req("DEACTIVATE", aid), reg, doc)
+    handle_reinstate(_req("REINSTATE", aid), reg, doc)
+    # On-disk reflects the final state.
+    on_disk = json.loads(reg.agent_paths[aid].read_text(encoding="utf-8"))
+    assert on_disk["status"] == "active"
+
+
+def test_lifecycle_noop_does_not_rewrite_file(tmp_path: Path) -> None:
+    """The noop branch returns 200 noop=true but should not touch
+    the agent.json file (nothing to commit)."""
+    reg, aid, cfg, doc = _stage(tmp_path)
+    agent_path = reg.agent_paths[aid]
+    mtime_before = agent_path.stat().st_mtime
+    # Active → ACTIVATE is noop.
+    import time as _t
+    _t.sleep(0.02)
+    handle_activate(_req("ACTIVATE", aid), reg, doc)
+    mtime_after = agent_path.stat().st_mtime
+    assert mtime_before == mtime_after
+
+
+def test_persist_returns_false_for_in_memory_only_agent(tmp_path: Path) -> None:
+    """An agent not loaded from disk (test fixture, in-memory
+    construction) can't be persisted — persist() returns False
+    rather than raising."""
+    reg = AgentRegistry(tmp_path)
+    from core.identity import AgentDocument, RequiresDeclaration
+    aid = "a" * 64
+    reg.agents[aid] = AgentDocument(
+        agtp_version="1.0", agent_id=aid, name="x", principal="p",
+        principal_id="p", description="", status="active", skills=[],
+        requires=RequiresDeclaration(), scopes_accepted=[],
+        issued_at="t", issuer="self",
+    )
+    # No entry in agent_paths.
+    assert reg.persist(aid) is False
 
 
 # ---------------------------------------------------------------------------

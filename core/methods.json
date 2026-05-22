@@ -16,7 +16,9 @@
     "INSPECT",
     "ACTIVATE",
     "DEACTIVATE",
-    "REVOKE"
+    "REVOKE",
+    "REINSTATE",
+    "DEPRECATE"
   ],
   "legacy": {
     "GET": {
@@ -100,6 +102,13 @@
       ],
       "description": "Assign work to another agent."
     },
+    "ESCALATE": {
+      "categories": [
+        "notification",
+        "mechanics"
+      ],
+      "description": "Raise an issue to a higher authority."
+    },
     "CONFIRM": {
       "categories": [
         "notification",
@@ -126,6 +135,44 @@
         "mechanics"
       ],
       "description": "Inform a recipient of an event or fact."
+    },
+    "INSPECT": {
+      "categories": [
+        "discovery",
+        "analysis"
+      ],
+      "description": "Closely examine an item's structure or contents."
+    },
+    "ACTIVATE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Bring an entity into an operational state."
+    },
+    "DEACTIVATE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Take an entity out of operational state."
+    },
+    "REVOKE": {
+      "categories": [
+        "transaction",
+        "domain_spanning"
+      ],
+      "description": "Withdraw a previously granted right."
+    },
+    "REINSTATE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Restore a previously revoked or retired entity to operational state."
+    },
+    "DEPRECATE": {
+      "categories": [
+        "domain_spanning"
+      ],
+      "description": "Mark an entity as obsolete (still operational; signals planned retirement)."
     },
     "ASCERTAIN": {
       "categories": [
@@ -216,13 +263,6 @@
         "discovery"
       ],
       "description": "Build a lookup structure over a corpus."
-    },
-    "INSPECT": {
-      "categories": [
-        "discovery",
-        "analysis"
-      ],
-      "description": "Closely examine an item's structure or contents."
     },
     "INTROSPECT": {
       "categories": [
@@ -1369,13 +1409,6 @@
       ],
       "description": "Permanently remove an instrument from use."
     },
-    "REVOKE": {
-      "categories": [
-        "transaction",
-        "domain_spanning"
-      ],
-      "description": "Withdraw a previously granted right."
-    },
     "SELL": {
       "categories": [
         "transaction"
@@ -2354,12 +2387,6 @@
       ],
       "description": "Voluntarily release control to another party."
     },
-    "ACTIVATE": {
-      "categories": [
-        "domain_spanning"
-      ],
-      "description": "Bring an entity into an operational state."
-    },
     "ATTACH": {
       "categories": [
         "domain_spanning"
@@ -2407,12 +2434,6 @@
         "domain_spanning"
       ],
       "description": "Switch traffic from old system to new."
-    },
-    "DEACTIVATE": {
-      "categories": [
-        "domain_spanning"
-      ],
-      "description": "Take an entity out of operational state."
     },
     "DECOMMISSION": {
       "categories": [

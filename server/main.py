@@ -214,6 +214,14 @@ class AgentRegistry:
         # identity). Loaded Geneses are exposed via DISCOVER /genesis
         # so verifiers can fetch + verify the cert-binding.
         self.geneses: Dict[str, "AgentGenesis"] = {}
+        # Phase 8 T2.2: per-agent on-disk file path. Lifecycle
+        # transitions write the updated AgentDocument back here so
+        # status changes survive daemon restarts. Maps agent_id →
+        # Path of the loaded .agent.json file. Agents not loaded
+        # from disk (e.g., test fixtures that mutate the registry
+        # directly) won't be in this map; persist() is a no-op for
+        # them.
+        self.agent_paths: Dict[str, Path] = {}
         self.synthesis_runtime: Optional[SynthesisRuntime] = (
             self._make_default_runtime()
         )
@@ -222,7 +230,7 @@ class AgentRegistry:
         # routes registered_function bindings through a gateway-dispatch
         # closure instead of importing the function in-daemon. Composition
         # and external_service bindings continue to resolve in-daemon.
-        # See docs/architecture/gateway-protocol-v1.md.
+        # See docs/architecture/gateway-protocol.md.
         self.gateway_server: Optional[Any] = None
         # M9 operational-module dispatch hooks. mod_cache, mod_audit,
         # and any future hook-based module register here during
@@ -460,6 +468,7 @@ class AgentRegistry:
                 data = json.loads(json_path.read_text(encoding="utf-8"))
                 doc = from_dict(data)
                 self.agents[doc.agent_id] = doc
+                self.agent_paths[doc.agent_id] = json_path
                 print(f"[server] loaded {doc.name} ({doc.agent_id[:12]}...)")
             except (json.JSONDecodeError, ValueError) as exc:
                 print(f"[server] skipping {json_path}: {exc}", file=sys.stderr)
@@ -522,6 +531,43 @@ class AgentRegistry:
 
     def list_ids(self) -> List[str]:
         return list(self.agents.keys())
+
+    def persist(self, agent_id: str) -> bool:
+        """Rewrite the agent's ``.agent.json`` file from the in-memory
+        AgentDocument. Returns True on write, False when the agent
+        wasn't loaded from disk (test fixture, in-memory-only).
+
+        Atomic: writes to ``{name}.agent.json.tmp`` then ``os.replace``,
+        which is atomic on POSIX and (since Python 3.3) on Windows
+        when both files are on the same volume.
+
+        Used by the Phase 8 lifecycle handlers
+        (ACTIVATE/DEACTIVATE/REVOKE/REINSTATE/DEPRECATE) to durably
+        commit status transitions so they survive daemon restarts.
+        Failure raises ``OSError``; the caller decides whether to
+        propagate or log.
+        """
+        doc = self.agents.get(agent_id)
+        if doc is None:
+            return False
+        path = self.agent_paths.get(agent_id)
+        if path is None:
+            return False
+        import os as _os
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            tmp.write_text(doc.to_json(pretty=True), encoding="utf-8")
+            _os.replace(tmp, path)
+        finally:
+            # Defensive: if write_text succeeded but replace failed,
+            # remove the orphan tmp file so it doesn't clutter the
+            # agents/ directory.
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+        return True
 
 
 def _derive_trust_from_genesis(
@@ -644,6 +690,9 @@ def _finalize_response(
     attribution_extra: Optional[Dict[str, Any]] = None,
     owner_id: str = "",
     principal_id: str = "",
+    trust_tier: Optional[int] = None,
+    trust_warning: str = "",
+    verification_path: str = "",
 ) -> None:
     """Apply §10 response-header policy to every outbound response.
 
@@ -665,6 +714,12 @@ def _finalize_response(
       * **Owner-ID** — when the agent's owner is known, stamped on
         the response so clients see the legal entity responsible for
         the agent's behavior.
+      * **Trust-Tier** — when the dispatched agent's trust posture
+        is known, the daemon stamps ``Trust-Tier``,
+        ``Verification-Path``, and (for Tier 2) ``Trust-Warning`` on
+        the response so clients can render trust badges without
+        parsing the body. Mirrors the AgentDocument fields and the
+        DISCOVER /agents listing entries.
       * **Attribution-Record** — when
         ``[audit] attribution_records_enabled = true``, a JWS Compact
         Serialization (RFC 7515 §3.1) signed receipt. When signing
@@ -721,6 +776,17 @@ def _finalize_response(
     # agent's behavior without parsing the body.
     if owner_id and "Owner-ID" not in headers:
         headers["Owner-ID"] = owner_id
+
+    # Trust posture surfacing. Same rationale — clients can render a
+    # trust badge per response without a follow-up DESCRIBE. Mirrors
+    # the AgentDocument fields lifted from the agent's Genesis at
+    # boot (Phase 5).
+    if trust_tier is not None and "Trust-Tier" not in headers:
+        headers["Trust-Tier"] = str(trust_tier)
+    if verification_path and "Verification-Path" not in headers:
+        headers["Verification-Path"] = verification_path
+    if trust_warning and "Trust-Warning" not in headers:
+        headers["Trust-Warning"] = trust_warning
 
     # Attribution-Record + Audit-ID. When attribution_records_enabled
     # is true the daemon stamps both headers. The JWS is signed when
@@ -1060,6 +1126,11 @@ def handle_connection(
             attribution_extra=attribution_extra,
             owner_id=getattr(agent_doc, "owner_id", "") or "",
             principal_id=getattr(agent_doc, "principal_id", "") or "",
+            trust_tier=getattr(agent_doc, "trust_tier", None),
+            trust_warning=getattr(agent_doc, "trust_warning", "") or "",
+            verification_path=(
+                getattr(agent_doc, "verification_path", "") or ""
+            ),
         )
         conn.sendall(response.serialize())
     except wire.WireFormatError as exc:
@@ -1496,7 +1567,7 @@ def main() -> int:
             "imported in-daemon; composition and external_service "
             "bindings continue to resolve in-daemon. Pass 'host:port' "
             "instead of a path to use TCP loopback. See "
-            "docs/architecture/gateway-protocol-v1.md."
+            "docs/architecture/gateway-protocol.md."
         ),
     )
     args = parser.parse_args()

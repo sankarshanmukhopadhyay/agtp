@@ -1,40 +1,32 @@
 """
-Tests for mod_audit's Ed25519 signing path.
+Tests for mod_audit's reconciliation (Tier 2.4).
 
-Exercises the AuditHook when given a SigningService: the on-disk
-shape becomes {kid, alg, signature, payload} instead of flat
-fields, and the signature verifies against the canonical payload.
+After T2.4, mod_audit is the operator-readable log. The signed
+record per audit_id lives in the daemon's audit_records store. This
+test file used to exercise mod_audit's own Ed25519 signing path;
+that path is retired. These tests now confirm:
+
+  1. AuditHook always writes flat metadata entries (no envelope).
+  2. The deprecated ``signing_service`` argument is accepted for
+     back-compat and ignored with a one-shot warning.
+  3. The retired ``AGTP_AUDIT_SIGN_RECEIPTS`` env var triggers a
+     stderr message on install.
 """
 
 from __future__ import annotations
 
-import base64
+import io
 import json
+import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
-from agtp.handlers import EndpointContext, EndpointError, EndpointResponse
+from agtp.handlers import EndpointContext, EndpointResponse
 from core.endpoint import EndpointSpec, SemanticBlock
 from mod_audit.hook import AuditHook
 from mod_audit.log import AuditLog
-from server.signing import SigningService
-
-
-def _make_signing_service(tmp_path: Path) -> SigningService:
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-        Ed25519PrivateKey,
-    )
-    key = Ed25519PrivateKey.generate()
-    pem = key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-    path = tmp_path / "signing.key"
-    path.write_bytes(pem)
-    return SigningService.from_key_path(str(path))
 
 
 def _spec() -> EndpointSpec:
@@ -58,153 +50,127 @@ def _ctx() -> EndpointContext:
     return EndpointContext(
         input={},
         agent_id="agent-1",
-        request_id="req-1",
         method="BOOK",
         path="/room",
     )
 
 
+def _result() -> EndpointResponse:
+    return EndpointResponse(body={"ok": True}, status=200)
+
+
+def _read_entries(path: Path) -> list:
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return []
+    return [json.loads(line) for line in text.splitlines()]
+
+
 # ---------------------------------------------------------------------------
-# Signed envelope shape.
+# Flat-metadata shape (canonical path).
 # ---------------------------------------------------------------------------
 
 
-def test_signed_hook_emits_signed_envelope(tmp_path: Path) -> None:
-    service = _make_signing_service(tmp_path)
+def test_audit_entry_is_flat_metadata(tmp_path: Path) -> None:
     log = AuditLog(str(tmp_path / "audit.log"))
-    hook = AuditHook(log, signing_service=service)
-
-    hook.after_dispatch(
-        _spec(),
-        _ctx(),
-        EndpointResponse(body={"reservation_id": "res-1"}, status=200),
-        server_state=None,
-    )
+    hook = AuditHook(log)
+    hook.after_dispatch(_spec(), _ctx(), _result(), None)
     log.close()
 
-    entry = json.loads((tmp_path / "audit.log").read_text(encoding="utf-8").splitlines()[0])
-    # Top-level shape: signed envelope.
-    assert set(entry.keys()) == {"kid", "alg", "signature", "payload"}
-    assert entry["kid"] == service.key_id
-    assert entry["alg"] == "Ed25519"
-    # The payload carries the receipt fields.
-    payload = entry["payload"]
-    assert payload["method"] == "BOOK"
-    assert payload["path"] == "/room"
-    assert payload["agent_id"] == "agent-1"
-    assert payload["outcome"] == "ok"
-    assert payload["status"] == 200
-
-
-def test_signed_envelope_verifies(tmp_path: Path) -> None:
-    """The signature in the envelope verifies against the canonical
-    payload using the daemon's public key."""
-    service = _make_signing_service(tmp_path)
-    log = AuditLog(str(tmp_path / "audit.log"))
-    hook = AuditHook(log, signing_service=service)
-    hook.after_dispatch(
-        _spec(),
-        _ctx(),
-        EndpointResponse(body={"x": 1}, status=200),
-        server_state=None,
-    )
-    log.close()
-
-    entry = json.loads((tmp_path / "audit.log").read_text(encoding="utf-8").splitlines()[0])
-    canonical = json.dumps(entry["payload"], sort_keys=True, separators=(",", ":"))
-    # Pad base64url and decode.
-    sig_b64 = entry["signature"]
-    padded = sig_b64 + "=" * (-len(sig_b64) % 4)
-    signature = base64.urlsafe_b64decode(padded)
-    assert service.verify(canonical.encode("utf-8"), signature) is True
-
-
-def test_unsigned_hook_emits_flat_payload(tmp_path: Path) -> None:
-    """Without a signing service, mod_audit emits the M9 v1 flat shape."""
-    log = AuditLog(str(tmp_path / "audit.log"))
-    hook = AuditHook(log)  # signing_service=None
-    hook.after_dispatch(
-        _spec(),
-        _ctx(),
-        EndpointResponse(body={"x": 1}, status=200),
-        server_state=None,
-    )
-    log.close()
-    entry = json.loads((tmp_path / "audit.log").read_text(encoding="utf-8").splitlines()[0])
-    # No envelope keys; fields are at the top level.
+    entries = _read_entries(tmp_path / "audit.log")
+    assert len(entries) == 1
+    entry = entries[0]
+    # Flat shape — no envelope wrapping.
     assert "kid" not in entry
+    assert "alg" not in entry
     assert "signature" not in entry
     assert "payload" not in entry
+    # Metadata fields at top level.
     assert entry["method"] == "BOOK"
+    assert entry["path"] == "/room"
+    assert entry["agent_id"] == "agent-1"
     assert entry["outcome"] == "ok"
+    assert entry["status"] == 200
 
 
-def test_signing_distinguishes_payloads(tmp_path: Path) -> None:
-    """Two different responses produce different signatures."""
-    service = _make_signing_service(tmp_path)
+# ---------------------------------------------------------------------------
+# Back-compat: signing_service= argument is accepted and ignored.
+# ---------------------------------------------------------------------------
+
+
+def test_signing_service_argument_is_accepted_and_warned(tmp_path: Path) -> None:
+    """Passing signing_service= no longer produces a signed envelope
+    — the daemon's audit_records is the canonical signed store. The
+    hook accepts the kwarg for back-compat and emits a one-shot
+    stderr warning the first time it's seen."""
+    # Reset the module's one-shot guard so this test sees the warning.
+    import mod_audit.hook as _hook_mod
+    _hook_mod._SIGNING_DEPRECATION_WARNED = False
+
     log = AuditLog(str(tmp_path / "audit.log"))
-    hook = AuditHook(log, signing_service=service)
-    hook.after_dispatch(
-        _spec(), _ctx(),
-        EndpointResponse(body={"x": 1}, status=200), server_state=None,
-    )
-    hook.after_dispatch(
-        _spec(), _ctx(),
-        EndpointResponse(body={"x": 2}, status=200), server_state=None,
-    )
+    captured = io.StringIO()
+    with mock.patch.object(sys, "stderr", captured):
+        hook = AuditHook(log, signing_service=object())  # any non-None
+    msg = captured.getvalue()
+    assert "deprecated" in msg.lower()
+    assert "audit_records" in msg
+
+    # Subsequent constructions don't repeat the warning.
+    captured2 = io.StringIO()
+    with mock.patch.object(sys, "stderr", captured2):
+        AuditHook(log, signing_service=object())
+    assert captured2.getvalue() == ""
+
+    # And the output is still flat — no signed envelope.
+    hook.after_dispatch(_spec(), _ctx(), _result(), None)
     log.close()
-    lines = (tmp_path / "audit.log").read_text(encoding="utf-8").splitlines()
-    a = json.loads(lines[0])
-    b = json.loads(lines[1])
-    assert a["signature"] != b["signature"]
+    entries = _read_entries(tmp_path / "audit.log")
+    assert "signature" not in entries[0]
 
 
 # ---------------------------------------------------------------------------
-# install() wiring.
+# install() — AGTP_AUDIT_SIGN_RECEIPTS triggers retirement notice.
 # ---------------------------------------------------------------------------
 
 
-def test_install_wires_signing_when_enabled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = _make_signing_service(tmp_path)
-    monkeypatch.setenv("AGTP_AUDIT_ENABLED", "1")
-    monkeypatch.setenv("AGTP_AUDIT_PATH", str(tmp_path / "audit.log"))
-    monkeypatch.setenv("AGTP_AUDIT_SIGN_RECEIPTS", "1")
-
-    from server.hooks import HookRegistry
+def test_install_warns_on_retired_env_var(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from mod_audit import install
-
-    class _State:
-        hook_registry = HookRegistry()
-        signing_service = service
-
-    state = _State()
-    install(state)
-    hook = state.hook_registry.all()[0]
-    assert hook.signing_service is service
-
-
-def test_install_warns_when_signing_requested_but_unavailable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setenv("AGTP_AUDIT_ENABLED", "1")
-    monkeypatch.setenv("AGTP_AUDIT_PATH", str(tmp_path / "audit.log"))
-    monkeypatch.setenv("AGTP_AUDIT_SIGN_RECEIPTS", "1")
-
     from server.hooks import HookRegistry
+
+    monkeypatch.setenv("AGTP_AUDIT_SIGN_RECEIPTS", "1")
+    monkeypatch.setenv("AGTP_AUDIT_PATH", str(tmp_path / "audit.log"))
+
+    class FakeState:
+        def __init__(self) -> None:
+            self.hook_registry = HookRegistry()
+            self.signing_service = None
+
+    state = FakeState()
+    captured = io.StringIO()
+    with mock.patch.object(sys, "stderr", captured):
+        install(state)
+    msg = captured.getvalue()
+    assert "retired" in msg.lower()
+    assert "records_root" in msg or "audit_records" in msg
+    # Hook still registers — operator metadata logging continues.
+    assert state.hook_registry.count() == 1
+
+
+def test_install_silent_without_env_var(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from mod_audit import install
+    from server.hooks import HookRegistry
 
-    class _State:
-        hook_registry = HookRegistry()
-        signing_service = None  # no signing service
+    monkeypatch.delenv("AGTP_AUDIT_SIGN_RECEIPTS", raising=False)
+    monkeypatch.setenv("AGTP_AUDIT_PATH", str(tmp_path / "audit.log"))
 
-    state = _State()
-    install(state)
-    captured = capsys.readouterr()
-    assert "no signing service" in captured.err
-    # Hook still registered, but without signing.
-    hook = state.hook_registry.all()[0]
-    assert hook.signing_service is None
+    class FakeState:
+        def __init__(self) -> None:
+            self.hook_registry = HookRegistry()
+            self.signing_service = None
+
+    state = FakeState()
+    captured = io.StringIO()
+    with mock.patch.object(sys, "stderr", captured):
+        install(state)
+    # No retirement message in the common path.
+    assert "retired" not in captured.getvalue().lower()

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agtp.io/schemas/v1/gateway-handshake.schema.json",
   "title": "Gateway frames (v1)",
-  "description": "All frame types defined in gateway-protocol-v1.md. Every gateway frame is one of the shapes below, discriminated by the 'type' field. Length-prefixed JSON on the wire; this schema validates the JSON payload only.",
+  "description": "All frame types defined in gateway-protocol.md. Every gateway frame is one of the shapes below, discriminated by the 'type' field. Length-prefixed JSON on the wire; this schema validates the JSON payload only.",
   "oneOf": [
     { "$ref": "#/$defs/hello" },
     { "$ref": "#/$defs/welcome" },

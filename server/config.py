@@ -556,6 +556,48 @@ class AuditConfig:
     records_root: str = ""
     lifecycle_root: str = ""
     mode: str = "jws"
+    # Phase-6 INSPECT read surface access control.
+    #
+    #   * ``"public"`` (default) — anyone can INSPECT any audit
+    #     record or chain head. The intended posture for compliance /
+    #     regulator-facing deployments: receipts are designed to be
+    #     publicly verifiable.
+    #   * ``"agent_only"`` — only the agent the record was emitted
+    #     under (matched against the inbound ``Agent-ID``, or against
+    #     the verified mTLS cert when present) can INSPECT it.
+    #   * ``"operator_only"`` — only requests presenting an mTLS cert
+    #     whose key matches an entry in
+    #     ``[audit].read_acl_operator_keys`` may INSPECT. For
+    #     internal-only audit deployments.
+    #
+    # The ACL applies to INSPECT (``target=audit`` / ``chain_head`` /
+    # ``lifecycle``) only. Attribution-Record headers continue to
+    # ride on every response regardless — the ACL gates the read
+    # surface, not the write surface.
+    read_acl: str = "public"
+    # Hex-encoded SHA-256 fingerprints of cert public keys (32 raw
+    # bytes hashed) authorized to INSPECT when ``read_acl =
+    # operator_only``. Empty list with operator_only refuses every
+    # request — useful for fail-safe deployments.
+    read_acl_operator_keys: List[str] = field(default_factory=list)
+    # Phase 8 T2.3 — lifecycle method authorization.
+    #
+    #   * ``"open"`` (default) — any caller can invoke ACTIVATE /
+    #     DEACTIVATE / REVOKE / REINSTATE / DEPRECATE on any agent.
+    #     The lifecycle audit stream is the accountability mechanism.
+    #     Matches the rollout-friendly Phase 8 posture.
+    #   * ``"genesis_issuer"`` — the caller MUST present a verified
+    #     mTLS cert whose public key matches the target agent's
+    #     Genesis ``issuer_public_key``. Only the registrar that
+    #     issued the agent can transition its lifecycle. Agents
+    #     without a loaded Genesis (transport-only identity) cannot
+    #     be lifecycle-managed under this mode.
+    #
+    # The check is a no-op when mTLS isn't configured — there's no
+    # way to authenticate the caller's identity then. Operators
+    # who set ``genesis_issuer`` SHOULD also set ``[mtls].mode =
+    # "required"``.
+    lifecycle_auth: str = "open"
 
 
 @dataclass
@@ -800,7 +842,23 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         records_root=str(audit_block.get("records_root") or ""),
         lifecycle_root=str(audit_block.get("lifecycle_root") or ""),
         mode=str(audit_block.get("mode") or "jws"),
+        read_acl=str(audit_block.get("read_acl") or "public"),
+        read_acl_operator_keys=[
+            str(k).strip().lower()
+            for k in (audit_block.get("read_acl_operator_keys") or [])
+        ],
+        lifecycle_auth=str(audit_block.get("lifecycle_auth") or "open"),
     )
+    if audit.read_acl not in ("public", "agent_only", "operator_only"):
+        raise ValueError(
+            f"[audit].read_acl must be 'public', 'agent_only', or "
+            f"'operator_only'; got {audit.read_acl!r}"
+        )
+    if audit.lifecycle_auth not in ("open", "genesis_issuer"):
+        raise ValueError(
+            f"[audit].lifecycle_auth must be 'open' or "
+            f"'genesis_issuer'; got {audit.lifecycle_auth!r}"
+        )
 
     gateway_block = data.get("gateway", {}) or {}
     gateway = GatewayConfig(

@@ -662,7 +662,7 @@ methods continue to run in-daemon regardless.
 See
 [`docs/architecture/server-modules.md`](docs/architecture/server-modules.md)
 and
-[`docs/architecture/gateway-protocol-v1.md`](docs/architecture/gateway-protocol-v1.md)
+[`docs/architecture/gateway-protocol.md`](docs/architecture/gateway-protocol.md)
 for the full architecture and protocol references.
 
 ### Cross-platform notes

@@ -292,12 +292,12 @@ class ServerManifestTests(unittest.TestCase):
         m = generate(self.config, self.registry.agents)
         names = {e["name"] for e in m.embedded_methods}
         # 12 original protocol primitives + Phase 6 INSPECT + Phase 8
-        # ACTIVATE / DEACTIVATE / REVOKE.
+        # full lifecycle (ACTIVATE/DEACTIVATE/REVOKE/REINSTATE/DEPRECATE).
         expected = {
             "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
             "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
             "INSPECT",
-            "ACTIVATE", "DEACTIVATE", "REVOKE",
+            "ACTIVATE", "DEACTIVATE", "REVOKE", "REINSTATE", "DEPRECATE",
         }
         self.assertEqual(names, expected)
 
@@ -345,9 +345,9 @@ class ServerManifestTests(unittest.TestCase):
         )
         payload = json.loads(resp.body_bytes.decode("utf-8"))
         self.assertEqual(payload["server"]["server_id"], "test.agtp.local")
-        # 12 original primitives + Phase 6 INSPECT + Phase 8
-        # ACTIVATE/DEACTIVATE/REVOKE.
-        self.assertEqual(len(payload["embedded_methods"]), 16)
+        # 12 original primitives + Phase 6 INSPECT + Phase 8 full
+        # lifecycle (ACTIVATE/DEACTIVATE/REVOKE/REINSTATE/DEPRECATE).
+        self.assertEqual(len(payload["embedded_methods"]), 18)
         self.assertEqual(payload["agent_disclosure"], "public")
         # Policy block has the five operational toggles.
         self.assertIn("policies", payload)
@@ -603,15 +603,15 @@ class EndpointsInManifestTests(unittest.TestCase):
     def test_embedded_methods_still_listed_alongside_endpoints(self):
         # Phase 2 doesn't take embedded primitives off the wire when
         # endpoints are registered. Top-level ``embedded_methods``
-        # keeps its full set (16 after Phase 8 added ACTIVATE,
-        # DEACTIVATE, REVOKE on top of Phase 6's INSPECT).
+        # keeps its full set (18 after Phase 8 added the full
+        # lifecycle set on top of Phase 6's INSPECT).
         reg = self._populated_registry()
         m = generate(
             self.config, self.registry.agents,
             endpoint_registry=reg,
         )
         d = m.to_dict()
-        self.assertEqual(len(d["embedded_methods"]), 16)
+        self.assertEqual(len(d["embedded_methods"]), 18)
 
     def test_endpoint_section_surfaces_handler_block_with_type(self):
         # ``handler: {type: ...}`` exposed; ``handler.reference``

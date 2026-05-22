@@ -98,7 +98,7 @@ def resolve_registered_function(reference: str) -> Callable[..., Any]:
        deployments should prefer the gateway path so handlers live in
        a separate process — see
        ``docs/architecture/server-modules.md`` and
-       ``docs/architecture/gateway-protocol-v1.md``.
+       ``docs/architecture/gateway-protocol.md``.
 
     Splits at the last ``.`` so the module path is the prefix and
     the function name is the trailing token. ``importlib.import_module``

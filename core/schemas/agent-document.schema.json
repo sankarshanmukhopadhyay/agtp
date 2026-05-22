@@ -55,8 +55,8 @@
     },
     "status": {
       "type": "string",
-      "description": "Operational lifecycle state. 'active' agents accept traffic; 'suspended' agents return 503; 'retired' agents return 410.",
-      "enum": ["active", "suspended", "retired"]
+      "description": "Operational lifecycle state. 'active' agents accept traffic; 'suspended' agents return 503; 'retired' agents return 410; 'deprecated' agents still accept traffic but signal planned retirement (clients SHOULD migrate). Added 'deprecated' v1.3.0.",
+      "enum": ["active", "suspended", "retired", "deprecated"]
     },
     "skills": {
       "type": "array",

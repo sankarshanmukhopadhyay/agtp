@@ -402,6 +402,8 @@ METHODS = [
     ("OFFBOARD",      ["domain"],          "Remove a party from operational status."),
     ("ACTIVATE",      ["domain"],          "Bring an entity into an operational state."),
     ("DEACTIVATE",    ["domain"],          "Take an entity out of operational state."),
+    ("REINSTATE",     ["domain"],          "Restore a previously revoked or retired entity to operational state."),
+    ("DEPRECATE",     ["domain"],          "Mark an entity as obsolete (still operational; signals planned retirement)."),
     ("SUSPEND",       ["domain", "mechanics"], "Pause an entity reversibly."),
     ("RESUME",        ["domain", "mechanics"], "Continue a suspended entity."),
     ("PAUSE",         ["domain", "mechanics"], "Temporarily halt an ongoing process."),

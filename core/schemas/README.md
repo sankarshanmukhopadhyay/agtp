@@ -24,7 +24,7 @@ is a versioned, contract-level event.
 | `endpoint-error.schema.json` | `agtp.handlers.EndpointError` | The declared-failure shape returned from a handler. |
 | `agent-document.schema.json` | `core.identity.AgentDocument` (v2) | The per-agent identity document served by DESCRIBE. |
 | `server-manifest.schema.json` | `core.manifest.ServerManifest` | The server-level manifest served by DISCOVER. |
-| `gateway-handshake.schema.json` | (no dataclass — gateway-only) | The `hello` / `welcome` / `register` / `request` / `response` frames defined in [`gateway-protocol-v1.md`](../../docs/architecture/gateway-protocol-v1.md). |
+| `gateway-handshake.schema.json` | (no dataclass — gateway-only) | The `hello` / `welcome` / `register` / `request` / `response` frames defined in [`gateway-protocol.md`](../../docs/architecture/gateway-protocol.md). |
 
 ### Internal (NOT in this directory; subject to change)
 
@@ -72,7 +72,7 @@ compatible defaults; those are accretive and safe.
 
 Each schema carries a `$id` and a `version` in its `info` block.
 v1 schemas are frozen for the lifetime of gateway protocol v1
-(see [`gateway-protocol-v1.md` §12.1](../../docs/architecture/gateway-protocol-v1.md#121-when-v2-cuts)).
+(see [`gateway-protocol.md` §12.1](../../docs/architecture/gateway-protocol.md#121-when-v2-cuts)).
 Additive optional fields land via minor bumps inside v1. Breaking
 changes wait for v2 — and v2 requires both the mTLS gate and the
 new-frame-shape gate to fire.

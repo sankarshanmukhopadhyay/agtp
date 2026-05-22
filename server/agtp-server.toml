@@ -102,9 +102,11 @@ attribution_records_enabled  = false
 #
 # Two transport forms:
 #   socket = "/var/run/agtpd/gateway.sock"   # Unix domain socket
-#   socket = "127.0.0.1:4481"                # TCP loopback
+#   socket = "127.0.0.1:4485"                # TCP loopback
+#                                            # (4481 = registrar,
+#                                            #  4482 = chain inspector)
 #
-# See docs/architecture/gateway-protocol-v1.md.
+# See docs/architecture/gateway-protocol.md.
 [gateway]
 socket = ""
 

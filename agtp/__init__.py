@@ -3,7 +3,7 @@
 
 The Python handler-side library. Pairs with ``mod_python`` (the
 runtime module that connects to ``agtpd`` over the gateway socket;
-see [`docs/architecture/gateway-protocol-v1.md`](../docs/architecture/gateway-protocol-v1.md))
+see [`docs/architecture/gateway-protocol.md`](../docs/architecture/gateway-protocol.md))
 to serve AGTP traffic in Python.
 
 Public surface::

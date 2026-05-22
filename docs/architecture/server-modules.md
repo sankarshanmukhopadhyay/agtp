@@ -223,7 +223,7 @@ The function call inside `dispatch()` that today invokes a handler in-process be
 ## 7. Build Order
 
 1. **Gateway socket specification.** ✅ Landed as
-   [`gateway-protocol-v1.md`](gateway-protocol-v1.md).
+   [`gateway-protocol.md`](gateway-protocol.md).
 2. **Canonical schemas.** ✅ Landed under
    [`../../core/schemas/`](../../core/schemas/) with drift-detection
    tests in `tests/schemas/`.

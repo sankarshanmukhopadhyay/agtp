@@ -153,8 +153,8 @@ class ElemenBridgeTests(unittest.TestCase):
         )
         self.assertTrue(result["ok"], result)
         # 12 original protocol primitives + Phase 6 INSPECT + Phase 8
-        # ACTIVATE / DEACTIVATE / REVOKE.
-        self.assertEqual(result["summary"]["embedded_count"], 16)
+        # full lifecycle (ACTIVATE/DEACTIVATE/REVOKE/REINSTATE/DEPRECATE).
+        self.assertEqual(result["summary"]["embedded_count"], 18)
 
     # ---- invoke_method ----
 

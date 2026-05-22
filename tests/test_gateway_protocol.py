@@ -2,7 +2,7 @@
 Frame codec tests for the gateway protocol library.
 
 Exercises :mod:`core.gateway.protocol` against the contract documented
-in ``docs/architecture/gateway-protocol-v1.md`` §3 (framing).
+in ``docs/architecture/gateway-protocol.md`` §3 (framing).
 """
 
 from __future__ import annotations

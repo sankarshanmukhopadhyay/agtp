@@ -158,7 +158,7 @@ class AgentDocument:
     principal: str
     principal_id: str
     description: str
-    status: str                # "active" | "suspended" | "retired"
+    status: str                # "active" | "suspended" | "retired" | "deprecated"
     skills: List[str]
     requires: RequiresDeclaration
     scopes_accepted: List[str]

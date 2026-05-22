@@ -44,9 +44,10 @@ request crosses the gateway. Modules receive trusted, parsed input.
 
 - Streaming responses (deferred; wire protocol is sync today).
 - Module-initiated outbound calls (deferred; daemon will pool them).
-- Module-requested signing of agent responses (deferred until Ed25519
-  key custody lands in `agtpd`).
 - Module-to-module communication. Modules talk only to `agtpd`.
+
+(Module-requested signing of agent responses landed as an optional
+capability in v1; see §14.1 `sign_request`.)
 
 ## 2. Transport
 
@@ -72,8 +73,13 @@ sibling containers, TCP loopback is the alternative:
 
 ```toml
 [gateway]
-listen = "127.0.0.1:4481"
+listen = "127.0.0.1:4485"
 ```
+
+(Avoid 4481/4482 in examples — those are the reference registrar
+and chain inspector defaults respectively. Operators are free to
+pick any free port; the gateway is the daemon's choice, not a
+protocol constant.)
 
 Loopback is bound to `127.0.0.1` only (never a non-loopback
 address). Cross-host gateway connections are out of scope; the

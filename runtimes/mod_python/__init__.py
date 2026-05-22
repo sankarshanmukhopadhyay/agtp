@@ -2,7 +2,7 @@
 ``mod_python`` — Python runtime module for AGTP.
 
 Connects to ``agtpd`` over the gateway socket (see
-``docs/architecture/gateway-protocol-v1.md``), receives the daemon's
+``docs/architecture/gateway-protocol.md``), receives the daemon's
 endpoint registration, and serves AGTP requests by dispatching to
 handlers registered through :mod:`agtp.registry`.
 

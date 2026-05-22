@@ -386,6 +386,30 @@ def load_genesis_json(text: str) -> AgentGenesis:
 # ---------------------------------------------------------------------------
 
 
+def issuer_key_fingerprint(genesis: "AgentGenesis") -> str:
+    """Return ``sha256(raw 32-byte Ed25519 public key).hexdigest()``
+    of the Genesis issuer's public key.
+
+    This is the same hash function used to derive Agent-IDs from
+    cert keys (see ``server.mtls.derive_agent_id_from_public_key``).
+    Comparing this value against a verified cert's
+    ``VerifiedCert.agent_id`` answers the question "is the caller's
+    cert the registrar that issued this agent?" — the gate the
+    Phase-8 ``genesis_issuer`` lifecycle-auth mode enforces.
+
+    Raises :class:`ValueError` when the issuer key isn't a parseable
+    Ed25519 PEM. (Caller decides whether to refuse the request or
+    fall through.)
+    """
+    import hashlib as _hashlib
+    pub = _load_pem_public_key(genesis.issuer_public_key)
+    raw = pub.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return _hashlib.sha256(raw).hexdigest()
+
+
 def verify_cert_genesis_binding(
     *,
     genesis: AgentGenesis,
@@ -461,6 +485,7 @@ __all__ = [
     "VALID_ARCHETYPES",
     "VALID_TRUST_TIERS",
     "VALID_VERIFICATION_PATHS",
+    "issuer_key_fingerprint",
     "load_genesis_json",
     "parse_genesis",
     "public_key_pem",

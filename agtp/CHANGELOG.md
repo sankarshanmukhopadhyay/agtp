@@ -13,7 +13,7 @@ public API surface re-exported from `agtp/__init__.py` or
 The package versions independently of the AGTP wire format, the
 method catalog, and the gateway protocol. Major bumps coordinate with
 gateway-protocol majors (see
-[`docs/architecture/gateway-protocol-v1.md` §12.1](../docs/architecture/gateway-protocol-v1.md#121-when-v2-cuts)).
+[`docs/architecture/gateway-protocol.md` §12.1](../docs/architecture/gateway-protocol.md#121-when-v2-cuts)).
 Minor bumps add features; patch bumps fix bugs or clarify
 documentation.
 

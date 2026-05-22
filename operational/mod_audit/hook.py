@@ -1,17 +1,29 @@
 """
-AuditHook — observe-only dispatch hook that writes audit entries.
+AuditHook — observe-only dispatch hook that writes operator-readable
+JSONL audit entries.
 
-Each entry captures the (method, path, agent_id, principal_id,
-outcome) plus optional request input and response body. The shape
-mirrors what AGTP-LOG's COSE_Sign1 receipts will carry once full
-SCITT support lands; today's signed envelope is Ed25519 over
-canonical JSON, which is the bridge — same key material, same
-signing service — until the COSE/SCITT wrapper arrives.
+mod_audit's role after Tier 2.4 (T2.4 reconciliation): it's an
+operator log, not a cryptographic record. The daemon's
+:mod:`server.audit_records` store (Phase 6) holds the canonical
+signed JWS per audit_id; INSPECT exposes that for verifiers. This
+hook complements that by writing a flat, human-/jq-friendly stream
+of dispatch metadata to a single log file.
+
+Each entry captures ``(timestamp, method, path, agent_id,
+principal_id, request_id, session_id, task_id, authority_scope,
+outcome)``, plus optional request input / response body when the
+operator opts in.
+
+The old "signed envelope" mode (Ed25519 over canonical JSON,
+``{kid, alg, signature, payload}``) is **retired**. The
+``signing_service`` keyword argument still exists for back-compat
+but is ignored with a one-shot stderr warning the first time it's
+passed; the canonical signed record is in audit_records/.
 """
 
 from __future__ import annotations
 
-import base64
+import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
 
@@ -24,6 +36,11 @@ def _utc_now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# Module-level guard so the deprecation warning fires once per
+# process, not per request.
+_SIGNING_DEPRECATION_WARNED = False
+
+
 class AuditHook:
     """Dispatch hook that writes one JSONL entry per response.
 
@@ -32,11 +49,10 @@ class AuditHook:
     the protocol can omit calling it (the HookRegistry uses
     ``getattr(..., None)`` to detect missing methods).
 
-    When ``signing_service`` is supplied, each receipt is signed
-    with Ed25519 over its canonical-JSON payload. Signed envelopes
-    carry ``kid``, ``alg``, ``signature``, and ``payload`` fields;
-    unsigned receipts (no signing_service) flatten the payload to
-    the top level the way M9's v1 shape did.
+    Entries are always flat metadata (no signing envelope). The
+    daemon's ``server.audit_records`` store holds the canonical
+    signed JWS per audit_id; INSPECT
+    (``target=audit, audit_id=...``) reads from it.
     """
 
     def __init__(
@@ -50,7 +66,20 @@ class AuditHook:
         self.log = log
         self.include_input = include_input
         self.include_body = include_body
-        self.signing_service = signing_service
+        # Retained for back-compat; ignored. The daemon's
+        # audit_records store is the canonical signed source.
+        if signing_service is not None:
+            global _SIGNING_DEPRECATION_WARNED
+            if not _SIGNING_DEPRECATION_WARNED:
+                sys.stderr.write(
+                    "[mod_audit] signing_service= argument is deprecated "
+                    "and ignored. mod_audit now writes flat operator "
+                    "metadata only; the canonical signed JWS per "
+                    "audit_id lives in audit_records/ (Phase 6). Set "
+                    "[audit].attribution_records_enabled = true in "
+                    "agtp-server.toml to enable the signed store.\n"
+                )
+                _SIGNING_DEPRECATION_WARNED = True
 
     def after_dispatch(
         self,
@@ -59,7 +88,7 @@ class AuditHook:
         result: Union[EndpointResponse, EndpointError],
         server_state: Any,
     ) -> None:
-        payload: Dict[str, Any] = {
+        entry: Dict[str, Any] = {
             "timestamp": _utc_now_iso(),
             "method": ctx.method,
             "path": ctx.path,
@@ -67,41 +96,28 @@ class AuditHook:
             "request_id": ctx.request_id,
         }
         if ctx.principal_id:
-            payload["principal_id"] = ctx.principal_id
+            entry["principal_id"] = ctx.principal_id
         if ctx.session_id:
-            payload["session_id"] = ctx.session_id
+            entry["session_id"] = ctx.session_id
         if ctx.task_id:
-            payload["task_id"] = ctx.task_id
+            entry["task_id"] = ctx.task_id
         if ctx.authority_scope:
-            payload["authority_scope"] = list(ctx.authority_scope)
+            entry["authority_scope"] = list(ctx.authority_scope)
         if self.include_input and ctx.input:
-            payload["input"] = ctx.input
+            entry["input"] = ctx.input
 
         if isinstance(result, EndpointResponse):
-            payload["outcome"] = "ok"
-            payload["status"] = result.status
+            entry["outcome"] = "ok"
+            entry["status"] = result.status
             if self.include_body:
-                payload["body"] = result.body
+                entry["body"] = result.body
         elif isinstance(result, EndpointError):
-            payload["outcome"] = "endpoint_error"
-            payload["error_code"] = result.code
-            payload["error_message"] = result.message
+            entry["outcome"] = "endpoint_error"
+            entry["error_code"] = result.code
+            entry["error_message"] = result.message
             if result.details:
-                payload["error_details"] = result.details
+                entry["error_details"] = result.details
         else:
-            payload["outcome"] = "unknown"
-
-        if self.signing_service is not None:
-            signature_bytes = self.signing_service.sign_canonical(payload)
-            entry: Dict[str, Any] = {
-                "kid": self.signing_service.key_id,
-                "alg": "Ed25519",
-                "signature": base64.urlsafe_b64encode(signature_bytes)
-                    .rstrip(b"=").decode("ascii"),
-                "payload": payload,
-            }
-        else:
-            # Unsigned: payload fields at top level (v1 shape).
-            entry = payload
+            entry["outcome"] = "unknown"
 
         self.log.write(entry)

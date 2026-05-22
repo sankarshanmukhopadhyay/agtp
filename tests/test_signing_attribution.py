@@ -267,6 +267,53 @@ def test_owner_id_absent_when_not_supplied(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Trust-Tier / Verification-Path / Trust-Warning headers (Tier-1 cleanup).
+# ---------------------------------------------------------------------------
+
+
+def test_trust_headers_stamped_when_known(tmp_path: Path) -> None:
+    config = _make_config(
+        tmp_path, attribution_enabled=False, signing_service=None,
+    )
+    response = _make_response()
+    _finalize_response(
+        response, _make_request(), config,
+        trust_tier=1, verification_path="dns-anchored",
+    )
+    assert response.headers["Trust-Tier"] == "1"
+    assert response.headers["Verification-Path"] == "dns-anchored"
+    # No warning for Tier 1.
+    assert "Trust-Warning" not in response.headers
+
+
+def test_trust_warning_for_tier_2(tmp_path: Path) -> None:
+    config = _make_config(
+        tmp_path, attribution_enabled=False, signing_service=None,
+    )
+    response = _make_response()
+    _finalize_response(
+        response, _make_request(), config,
+        trust_tier=2, verification_path="self-signed",
+        trust_warning="verification-incomplete",
+    )
+    assert response.headers["Trust-Tier"] == "2"
+    assert response.headers["Trust-Warning"] == "verification-incomplete"
+
+
+def test_trust_headers_absent_when_not_supplied(tmp_path: Path) -> None:
+    """Server-level responses (no agent_doc resolved) carry no trust
+    headers — there's no agent to attribute trust to."""
+    config = _make_config(
+        tmp_path, attribution_enabled=False, signing_service=None,
+    )
+    response = _make_response()
+    _finalize_response(response, _make_request(), config)
+    assert "Trust-Tier" not in response.headers
+    assert "Verification-Path" not in response.headers
+    assert "Trust-Warning" not in response.headers
+
+
+# ---------------------------------------------------------------------------
 # attribution_extra plumbing.
 # ---------------------------------------------------------------------------
 

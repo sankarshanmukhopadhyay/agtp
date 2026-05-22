@@ -3,7 +3,7 @@ Shared gateway-protocol primitives used by both the daemon side
 (``server.gateway``) and the module side (``mod_python.client``).
 
 The on-wire shape and lifecycle are documented in
-``docs/architecture/gateway-protocol-v1.md``; this package is the
+``docs/architecture/gateway-protocol.md``; this package is the
 executable form of that document.
 """
 

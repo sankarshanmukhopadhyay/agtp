@@ -882,11 +882,14 @@ def handle_inspect(
       * ``{"target": "chain_head", "agent_id": "<64-hex>"}`` returns
         the latest known audit_id for that agent.
 
-    No auth in v1 — the records are designed to be publicly readable
-    so chain inspectors and regulators can walk arbitrary chains
-    without credentials. Operators who want to lock this down put
-    the daemon behind a SEP (mod_agent_cert) that requires a
-    specific scope before INSPECT is admitted.
+    Access control honors ``[audit].read_acl``:
+
+      * ``public`` (default) — anyone can read.
+      * ``agent_only`` — only the agent that emitted the record
+        (caller's Agent-ID / mTLS cert must match).
+      * ``operator_only`` — caller's verified cert public-key
+        fingerprint must appear in
+        ``[audit].read_acl_operator_keys``.
     """
     spec = REGISTRY["INSPECT"]
     try:
@@ -899,6 +902,25 @@ def handle_inspect(
         return err
 
     target = str(params["target"]).lower()
+
+    # Identify the target this INSPECT is querying so the ACL check
+    # can compare against the calling agent. For target=audit we
+    # parse the JWS later (after the store lookup) to extract the
+    # owner agent_id; for target=chain_head / target=lifecycle the
+    # agent_id is in the request body directly.
+    target_agent_id = ""
+    if target in ("chain_head", "lifecycle"):
+        target_agent_id = str(params.get("agent_id") or "").strip().lower()
+
+    # Pre-check for chain_head / lifecycle (we know the target agent
+    # before fetching). target=audit checks after JWS parse below.
+    if target in ("chain_head", "lifecycle"):
+        denial = _inspect_acl_check(
+            request, server_state, agent_doc,
+            target_agent_id=target_agent_id,
+        )
+        if denial is not None:
+            return denial
 
     if target == "audit":
         audit_id = str(params.get("audit_id") or "").strip().lower()
@@ -934,6 +956,17 @@ def handle_inspect(
                 "stored-record-corrupt",
                 f"stored JWS for {audit_id!r} did not parse: {exc}",
             )
+        # Now that we know whose record this is, enforce the ACL.
+        # operator_only also reaches this path (it doesn't depend on
+        # the target agent, only on the caller's cert key), but
+        # checking here keeps a single ACL gate per request.
+        record_owner = str(payload.get("agent_id") or "").lower()
+        denial = _inspect_acl_check(
+            request, server_state, agent_doc,
+            target_agent_id=record_owner,
+        )
+        if denial is not None:
+            return denial
         return json_response(
             200, "OK",
             {
@@ -1078,6 +1111,181 @@ def _resolve_lifecycle_store(server_state: Any):
     )
 
 
+def _inspect_acl_check(
+    request: wire.AGTPRequest,
+    server_state: Any,
+    agent_doc: AgentDocument,
+    *,
+    target_agent_id: str,
+) -> Optional[wire.AGTPResponse]:
+    """Apply ``[audit].read_acl`` to an INSPECT request.
+
+    Returns ``None`` when the caller is allowed; an AGTPResponse
+    (401 / 403) when they aren't. Modes:
+
+      * ``public`` — pass through.
+      * ``agent_only`` — caller's agent_id MUST equal
+        ``target_agent_id`` (case-insensitive). The Agent-ID
+        header is authoritative; when mTLS is on, the dispatcher
+        has already cross-checked the header against the verified
+        cert (see ``server.mtls.CertVerifier``), so accepting the
+        header value is equivalent to accepting the cert.
+      * ``operator_only`` — the request MUST present a verified
+        mTLS cert whose key fingerprint is listed in
+        ``[audit].read_acl_operator_keys``.
+    """
+    config = getattr(server_state, "config", None)
+    audit = getattr(config, "audit", None) if config is not None else None
+    mode = (getattr(audit, "read_acl", "public") or "public") if audit else "public"
+
+    if mode == "public":
+        return None
+
+    if mode == "agent_only":
+        caller = (agent_doc.agent_id or "").lower() if agent_doc is not None else ""
+        if not caller:
+            return error_response(
+                401, "Unauthorized",
+                "inspect-acl-anonymous",
+                "[audit].read_acl=agent_only refuses anonymous INSPECT; "
+                "present an Agent-ID and (recommended) a verified mTLS cert.",
+            )
+        if caller != (target_agent_id or "").lower():
+            return error_response(
+                403, "Forbidden",
+                "inspect-acl-cross-agent",
+                f"agent {caller!r} cannot INSPECT records for "
+                f"{target_agent_id!r} ([audit].read_acl=agent_only)",
+                extra={
+                    "caller_agent_id": caller,
+                    "target_agent_id": target_agent_id,
+                },
+            )
+        return None
+
+    if mode == "operator_only":
+        verified = getattr(request, "verified_cert", None)
+        if verified is None:
+            return error_response(
+                401, "Unauthorized",
+                "inspect-acl-no-cert",
+                "[audit].read_acl=operator_only requires a verified "
+                "mTLS client certificate.",
+            )
+        # Fingerprint is sha256(raw public key) for AGTP — same value
+        # the daemon uses as the cert-derived Agent-ID. Operators add
+        # entries to read_acl_operator_keys as that 64-hex string.
+        allowed = {
+            k.lower() for k in
+            (getattr(audit, "read_acl_operator_keys", None) or [])
+        }
+        caller_key = (verified.agent_id or "").lower()
+        if not caller_key or caller_key not in allowed:
+            return error_response(
+                403, "Forbidden",
+                "inspect-acl-operator-not-listed",
+                "cert public-key fingerprint is not on the operator "
+                "ACL ([audit].read_acl_operator_keys).",
+                extra={"caller_key": caller_key},
+            )
+        return None
+
+    # Defensive — config loader rejects unknown modes, but if we
+    # somehow get here, fail closed.
+    return error_response(
+        500, "Internal Server Error",
+        "inspect-acl-unknown-mode",
+        f"unrecognized [audit].read_acl mode: {mode!r}",
+    )
+
+
+def _lifecycle_auth_check(
+    *,
+    request: wire.AGTPRequest,
+    server_state: Any,
+    agent_doc: AgentDocument,
+    event_type: str,
+) -> Optional[wire.AGTPResponse]:
+    """Apply ``[audit].lifecycle_auth`` to a lifecycle method call.
+
+    Returns ``None`` when the caller is allowed; a 401/403
+    AGTPResponse when refused.
+
+    Modes:
+
+      * ``open`` — pass through.
+      * ``genesis_issuer`` — caller MUST present a verified mTLS
+        cert whose public-key fingerprint equals the agent's
+        Genesis ``issuer_public_key`` fingerprint. Agents without a
+        loaded Genesis can't be lifecycle-managed (cryptographic
+        accountability requires the issuer chain).
+    """
+    config = getattr(server_state, "config", None)
+    audit = getattr(config, "audit", None) if config is not None else None
+    mode = (getattr(audit, "lifecycle_auth", "open") or "open") if audit else "open"
+
+    if mode == "open":
+        return None
+
+    if mode == "genesis_issuer":
+        verified = getattr(request, "verified_cert", None)
+        if verified is None:
+            return error_response(
+                401, "Unauthorized",
+                "lifecycle-auth-no-cert",
+                (
+                    f"[audit].lifecycle_auth=genesis_issuer requires a "
+                    f"verified mTLS client certificate for {event_type.upper()}"
+                ),
+            )
+        lookup_genesis = getattr(server_state, "lookup_genesis", None)
+        genesis = lookup_genesis(agent_doc.agent_id) if lookup_genesis else None
+        if genesis is None:
+            return error_response(
+                403, "Forbidden",
+                "lifecycle-auth-no-genesis",
+                (
+                    f"agent {agent_doc.agent_id} has no loaded Genesis; "
+                    f"[audit].lifecycle_auth=genesis_issuer cannot verify "
+                    f"the caller's authority"
+                ),
+            )
+        from core.genesis import issuer_key_fingerprint
+        try:
+            expected = issuer_key_fingerprint(genesis)
+        except Exception as exc:  # noqa: BLE001
+            return error_response(
+                500, "Internal Server Error",
+                "lifecycle-auth-bad-genesis",
+                (
+                    f"could not derive issuer key fingerprint from "
+                    f"agent's Genesis: {exc}"
+                ),
+            )
+        caller_key = (verified.agent_id or "").lower()
+        if caller_key != expected.lower():
+            return error_response(
+                403, "Forbidden",
+                "lifecycle-auth-wrong-issuer",
+                (
+                    f"caller's cert key {caller_key!r} does not match "
+                    f"the agent's Genesis issuer key {expected!r}"
+                ),
+                extra={
+                    "caller_key": caller_key,
+                    "expected_issuer_key": expected,
+                },
+            )
+        return None
+
+    # Defensive — config loader rejects unknown modes.
+    return error_response(
+        500, "Internal Server Error",
+        "lifecycle-auth-unknown-mode",
+        f"unrecognized [audit].lifecycle_auth mode: {mode!r}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Phase 8: identity lifecycle methods.
 # ---------------------------------------------------------------------------
@@ -1103,12 +1311,13 @@ def _lifecycle_transition(
     event_type: str,
     new_status: str,
 ) -> wire.AGTPResponse:
-    """Shared body for ACTIVATE / DEACTIVATE / REVOKE.
+    """Shared body for ACTIVATE / DEACTIVATE / REVOKE / REINSTATE / DEPRECATE.
 
     Updates ``agent_doc.status``, signs a lifecycle event, appends to
-    the agent's lifecycle stream, and returns a structured
-    confirmation. Honors the no-op case where the agent is already in
-    the target state (returns 200 with ``noop: true``)."""
+    the agent's lifecycle stream, persists the new status to disk,
+    and returns a structured confirmation. Honors the no-op case
+    where the agent is already in the target state (returns 200 with
+    ``noop: true``)."""
     spec = REGISTRY[event_type.upper()]
     try:
         params = parse_body(request)
@@ -1118,6 +1327,18 @@ def _lifecycle_transition(
     err = require_params(spec, params)
     if err:
         return err
+
+    # Phase 8 T2.3 — lifecycle authorization. ``open`` (default)
+    # falls through; ``genesis_issuer`` requires the caller's
+    # verified cert key to match the agent's Genesis issuer.
+    auth_denial = _lifecycle_auth_check(
+        request=request,
+        server_state=server_state,
+        agent_doc=agent_doc,
+        event_type=event_type,
+    )
+    if auth_denial is not None:
+        return auth_denial
 
     reason = str(params.get("reason") or "").strip()
     previous_status = agent_doc.status
@@ -1135,10 +1356,28 @@ def _lifecycle_transition(
             method_name=event_type.upper(),
         )
 
-    # State transition. In-memory mutation; persistence to disk is a
-    # future revision (operators can re-author the agent.json manifest
-    # to make changes durable across daemon restarts).
+    # State transition. The in-memory mutation is the source of
+    # truth for the rest of this request; the persist() call below
+    # commits the change to disk so the next daemon restart picks
+    # up the new status.
     agent_doc.status = new_status
+
+    # Phase 8 T2.2: persist the new status to disk. Failure is
+    # logged but doesn't fail the response — the in-memory mutation
+    # is already authoritative for this process. Operators who care
+    # about durability without restart-time gaps run a sync-after-
+    # ACTIVATE hook in their orchestration.
+    persist = getattr(server_state, "persist", None)
+    if persist is not None:
+        try:
+            persist(agent_doc.agent_id)
+        except OSError as exc:
+            import sys as _sys
+            print(
+                f"[server] could not persist status for "
+                f"{agent_doc.agent_id[:12]}... ({event_type}): {exc}",
+                file=_sys.stderr,
+            )
 
     # Emit lifecycle event when signing is configured. Failures here
     # are logged but don't fail the response — the state transition
@@ -1326,6 +1565,78 @@ def handle_revoke(
     return _lifecycle_transition(
         request=request, server_state=server_state, agent_doc=agent_doc,
         event_type="revoke", new_status="retired",
+    )
+
+
+@method(
+    name="REINSTATE",
+    category="mechanics",
+    semantic_class="action-intent",
+    idempotent=False,
+    state_modifying=True,
+    required_params=[],
+    optional_params=["reason"],
+    error_codes=[400, 422],
+    description=(
+        "Restore a previously revoked, deprecated, or suspended "
+        "agent to active status. Emits a signed lifecycle event. "
+        "Repeated invocations on an already-active agent return "
+        "200 with noop=true and emit no event. Per AGTP-LOG §2 the "
+        "Agent-ID is preserved across the transition — REINSTATE "
+        "never mints a new identity."
+    ),
+    intent="Restore a non-active agent to operational status.",
+    actor="agent",
+    outcome="The agent's status is set to active.",
+    capability="discovery",
+    confidence=0.95,
+    impact="reversible",
+    is_idempotent=False,
+)
+def handle_reinstate(
+    request: wire.AGTPRequest,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+) -> wire.AGTPResponse:
+    return _lifecycle_transition(
+        request=request, server_state=server_state, agent_doc=agent_doc,
+        event_type="reinstate", new_status="active",
+    )
+
+
+@method(
+    name="DEPRECATE",
+    category="mechanics",
+    semantic_class="action-intent",
+    idempotent=False,
+    state_modifying=True,
+    required_params=[],
+    optional_params=["reason"],
+    error_codes=[400, 422],
+    description=(
+        "Mark the targeted agent as deprecated. The agent stays "
+        "operational (still accepts traffic) but signals planned "
+        "retirement; clients SHOULD migrate. Emits a signed "
+        "lifecycle event. Repeated invocations on an already-"
+        "deprecated agent return 200 with noop=true and emit no "
+        "event."
+    ),
+    intent="Signal that an agent is obsolete and pending retirement.",
+    actor="agent",
+    outcome="The agent's status is set to deprecated.",
+    capability="discovery",
+    confidence=0.95,
+    impact="reversible",
+    is_idempotent=False,
+)
+def handle_deprecate(
+    request: wire.AGTPRequest,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+) -> wire.AGTPResponse:
+    return _lifecycle_transition(
+        request=request, server_state=server_state, agent_doc=agent_doc,
+        event_type="deprecate", new_status="deprecated",
     )
 
 

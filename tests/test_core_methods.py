@@ -32,17 +32,18 @@ from core.methods import (
 
 class CatalogShapeTests(unittest.TestCase):
 
-    def test_embedded_set_has_sixteen(self):
+    def test_embedded_set_has_eighteen(self):
         # 12 original protocol primitives + Phase 6 INSPECT (audit
-        # read surface) + Phase 8 ACTIVATE / DEACTIVATE / REVOKE
-        # (identity lifecycle). Every embedded verb is implemented
-        # by every AGTP server identically.
-        self.assertEqual(len(EMBEDDED_VERBS), 16)
+        # read surface) + Phase 8 ACTIVATE / DEACTIVATE / REVOKE /
+        # REINSTATE / DEPRECATE (full identity lifecycle). Every
+        # embedded verb is implemented by every AGTP server
+        # identically.
+        self.assertEqual(len(EMBEDDED_VERBS), 18)
         for name in (
             "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
             "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
             "INSPECT",
-            "ACTIVATE", "DEACTIVATE", "REVOKE",
+            "ACTIVATE", "DEACTIVATE", "REVOKE", "REINSTATE", "DEPRECATE",
         ):
             self.assertIn(name, EMBEDDED_VERBS)
 

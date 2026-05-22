@@ -4,7 +4,7 @@ Daemon-side gateway server.
 Binds a Unix-domain socket (or TCP loopback), accepts connections
 from runtime modules (``mod_python``, ``mod_php``, ...), performs
 the handshake/registration handshake documented in
-``docs/architecture/gateway-protocol-v1.md``, and dispatches AGTP
+``docs/architecture/gateway-protocol.md``, and dispatches AGTP
 requests over the gateway to a connected module.
 
 This module is opt-in: ``server.main`` only constructs a
