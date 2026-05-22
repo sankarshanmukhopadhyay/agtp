@@ -139,21 +139,25 @@ def test_classify_unregistered_without_registry_is_unregistered() -> None:
 def test_classify_tier_c_when_synthesis_resolves() -> None:
     """RCNS-3 hook: a non-None synthesis_lookup that resolves the pair
     returns Tier C. Pre-RCNS-3 the hook is always None and step 4 is a
-    no-op."""
+    no-op.
+
+    Uses /reports as the negotiated path — /patterns and /contracts
+    became Tier A in RCNS-4 so picking one of those would hit the
+    reserved-inventory short-circuit before the synthesis lookup."""
 
     class _Synth:
         def resolve(self, method: str, path: str):
-            if (method, path) == ("DISCOVER", "/patterns"):
+            if (method, path) == ("RECONCILE", "/reports"):
                 return {"synthesis_id": "syn-fake"}
             return None
 
     reg = _FakeRegistry()
     assert classify_tier(
-        "DISCOVER", "/patterns",
+        "RECONCILE", "/reports",
         registry=reg, synthesis_lookup=_Synth(),
     ) == TIER_RCNS
     assert classify_tier(
-        "DISCOVER", "/other",
+        "RECONCILE", "/other",
         registry=reg, synthesis_lookup=_Synth(),
     ) == TIER_UNREGISTERED
 

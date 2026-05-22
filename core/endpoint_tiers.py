@@ -97,6 +97,9 @@ TIER_A_RESERVED_ENDPOINTS: FrozenSet[Tuple[str, str]] = frozenset({
     ("DISCOVER", "/tools"),
     ("DISCOVER", "/apis"),
     ("DISCOVER", "/genesis"),
+    # RCNS-4 observability surfaces.
+    ("DISCOVER", "/patterns"),
+    ("DISCOVER", "/contracts"),
     # §7 PROPOSE async-poll surface.
     ("QUERY", "/proposals"),
 })

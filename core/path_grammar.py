@@ -45,6 +45,9 @@ PATH_PROTOCOL_VERBS = APPROVED_VERBS | LEGACY_VERBS
 #: ``/methodsv2``) that would invite confusion.
 DISCOVER_RESERVED_ROOTS = frozenset({
     "agents", "methods", "tools", "apis", "genesis",
+    # RCNS-4 observability surfaces:
+    "patterns",   # what the server WILL negotiate on
+    "contracts",  # what the server currently has bound
 })
 
 

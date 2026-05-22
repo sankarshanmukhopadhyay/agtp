@@ -199,6 +199,132 @@ These fields surface automatically — handlers don't populate them.
 The dispatcher reads the synthesis runtime's side-tables at
 response-stamping time.
 
+### RCNS lifecycle events
+
+In addition to per-invocation Attribution-Records, RCNS-4 emits
+three lifecycle events onto the **originating agent's** existing
+per-agent lifecycle stream (the same stream `ACTIVATE` / `REVOKE`
+write to). Same JWS / SCITT dual-mode as ordinary lifecycle
+events; no new store, no new file format. Events have
+``event_type`` values prefixed ``rcns_``:
+
+| Event type | When | Actor |
+|---|---|---|
+| `rcns_propose_accepted` | RCNS gate instantiated a contract | The negotiating agent |
+| `rcns_revoke` | Operator called `REVOKE target=contract` | Caller (originator or `inspect:all`) |
+| `rcns_release` | Agent called `SUSPEND` with a `synthesis_id` | Caller |
+
+Each event's `extra` payload carries the contract lineage
+(`synthesis_id`, `contract_hash`, `method`, `path`, `recipe_name`,
+`recipe_version`, `negotiation_origin`) plus `actor_agent_id` —
+the Agent-ID of the caller who triggered the event (relevant for
+operator revocations where actor ≠ originator).
+
+Emission is best-effort. Deployments without
+`[audit].attribution_records_enabled = true` skip the audit write
+entirely — RCNS still works in-memory, the durable trail just
+isn't there. The 200/461/263 response carries an `audit_id` only
+when the event was actually written.
+
+## Observability surfaces
+
+### `DISCOVER /patterns`
+
+Tier A endpoint. Returns the RCNS posture plus the patterns the
+server will negotiate on:
+
+```json
+{
+  "target": "patterns",
+  "rcns": {
+    "enabled": true,
+    "min_trust_tier": 1,
+    "max_negotiations_per_minute": 10,
+    "idempotency_window_seconds": 60,
+    "on_policy_change": "grandfather",
+    "modes": ["confirm-first", "optimistic"]
+  },
+  "patterns": [
+    {
+      "kind": "recipe",
+      "policy_name": "recipes",
+      "name": "recon-on-accounts",
+      "version": "2",
+      "match": {
+        "name_exact": "RECONCILE",
+        "path_regex": "^/accounts/.*$",
+        ...
+      },
+      "step_count": 1,
+      "underlying_methods": ["QUERY"]
+    },
+    {"kind": "policy", "policy_name": "passthrough"}
+  ]
+}
+```
+
+Always reachable, even when RCNS is disabled (so callers can
+discover the server's posture without speculating).
+
+### `DISCOVER /contracts`
+
+Tier A endpoint. Returns currently-bound syntheses owned by the
+caller. With the `inspect:all` scope (operator visibility), returns
+every contract on the server. Each entry: `synthesis_id`,
+`method`, `path`, `originating_agent_id`, `contract_hash`,
+`negotiation_origin`, `recipe_name`, `recipe_version`,
+`policy_name`, `persistent`, `expires_at`.
+
+### `INSPECT target=contract`
+
+Detail view. Body: `{target: "contract", synthesis_id: "syn-..."}`.
+Returns the full plan, recipe lineage, expiration, contract hash.
+ACL: caller's own contracts; `inspect:all` reaches across.
+
+### `INSPECT target=rcns-attempt`
+
+Diagnostic for a failed 464. Body:
+`{target: "rcns-attempt", attempt_id: "rcns-..."}`. Returns the
+recorded diagnostic — which policies were tried, what reason
+fired, when the attempt happened.
+
+Every 464 response carries an `RCNS-Attempt-Id` response header
+that operators can copy/paste into the INSPECT call. Diagnostics
+live in an in-memory ring buffer (last 200 attempts); evicted
+entries return 404 `rcns-attempt-not-found`.
+
+## Contract lifecycle
+
+### `REVOKE target=contract`
+
+Operator surface for revoking a bound contract. Body:
+```json
+{"target": "contract", "synthesis_id": "syn-...", "reason": "..."}
+```
+
+Authorization: the contract's originator OR a caller with
+`inspect:all` scope. On success: the runtime evicts the
+synthesis_id immediately and an `rcns_revoke` audit event is
+written to the originating agent's lifecycle stream. Subsequent
+presentations of the revoked synthesis_id return 404
+`synthesis-not-found` — the runtime no longer recognizes the id.
+
+The 464 vocabulary's `contract-revoked` reason is reserved for
+future scenarios where revocation needs to survive runtime
+eviction (e.g., persistent contracts surviving a restart). v00 is
+"revoked = gone."
+
+### `SUSPEND` with `synthesis_id`
+
+Agent-side release. Body: `{synthesis_id: "syn-...", reason: "..."}`.
+Clears the contract from the runtime (same effect as REVOKE) and
+writes an `rcns_release` audit event onto the originating agent's
+stream. The response body's `rcns_release_audit_id` field surfaces
+the resulting audit_id when an event was written.
+
+Use SUSPEND for clean-up: an agent done with a contract releases
+it politely rather than waiting for TTL expiry.
+
 ## Configuration reference
 
 ```toml

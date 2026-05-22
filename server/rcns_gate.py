@@ -96,6 +96,16 @@ _NEGOTIATION_LOG: Dict[str, List[float]] = {}
 #: Lazy eviction at lookup time.
 _IDEMPOTENCY_CACHE: Dict[Tuple[str, str], Tuple[str, float]] = {}
 
+#: Ring buffer of recent failed negotiation diagnostics (RCNS-4).
+#: ``INSPECT target=rcns-attempt {attempt_id}`` looks up entries here
+#: when an operator is diagnosing a 464 in the field. Bounded so the
+#: buffer doesn't grow without bound — older entries fall off the
+#: end. Entries are operator-facing and intentionally exclude any
+#: caller-supplied data beyond the method / path that fired.
+_RCNS_ATTEMPT_BUFFER_LIMIT: int = 200
+_RCNS_ATTEMPTS: Dict[str, Dict[str, Any]] = {}
+_RCNS_ATTEMPT_ORDER: List[str] = []
+
 
 def _now() -> float:
     return time.time()
@@ -160,11 +170,54 @@ def _idempotent_record(
 
 
 def reset_state_for_tests() -> None:
-    """Clear the rate-limit log and idempotency cache. Tests reach for
-    this between cases; production never calls it."""
+    """Clear the rate-limit log, idempotency cache, and attempt
+    diagnostics. Tests reach for this between cases; production
+    never calls it."""
     with _LOCK:
         _NEGOTIATION_LOG.clear()
         _IDEMPOTENCY_CACHE.clear()
+        _RCNS_ATTEMPTS.clear()
+        _RCNS_ATTEMPT_ORDER.clear()
+
+
+def _record_attempt(
+    *,
+    agent_id: str,
+    method: str,
+    path: str,
+    reason: str,
+    explanation: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Append a failed-attempt diagnostic to the ring buffer and
+    return its id. Eviction is FIFO when the buffer fills."""
+    attempt_id = f"rcns-{secrets.token_urlsafe(9)}"
+    record = {
+        "attempt_id": attempt_id,
+        "agent_id": agent_id,
+        "method": method,
+        "path": path,
+        "reason": reason,
+        "explanation": explanation,
+        "details": dict(details or {}),
+        "at": _now(),
+    }
+    with _LOCK:
+        _RCNS_ATTEMPTS[attempt_id] = record
+        _RCNS_ATTEMPT_ORDER.append(attempt_id)
+        while len(_RCNS_ATTEMPT_ORDER) > _RCNS_ATTEMPT_BUFFER_LIMIT:
+            evict = _RCNS_ATTEMPT_ORDER.pop(0)
+            _RCNS_ATTEMPTS.pop(evict, None)
+    return attempt_id
+
+
+def lookup_attempt(attempt_id: str) -> Optional[Dict[str, Any]]:
+    """Public accessor for the failed-attempt diagnostics, used by
+    ``INSPECT target=rcns-attempt``. Returns ``None`` when the
+    attempt has been evicted from the buffer or never existed."""
+    with _LOCK:
+        record = _RCNS_ATTEMPTS.get(attempt_id)
+        return dict(record) if record else None
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +331,16 @@ def try_rcns(
     except (TypeError, ValueError):
         agent_tier_int = 3
     if agent_tier_int > rcns_cfg.min_trust_tier:
-        return _status.rcns_no_contract(
+        attempt_id = _record_attempt(
+            agent_id=agent_doc.agent_id, method=method, path=path,
+            reason=_status.RCNS_REASON_TRUST_TIER_INSUFFICIENT,
+            explanation="agent trust tier below configured minimum",
+            details={
+                "min_trust_tier": rcns_cfg.min_trust_tier,
+                "agent_trust_tier": agent_tier_int,
+            },
+        )
+        resp = _status.rcns_no_contract(
             reason=_status.RCNS_REASON_TRUST_TIER_INSUFFICIENT,
             explanation=(
                 f"RCNS requires trust_tier <= {rcns_cfg.min_trust_tier}; "
@@ -288,8 +350,13 @@ def try_rcns(
             details={
                 "min_trust_tier": rcns_cfg.min_trust_tier,
                 "agent_trust_tier": agent_tier_int,
+                "attempt_id": attempt_id,
             },
         )
+        # RCNS-4: surface the attempt id as a response header too so
+        # operators can copy/paste into INSPECT target=rcns-attempt.
+        resp.headers["RCNS-Attempt-Id"] = attempt_id
+        return resp
 
     # Rate limit — applies once all four locks are open. Returns
     # 429 with scope="rcns" so the caller can distinguish negotiation
@@ -333,14 +400,22 @@ def try_rcns(
 
     runtime = getattr(server_state, "synthesis_runtime", None)
     if runtime is None:
-        return _status.rcns_no_contract(
+        attempt_id = _record_attempt(
+            agent_id=agent_doc.agent_id, method=method, path=path,
+            reason=_status.RCNS_REASON_SYNTHESIS_ERROR,
+            explanation="server has no synthesis_runtime configured",
+        )
+        resp = _status.rcns_no_contract(
             reason=_status.RCNS_REASON_SYNTHESIS_ERROR,
             explanation=(
                 "RCNS is enabled but the server has no synthesis runtime "
                 "configured; this is a deployment misconfiguration"
             ),
             method=method, path=path,
+            details={"attempt_id": attempt_id},
         )
+        resp.headers["RCNS-Attempt-Id"] = attempt_id
+        return resp
 
     # If the agent's last negotiation for this key resolved already,
     # short-circuit. Optimistic mode still executes; confirm-first
@@ -390,14 +465,31 @@ def try_rcns(
             # the operator can find this in the audit record rather
             # than chasing a 500.
             _record_negotiation(agent_doc.agent_id, now=_now())
-            return _status.rcns_no_contract(
+            attempt_id = _record_attempt(
+                agent_id=agent_doc.agent_id, method=method, path=path,
+                reason=_status.RCNS_REASON_SYNTHESIS_ERROR,
+                explanation=f"runtime raised {type(exc).__name__}: {exc}",
+                details={
+                    "exception": type(exc).__name__,
+                    "policies_tried": [
+                        getattr(p, "name", "?")
+                        for p in getattr(runtime, "policies", [])
+                    ],
+                },
+            )
+            resp = _status.rcns_no_contract(
                 reason=_status.RCNS_REASON_SYNTHESIS_ERROR,
                 explanation=(
                     f"synthesis runtime raised {type(exc).__name__}: {exc}"
                 ),
                 method=method, path=path,
-                details={"exception": type(exc).__name__},
+                details={
+                    "exception": type(exc).__name__,
+                    "attempt_id": attempt_id,
+                },
             )
+            resp.headers["RCNS-Attempt-Id"] = attempt_id
+            return resp
 
         # Record the negotiation regardless of outcome — composition
         # cost was paid whether or not a plan was produced. This is
@@ -405,14 +497,28 @@ def try_rcns(
         _record_negotiation(agent_doc.agent_id, now=_now())
 
         if plan is None:
-            return _status.rcns_no_contract(
+            attempt_id = _record_attempt(
+                agent_id=agent_doc.agent_id, method=method, path=path,
+                reason=_status.RCNS_REASON_COMPOSITION_IMPOSSIBLE,
+                explanation="no composition policy returned a plan",
+                details={
+                    "policies_tried": [
+                        getattr(p, "name", "?")
+                        for p in getattr(runtime, "policies", [])
+                    ],
+                },
+            )
+            resp = _status.rcns_no_contract(
                 reason=_status.RCNS_REASON_COMPOSITION_IMPOSSIBLE,
                 explanation=(
                     f"no composition policy could fulfill {method} {path} "
                     f"from the server's available methods"
                 ),
                 method=method, path=path,
+                details={"attempt_id": attempt_id},
             )
+            resp.headers["RCNS-Attempt-Id"] = attempt_id
+            return resp
 
         # Build the contract preview shape (this is what 461 returns
         # and what gets hashed for the Attribution-Record link).
@@ -442,6 +548,37 @@ def try_rcns(
                 agent_doc.agent_id, idem_key, synthesis_id,
                 window_seconds=rcns_cfg.idempotency_window_seconds,
             )
+
+        # RCNS-4: write a durable ``rcns_propose_accepted`` event
+        # onto the agent's lifecycle stream so the negotiation is
+        # auditable beyond the in-memory runtime state. Best-effort:
+        # deployments without attribution-records enabled skip this
+        # silently — the contract still works in-memory.
+        try:
+            from server.methods import _maybe_emit_rcns_event
+            snapshot = {
+                "synthesis_id": synthesis_id,
+                "contract_hash": contract_h,
+                "negotiation_origin": (
+                    "rcns-optimistic" if mode == "optimistic"
+                    else "rcns-confirmed"
+                ),
+                "method": method.upper(),
+                "path": path,
+                "recipe_name": plan.recipe_name,
+                "recipe_version": plan.recipe_version,
+            }
+            _maybe_emit_rcns_event(
+                server_state=server_state,
+                event_type="rcns_propose_accepted",
+                agent_id=agent_doc.agent_id,
+                snapshot=snapshot,
+                actor_agent_id=agent_doc.agent_id,
+                reason="",
+            )
+        except Exception:
+            # Audit failure must never break the negotiation path.
+            pass
 
     # At this point we have a synthesis_id + plan. Two delivery modes:
 
@@ -507,6 +644,7 @@ def _available_methods(server_state: Any) -> list:
 
 __all__ = [
     "contract_hash",
+    "lookup_attempt",
     "parse_allow_rcns",
     "reset_state_for_tests",
     "try_rcns",

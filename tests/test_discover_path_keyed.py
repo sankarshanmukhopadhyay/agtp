@@ -131,8 +131,12 @@ def test_discover_bare_returns_endpoint_directory() -> None:
     body = json.loads(resp.body_bytes)
     assert body["target"] == "index"
     paths = {ep["path"] for ep in body["endpoints"]}
-    assert paths == {"/methods", "/agents", "/tools", "/apis", "/genesis"}
-    assert body["endpoint_count"] == 5
+    # RCNS-4 added /patterns and /contracts to the reserved roots.
+    assert paths == {
+        "/methods", "/agents", "/tools", "/apis", "/genesis",
+        "/patterns", "/contracts",
+    }
+    assert body["endpoint_count"] == 7
 
 
 # ---------------------------------------------------------------------------

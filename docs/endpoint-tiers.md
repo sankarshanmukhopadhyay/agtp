@@ -49,6 +49,8 @@ The Tier A inventory today:
 | `DISCOVER` | `/tools` | Tools the server exposes |
 | `DISCOVER` | `/apis` | External APIs the server fronts |
 | `DISCOVER` | `/genesis` | The agent's Genesis (when one is loaded) |
+| `DISCOVER` | `/patterns` | RCNS-negotiable surface (RCNS-4) |
+| `DISCOVER` | `/contracts` | Currently-bound contracts (RCNS-4) |
 | `QUERY` | `/proposals` | §7 async PROPOSE poll surface |
 
 Lifecycle methods (`ACTIVATE`, `DEACTIVATE`, `REVOKE`, `REINSTATE`,
@@ -154,10 +156,12 @@ returns 464 RCNS No Contract with a structured reason.
 
 RCNS-1 reserved the status codes and tier classification. RCNS-2
 generalized the synthesis runtime to `(method, path)` keying.
-RCNS-3 wired the dispatcher gate — see [`docs/rcns.md`](rcns.md)
-for the wire-level spec. RCNS-4 (in progress) adds the
-observability surface (`DISCOVER /patterns`, `DISCOVER /contracts`,
-`INSPECT target=contract`, contract revocation).
+RCNS-3 wired the dispatcher gate. RCNS-4 added the observability
+surface: `DISCOVER /patterns` (negotiable surface), `DISCOVER /contracts`
+(active syntheses), `INSPECT target=contract`,
+`INSPECT target=rcns-attempt`, `REVOKE target=contract`, and
+`rcns_*` lifecycle audit events. See [`docs/rcns.md`](rcns.md) for
+the full wire-level spec.
 
 A Tier C contract is bound for the lifetime of its `synthesis_id`.
 When the contract expires (TTL elapses, operator revokes, or agent

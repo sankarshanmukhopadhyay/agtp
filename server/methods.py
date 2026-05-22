@@ -641,11 +641,14 @@ def handle_query(
 #: registry and MUST NOT collide with these (per the path-grammar
 #: ``validate_discover_path`` check).
 _DISCOVER_PATH_TO_TARGET: Dict[str, str] = {
-    "/methods": "methods",
-    "/agents":  "agents",
-    "/tools":   "tools",
-    "/apis":    "apis",
-    "/genesis": "genesis",
+    "/methods":   "methods",
+    "/agents":    "agents",
+    "/tools":     "tools",
+    "/apis":      "apis",
+    "/genesis":   "genesis",
+    # RCNS-4 observability surfaces:
+    "/patterns":  "patterns",   # what the server WILL negotiate
+    "/contracts": "contracts",  # active syntheses owned by caller
 }
 
 
@@ -853,12 +856,25 @@ def handle_discover(
             genesis.to_dict(),
             method_name="DISCOVER",
         )
+    elif target == "patterns":
+        # RCNS-4: surfaces the patterns this server will negotiate
+        # on. Static for the operator's deployment — describes the
+        # RCNS posture and the loaded recipes' matching shapes.
+        return _discover_patterns(agent_doc, server_state)
+    elif target == "contracts":
+        # RCNS-4: surfaces currently-bound contracts. Scoped to the
+        # caller's own contracts unless the caller holds the
+        # ``inspect:all`` scope (operator).
+        return _discover_contracts(agent_doc, server_state, params)
     else:
         return error_response(
             422,
             "Unprocessable Entity",
             "unknown-discover-target",
-            f"target must be one of: methods, agents, tools, apis, genesis (got {target!r})",
+            (
+                f"target must be one of: methods, agents, tools, apis, "
+                f"genesis, patterns, contracts (got {target!r})"
+            ),
         )
 
     return json_response(
@@ -890,6 +906,9 @@ def _discover_index(agent_doc: AgentDocument) -> wire.AGTPResponse:
     patterns separately via ``DISCOVER /patterns``.
     """
     endpoints = []
+    # RCNS-4 marker: ``/patterns`` and ``/contracts`` ride alongside
+    # the original five reserved roots. Discovery output remains
+    # tier-classified per the Tier A/B/C taxonomy.
     for path, target in sorted(_DISCOVER_PATH_TO_TARGET.items()):
         endpoints.append({
             "path": path,
@@ -905,6 +924,197 @@ def _discover_index(agent_doc: AgentDocument) -> wire.AGTPResponse:
             "target": "index",
             "endpoints": endpoints,
             "endpoint_count": len(endpoints),
+            "issued_at": _utc_now_iso(),
+        },
+        method_name="DISCOVER",
+    )
+
+
+def _discover_patterns(
+    agent_doc: AgentDocument,
+    server_state: ServerState,
+) -> wire.AGTPResponse:
+    """RCNS-4: enumerate the negotiable surface.
+
+    Returns the server's RCNS posture (enabled flag, min_trust_tier,
+    optimistic mode availability) plus, for each loaded recipe, its
+    name / version / matching shape. Operators publish this surface
+    so agents can pre-warm contracts they expect to need and so
+    auditors can statically inspect what the server is willing to
+    negotiate on.
+
+    When RCNS is disabled (``[policies.rcns].enabled = false``),
+    returns the configured posture and an empty pattern list — the
+    endpoint itself is always reachable as a Tier A built-in so
+    callers can observe "this server has RCNS off" without
+    speculating.
+    """
+    config = getattr(server_state, "config", None)
+    rcns_cfg = getattr(config, "rcns", None) if config else None
+    runtime = getattr(server_state, "synthesis_runtime", None)
+
+    posture: Dict[str, Any] = {
+        "enabled": bool(getattr(rcns_cfg, "enabled", False)),
+        "min_trust_tier": int(getattr(rcns_cfg, "min_trust_tier", 1)),
+        "max_negotiations_per_minute": int(
+            getattr(rcns_cfg, "max_negotiations_per_minute", 10)
+        ),
+        "idempotency_window_seconds": int(
+            getattr(rcns_cfg, "idempotency_window_seconds", 60)
+        ),
+        "on_policy_change": str(
+            getattr(rcns_cfg, "on_policy_change", "grandfather")
+        ),
+        # Optimistic mode is available whenever RCNS itself is on;
+        # the gate accepts both ``Allow-RCNS: true`` and
+        # ``Allow-RCNS: optimistic`` regardless of any sub-config.
+        "modes": ["confirm-first", "optimistic"]
+        if getattr(rcns_cfg, "enabled", False) else [],
+    }
+
+    patterns: List[Dict[str, Any]] = []
+    if runtime is not None:
+        for policy in getattr(runtime, "policies", []) or []:
+            recipes = getattr(policy, "recipes", None)
+            policy_name = getattr(policy, "name", "")
+            if recipes is None:
+                # Non-recipe policy (e.g. PassthroughPolicy). Surface
+                # so callers know which composition strategies are
+                # available beyond the recipes themselves.
+                patterns.append({
+                    "kind": "policy",
+                    "policy_name": policy_name,
+                    "description": (
+                        "single-step identity plan when the proposed "
+                        "verb matches an existing method exactly"
+                        if policy_name == "passthrough" else ""
+                    ),
+                })
+                continue
+            for r in recipes:
+                pat = r.pattern
+                patterns.append({
+                    "kind": "recipe",
+                    "policy_name": policy_name,
+                    "name": r.name,
+                    "version": r.version,
+                    "description": r.description,
+                    "match": {
+                        "name_exact": pat.name_exact,
+                        "name_regex": pat.name_regex,
+                        "category": pat.category,
+                        "has_parameters": pat.has_parameters,
+                        "path_exact": pat.path_exact,
+                        "path_regex": pat.path_regex,
+                    },
+                    "step_count": len(r.steps),
+                    "underlying_methods": sorted({
+                        s.method_name for s in r.steps
+                    }),
+                    "output_aggregation": r.output_aggregation,
+                })
+
+    return json_response(
+        200, "OK",
+        {
+            "method": "DISCOVER",
+            "agent_id": agent_doc.agent_id,
+            "target": "patterns",
+            "rcns": posture,
+            "patterns": patterns,
+            "pattern_count": len(patterns),
+            "issued_at": _utc_now_iso(),
+        },
+        method_name="DISCOVER",
+    )
+
+
+def _discover_contracts(
+    agent_doc: AgentDocument,
+    server_state: ServerState,
+    params: Dict[str, Any],
+) -> wire.AGTPResponse:
+    """RCNS-4: enumerate currently-bound contracts.
+
+    By default returns contracts owned by the caller (scoped by
+    ``originating_agent_id``). Callers with the ``inspect:all``
+    scope see every active contract — operator visibility for
+    incident response and capacity planning.
+
+    Entries carry enough information for a caller to decide whether
+    to re-use a contract (``synthesis_id``, ``expires_at``) and for
+    an operator to decide whether to revoke one
+    (``originating_agent_id``, ``recipe_name`` / ``recipe_version``,
+    ``negotiation_origin``). The full plan and step lineage is
+    surfaced via ``INSPECT target=contract`` to keep this list
+    response compact.
+    """
+    runtime = getattr(server_state, "synthesis_runtime", None)
+    if runtime is None:
+        return json_response(
+            200, "OK",
+            {
+                "method": "DISCOVER",
+                "agent_id": agent_doc.agent_id,
+                "target": "contracts",
+                "contracts": [],
+                "contract_count": 0,
+                "issued_at": _utc_now_iso(),
+            },
+            method_name="DISCOVER",
+        )
+
+    declared_scopes = set(
+        getattr(getattr(agent_doc, "requires", None), "scopes", []) or []
+    )
+    inspect_all = "inspect:all" in declared_scopes
+
+    # Snapshot the runtime's active syntheses under the lock to
+    # avoid mutation races during iteration.
+    with runtime._lock:  # type: ignore[attr-defined]
+        active = dict(runtime.active)
+        originating = dict(runtime._originating)  # type: ignore[attr-defined]
+        contract_hashes = dict(runtime._contract_hashes)  # type: ignore[attr-defined]
+        origins = dict(runtime._origin)  # type: ignore[attr-defined]
+        expires_at = dict(runtime._expires_at)  # type: ignore[attr-defined]
+        persistent_ids = set(runtime._persistent)  # type: ignore[attr-defined]
+
+    contracts: List[Dict[str, Any]] = []
+    for sid, plan in active.items():
+        owner = originating.get(sid)
+        if not inspect_all and owner and owner != agent_doc.agent_id:
+            continue
+        # Unscoped contracts (legacy / explicit PROPOSE without
+        # originating_agent_id) are surfaced only to inspect:all
+        # callers — refusing to leak them by default.
+        if not owner and not inspect_all:
+            continue
+        ts = expires_at.get(sid)
+        exp_iso = ts.isoformat().replace("+00:00", "Z") if ts else None
+        contracts.append({
+            "synthesis_id": sid,
+            "method": plan.proposed_method.name,
+            "path": plan.proposed_method.path or "/",
+            "originating_agent_id": owner,
+            "contract_hash": contract_hashes.get(sid),
+            "negotiation_origin": origins.get(sid, "propose-explicit"),
+            "recipe_name": plan.recipe_name,
+            "recipe_version": plan.recipe_version,
+            "policy_name": plan.policy_name,
+            "persistent": sid in persistent_ids,
+            "expires_at": exp_iso,
+        })
+
+    contracts.sort(key=lambda c: c["synthesis_id"])
+    return json_response(
+        200, "OK",
+        {
+            "method": "DISCOVER",
+            "agent_id": agent_doc.agent_id,
+            "target": "contracts",
+            "scope": "all" if inspect_all else "self",
+            "contracts": contracts,
+            "contract_count": len(contracts),
             "issued_at": _utc_now_iso(),
         },
         method_name="DISCOVER",
@@ -1210,10 +1420,149 @@ def handle_inspect(
             method_name="INSPECT",
         )
 
+    if target == "contract":
+        # RCNS-4: detail view for a specific synthesis_id. Returns the
+        # full plan, recipe lineage, originating agent, expiration,
+        # negotiation origin. Useful for both agents (debugging
+        # their own contracts) and operators (incident response).
+        syn_id = str(params.get("synthesis_id") or "").strip()
+        if not syn_id:
+            return error_response(
+                400, "Bad Request",
+                "missing-synthesis-id",
+                "target=contract requires a synthesis_id parameter",
+            )
+        runtime = getattr(server_state, "synthesis_runtime", None)
+        plan = runtime.get(syn_id) if runtime is not None else None
+        if plan is None:
+            return error_response(
+                404, "Not Found",
+                "contract-not-found",
+                f"no active synthesis with id {syn_id!r}",
+                extra={"synthesis_id": syn_id},
+            )
+        originating = runtime.originating_agent_id(syn_id) or ""
+        # ACL: caller can inspect their own contracts. ``inspect:all``
+        # scope reaches across — operator visibility for governance.
+        declared_scopes = set(
+            getattr(getattr(agent_doc, "requires", None), "scopes", [])
+            or []
+        )
+        inspect_all = "inspect:all" in declared_scopes
+        if (
+            originating
+            and originating != agent_doc.agent_id
+            and not inspect_all
+        ):
+            return error_response(
+                403, "Forbidden",
+                "contract-not-yours",
+                (
+                    "this synthesis_id belongs to a different "
+                    "Agent-ID; inspect:all scope required for cross-"
+                    "agent inspection"
+                ),
+                extra={"synthesis_id": syn_id},
+            )
+        ts = runtime.expires_at(syn_id)
+        exp_iso = ts.isoformat().replace("+00:00", "Z") if ts else None
+        return json_response(
+            200, "OK",
+            {
+                "method": "INSPECT",
+                "target": "contract",
+                "synthesis_id": syn_id,
+                "originating_agent_id": originating or None,
+                "contract_hash": runtime.contract_hash(syn_id),
+                "negotiation_origin": runtime.negotiation_origin(syn_id),
+                "method_proposed": plan.proposed_method.name,
+                "path_proposed": plan.proposed_method.path or "/",
+                "recipe_name": plan.recipe_name,
+                "recipe_version": plan.recipe_version,
+                "policy_name": plan.policy_name,
+                "plan": plan.to_dict(),
+                "persistent": runtime.is_persistent(syn_id),
+                "expires_at": exp_iso,
+                "issued_at": _utc_now_iso(),
+            },
+            method_name="INSPECT",
+        )
+
+    if target == "rcns-attempt":
+        # RCNS-4: read a failed-negotiation diagnostic from the
+        # ring buffer. Operators diagnosing 464s in the field
+        # copy/paste the ``RCNS-Attempt-Id`` header from the
+        # failing response and resolve it here.
+        attempt_id = str(params.get("attempt_id") or "").strip()
+        if not attempt_id:
+            return error_response(
+                400, "Bad Request",
+                "missing-attempt-id",
+                "target=rcns-attempt requires an attempt_id parameter",
+            )
+        from server.rcns_gate import lookup_attempt as _lookup_attempt
+        record = _lookup_attempt(attempt_id)
+        if record is None:
+            return error_response(
+                404, "Not Found",
+                "rcns-attempt-not-found",
+                (
+                    f"no diagnostic recorded for attempt {attempt_id!r} "
+                    f"(buffer may have evicted it)"
+                ),
+                extra={"attempt_id": attempt_id},
+            )
+        # ACL: agent inspects their own attempts; inspect:all sees
+        # any. Symmetric with the contract ACL above.
+        declared_scopes = set(
+            getattr(getattr(agent_doc, "requires", None), "scopes", [])
+            or []
+        )
+        inspect_all = "inspect:all" in declared_scopes
+        if (
+            record.get("agent_id")
+            and record["agent_id"] != agent_doc.agent_id
+            and not inspect_all
+        ):
+            return error_response(
+                403, "Forbidden",
+                "rcns-attempt-not-yours",
+                (
+                    "this attempt belongs to a different Agent-ID; "
+                    "inspect:all scope required for cross-agent "
+                    "inspection"
+                ),
+                extra={"attempt_id": attempt_id},
+            )
+        from datetime import datetime as _dt, timezone as _tz
+        at_iso = _dt.fromtimestamp(
+            record.get("at") or 0, tz=_tz.utc,
+        ).isoformat().replace("+00:00", "Z")
+        return json_response(
+            200, "OK",
+            {
+                "method": "INSPECT",
+                "target": "rcns-attempt",
+                "attempt_id": attempt_id,
+                "agent_id": record.get("agent_id"),
+                "method_attempted": record.get("method"),
+                "path_attempted": record.get("path"),
+                "reason": record.get("reason"),
+                "explanation": record.get("explanation"),
+                "details": record.get("details"),
+                "at": at_iso,
+                "issued_at": _utc_now_iso(),
+            },
+            method_name="INSPECT",
+        )
+
     return error_response(
         422, "Unprocessable Entity",
         "unknown-inspect-target",
-        f"target must be one of: audit, chain_head, lifecycle (got {target!r})",
+        (
+            f"target must be one of: audit, chain_head, lifecycle, "
+            f"contract, rcns-attempt (got {target!r})"
+        ),
     )
 
 
@@ -1759,10 +2108,200 @@ def handle_revoke(
     server_state: ServerState,
     agent_doc: AgentDocument,
 ) -> wire.AGTPResponse:
+    # RCNS-4: REVOKE has two shapes:
+    #   * default (Agent-ID lifecycle) — body has no target, or
+    #     target = "agent"; transitions the agent to ``retired``.
+    #   * RCNS contract — body sets target = "contract" with a
+    #     synthesis_id; expires the contract from the runtime and
+    #     emits an ``rcns_revoke`` lifecycle event onto the
+    #     originating agent's stream.
+    try:
+        params = parse_body(request)
+    except ValueError as exc:
+        return error_response(400, "Bad Request", "invalid-body", str(exc))
+    target = str(params.get("target") or "agent").lower()
+    if target == "contract":
+        return _revoke_contract(request, server_state, agent_doc, params)
     return _lifecycle_transition(
         request=request, server_state=server_state, agent_doc=agent_doc,
         event_type="revoke", new_status="retired",
     )
+
+
+def _revoke_contract(
+    request: wire.AGTPRequest,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+    params: Dict[str, Any],
+) -> wire.AGTPResponse:
+    """RCNS-4: operator surface for contract revocation.
+
+    Authorization follows the same gate as the Agent-ID lifecycle
+    methods — when ``[audit].lifecycle_auth = genesis_issuer`` the
+    presented mTLS cert must match the Genesis issuer key of the
+    originating agent (or the caller is the originator themselves).
+    When ``lifecycle_auth = open`` any authenticated agent can
+    revoke their own contracts; operator override comes via the
+    ``inspect:all`` scope.
+
+    On success: expire the synthesis in the runtime (which
+    invalidates the synthesis_id immediately) AND emit an
+    ``rcns_revoke`` event onto the originating agent's lifecycle
+    stream so the action is durable and replayable. Subsequent
+    presentations of the synthesis_id return 404
+    ``synthesis-not-found`` — distinct from 464 ``contract-revoked``
+    because once the runtime evicts the id it's truly gone from
+    the active table; the "revoked" semantic lives in the audit
+    record.
+    """
+    syn_id = str(params.get("synthesis_id") or "").strip()
+    if not syn_id:
+        return error_response(
+            400, "Bad Request",
+            "missing-synthesis-id",
+            "REVOKE target=contract requires a synthesis_id parameter",
+        )
+    runtime = getattr(server_state, "synthesis_runtime", None)
+    if runtime is None or runtime.get(syn_id) is None:
+        return error_response(
+            404, "Not Found",
+            "contract-not-found",
+            f"no active synthesis with id {syn_id!r}",
+            extra={"synthesis_id": syn_id},
+        )
+
+    originating = runtime.originating_agent_id(syn_id) or ""
+    declared_scopes = set(
+        getattr(getattr(agent_doc, "requires", None), "scopes", []) or []
+    )
+    is_operator = "inspect:all" in declared_scopes
+    is_originator = (originating == agent_doc.agent_id)
+    if originating and not (is_originator or is_operator):
+        return error_response(
+            403, "Forbidden",
+            "contract-not-yours",
+            (
+                "this synthesis_id belongs to a different Agent-ID; "
+                "only the originator or an inspect:all caller can "
+                "REVOKE it"
+            ),
+            extra={"synthesis_id": syn_id},
+        )
+
+    # Snapshot the metadata BEFORE expiring so we can emit a
+    # high-fidelity audit event after the eviction.
+    snapshot = {
+        "synthesis_id": syn_id,
+        "originating_agent_id": originating,
+        "contract_hash": runtime.contract_hash(syn_id),
+        "negotiation_origin": runtime.negotiation_origin(syn_id),
+        "method": runtime.get(syn_id).proposed_method.name,
+        "path": runtime.get(syn_id).proposed_method.path or "/",
+        "recipe_name": runtime.get(syn_id).recipe_name,
+        "recipe_version": runtime.get(syn_id).recipe_version,
+    }
+    reason = str(params.get("reason") or "").strip()
+    runtime.expire(syn_id, reason="operator-revoke")
+
+    # Emit the rcns_revoke audit event onto the originating agent's
+    # lifecycle stream. Best-effort: a signing-disabled deployment
+    # skips this without failing the REVOKE itself.
+    audit_id = _maybe_emit_rcns_event(
+        server_state=server_state,
+        event_type="rcns_revoke",
+        agent_id=originating or agent_doc.agent_id,
+        snapshot=snapshot,
+        actor_agent_id=agent_doc.agent_id,
+        reason=reason,
+    )
+    body: Dict[str, Any] = {
+        "method": "REVOKE",
+        "target": "contract",
+        "synthesis_id": syn_id,
+        "revoked_at": _utc_now_iso(),
+        "originating_agent_id": originating or None,
+        "reason": reason or None,
+    }
+    if audit_id:
+        body["audit_id"] = audit_id
+    return json_response(200, "OK", body, method_name="REVOKE")
+
+
+def _maybe_emit_rcns_event(
+    *,
+    server_state: Any,
+    event_type: str,
+    agent_id: str,
+    snapshot: Dict[str, Any],
+    actor_agent_id: str,
+    reason: str,
+) -> Optional[str]:
+    """RCNS-4: write an ``rcns_*`` event onto the named agent's
+    lifecycle stream. Reuses the existing JWS / SCITT machinery so
+    operators get the same signed, append-only audit shape lifecycle
+    events have. Returns the audit_id when emitted; ``None`` when
+    the deployment hasn't enabled attribution-records (the audit
+    is best-effort, not load-bearing for REVOKE / SUSPEND).
+    """
+    if not agent_id:
+        return None
+    signing_service = getattr(server_state, "signing_service", None)
+    config = getattr(server_state, "config", None)
+    if config is None or signing_service is None:
+        return None
+    audit_cfg = getattr(config, "audit", None)
+    if audit_cfg is None or not getattr(
+        audit_cfg, "attribution_records_enabled", False,
+    ):
+        return None
+    lifecycle_store = _resolve_lifecycle_store(server_state)
+    if lifecycle_store is None:
+        return None
+    from datetime import datetime as _dt, timezone as _tz
+    issued_at = _dt.now(tz=_tz.utc).isoformat().replace("+00:00", "Z")
+    server_id = (
+        getattr(config.server, "server_id", "") or ""
+        if getattr(config, "server", None) is not None else ""
+    )
+    import uuid as _uuid
+    response_id = f"resp-{_uuid.uuid4().hex[:12]}"
+    extra: Dict[str, Any] = {
+        "event_type": event_type,
+        "actor_agent_id": actor_agent_id,
+    }
+    extra.update({k: v for k, v in snapshot.items() if v is not None})
+    if reason:
+        extra["reason"] = reason
+
+    mode = (getattr(audit_cfg, "mode", "jws") or "jws")
+    if mode == "scitt":
+        import json as _json
+        from server.cose import build_cose_sign1, cose_audit_id
+        payload = {
+            "agent_id": agent_id,
+            "server_id": server_id,
+            "issued_at": issued_at,
+            "response_id": response_id,
+            "status": 200,
+            "extra": extra,
+        }
+        payload_bytes = _json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+        cose_bytes = build_cose_sign1(
+            private_key=signing_service._key,
+            payload_bytes=payload_bytes,
+            kid=signing_service.key_id,
+        )
+        lifecycle_store.append_cose(agent_id, cose_bytes)
+        return cose_audit_id(cose_bytes)
+
+    record = signing_service.build_attribution_record(
+        agent_id=agent_id, server_id=server_id, issued_at=issued_at,
+        status=200, response_id=response_id, extra=extra,
+    )
+    lifecycle_store.append(agent_id, record.jws)
+    return record.audit_id
 
 
 @method(
@@ -2187,6 +2726,7 @@ def handle_suspend(
     nonce = secrets.token_urlsafe(16)
 
     cleared_synthesis: Optional[str] = None
+    rcns_release_audit_id: Optional[str] = None
     syn_id = params.get("synthesis_id")
     if syn_id:
         # Prefer the runtime's expire() so both the active-plans
@@ -2195,28 +2735,63 @@ def handle_suspend(
         # no runtime is attached (older test fixtures).
         runtime = getattr(server_state, "synthesis_runtime", None)
         if runtime is not None:
+            # RCNS-4: snapshot lineage BEFORE expire so we can emit
+            # a high-fidelity audit event after the eviction. Best-
+            # effort — when attribution-records is off this falls
+            # through to None.
+            snapshot: Dict[str, Any] = {}
+            plan = runtime.get(str(syn_id))
+            if plan is not None:
+                snapshot = {
+                    "synthesis_id": str(syn_id),
+                    "originating_agent_id": runtime.originating_agent_id(
+                        str(syn_id)
+                    ),
+                    "contract_hash": runtime.contract_hash(str(syn_id)),
+                    "negotiation_origin": runtime.negotiation_origin(
+                        str(syn_id)
+                    ),
+                    "method": plan.proposed_method.name,
+                    "path": plan.proposed_method.path or "/",
+                    "recipe_name": plan.recipe_name,
+                    "recipe_version": plan.recipe_version,
+                }
             if runtime.expire(str(syn_id)):
                 cleared_synthesis = str(syn_id)
+                # Agent-side release event — emitted onto the
+                # originating agent's stream when one is known,
+                # otherwise the caller's stream (legacy unscoped
+                # contracts).
+                target_agent_id = (
+                    snapshot.get("originating_agent_id")
+                    or agent_doc.agent_id
+                )
+                rcns_release_audit_id = _maybe_emit_rcns_event(
+                    server_state=server_state,
+                    event_type="rcns_release",
+                    agent_id=target_agent_id,
+                    snapshot=snapshot,
+                    actor_agent_id=agent_doc.agent_id,
+                    reason=str(params.get("reason") or ""),
+                )
         else:
             from server.negotiation import SYNTHESES
             if SYNTHESES.remove(str(syn_id)):
                 cleared_synthesis = str(syn_id)
 
-    return json_response(
-        200,
-        "OK",
-        {
-            "method": "SUSPEND",
-            "agent_id": agent_doc.agent_id,
-            "session_id": params.get("session_id", _new_token("sess")),
-            "resumption_nonce": nonce,
-            "expires_at": _utc_offset_iso(ttl),
-            "reason": params.get("reason"),
-            "synthesis_cleared": cleared_synthesis,
-            "suspended_at": _utc_now_iso(),
-        },
-        method_name="SUSPEND",
-    )
+    body: Dict[str, Any] = {
+        "method": "SUSPEND",
+        "agent_id": agent_doc.agent_id,
+        "session_id": params.get("session_id", _new_token("sess")),
+        "resumption_nonce": nonce,
+        "expires_at": _utc_offset_iso(ttl),
+        "reason": params.get("reason"),
+        "synthesis_cleared": cleared_synthesis,
+        "suspended_at": _utc_now_iso(),
+    }
+    if rcns_release_audit_id:
+        body["rcns_release_audit_id"] = rcns_release_audit_id
+    return json_response(200, "OK", body, method_name="SUSPEND")
 
 
 @method(
