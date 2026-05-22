@@ -90,6 +90,7 @@ agtp/
 ├── operational/          Daemon-side plugins — load via --load-module
 │   ├── mod_audit/          Append-only JSONL audit log (Ed25519-signed)
 │   ├── mod_cache/          Response cache (LRU + TTL)
+│   ├── mod_http_gateway/   REST → AGTP translation sidecar (RCNS-5)
 │   └── mod_proxy/          Forward AGTP requests to upstream agtpd
 │
 ├── connectors/           Framework + cross-protocol bridges (in-tree)

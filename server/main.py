@@ -1139,6 +1139,15 @@ def handle_connection(
                 delattr(response, "_attribution_extra")
             except AttributeError:
                 pass
+        # RCNS-5: when alias resolution rewrote the verb, surface the
+        # original on the Attribution-Record so the audit trail
+        # records what came in over the wire (operators auditing a
+        # REST-side GET that was served as FETCH should see the GET).
+        aliased_from = getattr(request, "_aliased_from", None)
+        if aliased_from:
+            if attribution_extra is None:
+                attribution_extra = {}
+            attribution_extra.setdefault("requested_method", aliased_from)
         _finalize_response(
             response,
             request,

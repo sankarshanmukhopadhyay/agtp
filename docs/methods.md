@@ -117,17 +117,77 @@ The server's `dispatch()` runs gates in this order:
 
 1. **Synthesis-Id** — route to the synthesis runtime if the header
    names an active synthesis.
-2. **459 Method Violation** — verb not in the catalog and
+2. **Alias resolution (RCNS-5)** — `[policies.methods.aliases]`
+   rewrites the verb (e.g. `GET → FETCH`) before the catalog
+   check. Original verb is stashed on the request as
+   `requested_method` for the audit chain.
+3. **459 Method Violation** — verb not in the catalog and
    not legacy-opted-in.
-3. **460 Endpoint Violation** — path violates path grammar.
-4. **405 Method Not Allowed** — the server's `policies.methods`
+4. **460 Endpoint Violation** — path violates path grammar.
+5. **405 Method Not Allowed** — the server's `policies.methods`
    block refuses this verb.
-5. **Redirect** — `policies.methods.redirects` rewrites
+6. **Redirect** — `policies.methods.redirects` rewrites
    `(method, path)` before dispatch.
-6. **Registry lookup** — handler resolves and runs.
+7. **Registry lookup** — handler resolves and runs. On miss with
+   `path != "/"`, the RCNS-3 gate may negotiate (see
+   [`docs/rcns.md`](rcns.md)); otherwise 404.
 
-Embedded methods bypass the policy gate (4) so a mis-authored
+Embedded methods bypass the policy gate (5) so a mis-authored
 `disallow` entry can't take a server off-protocol.
+
+## METHOD aliases (RCNS-5)
+
+Aliases let an operator admit verbs that aren't in the AGTP
+catalog by mapping them to canonical AGTP verbs at the dispatcher
+gate. The classic case is the five legacy HTTP verbs:
+
+```toml
+[policies.methods.aliases]
+GET     = "FETCH"
+POST    = "CREATE"
+PUT     = "REPLACE"
+DELETE  = "REMOVE"
+PATCH   = "MODIFY"
+```
+
+This table is seeded by default in `default_methods_policy()` —
+a fresh server admits `GET /products` (resolves to `FETCH /products`)
+without any operator configuration. Operators who want the strict
+pre-RCNS-5 behavior declare `[policies.methods.aliases]` as an
+**empty table** to wipe the seed.
+
+Aliases differ from `[policies.methods.redirects]`:
+
+- **Aliases** rewrite the verb itself ahead of the catalog check.
+  Targets must be valid AGTP verbs (or legacy HTTP); arbitrary
+  string targets are rejected at load.
+- **Redirects** rewrite `(method, path)` tuples after the
+  registry resolves and the agent passes the policy gate. The
+  rewrite is what the handler sees.
+
+Resolution is single-hop: `A → B` and `B → C` declared together
+resolves `A → B` (not `A → C`). This prevents loops.
+
+Aliases surface in the manifest under
+`policies.methods.aliases`:
+
+```json
+{
+  "policies": {
+    "methods": {
+      "aliases": {
+        "GET": "FETCH",
+        "POST": "CREATE",
+        ...
+      }
+    }
+  }
+}
+```
+
+The Attribution-Record carries the original (pre-alias) verb as
+`requested_method` whenever an alias fires so chain inspectors
+can see that a request arrived as `GET` and was served as `FETCH`.
 
 ## Status codes
 

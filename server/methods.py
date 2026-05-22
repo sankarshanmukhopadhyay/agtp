@@ -3764,6 +3764,37 @@ def _dispatch_inner(
     )
     from core.path_grammar import PathGrammarError, validate_path
 
+    # RCNS-5: alias resolution. A verb supplied by the caller that
+    # matches an alias on this server's [policies.methods.aliases]
+    # table is rewritten to the canonical target ahead of the catalog
+    # check. The original verb stays on the request (as
+    # ``_aliased_from``) so :func:`_finalize_response` can stamp it
+    # onto the Attribution-Record as ``requested_method`` — chain
+    # inspectors can tell that a request arrived as ``GET`` and was
+    # served as ``FETCH``.
+    methods_policy_obj = getattr(server_state, "methods_policy", None)
+    if methods_policy_obj is None:
+        # Some test fixtures stash the policy under ``config.policy``;
+        # check there as a fallback so alias resolution stays robust
+        # without depending on AgentRegistry.configure_methods_policy
+        # having been called.
+        cfg_policy = getattr(getattr(server_state, "config", None), "policy", None)
+        methods_policy_obj = getattr(cfg_policy, "methods", None) if cfg_policy else None
+    if methods_policy_obj is not None:
+        aliased_target = methods_policy_obj.resolve_alias(method_name)
+        if aliased_target:
+            # Stash the original on the request so audit + manifest
+            # surfaces can show what came in over the wire.
+            request._aliased_from = method_name  # type: ignore[attr-defined]
+            method_name = aliased_target
+            # Mutate the request's method too so handlers that read
+            # ``request.method`` see the resolved verb. The wire
+            # representation downstream of dispatch is consistent.
+            try:
+                request.method = aliased_target
+            except AttributeError:
+                pass
+
     # §10 Authority-Scope claim validation. The agent may declare a
     # subset of its scopes for this specific request via the
     # ``Authority-Scope`` header. Every claimed scope must appear in

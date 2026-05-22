@@ -134,6 +134,21 @@ class MethodsPolicy:
     #: ``"METHOD /path"`` for method+path redirects. Values are
     #: ``("NEW_METHOD", new_path_or_None)``.
     redirects: Dict[str, Tuple[str, Optional[str]]] = field(default_factory=dict)
+    #: RCNS-5: verb aliases. Resolved at the dispatcher gate before
+    #: method validation, so a caller-supplied verb that's not in
+    #: the AGTP catalog still flows through when an operator
+    #: declares it as an alias. Default seed includes the five legacy
+    #: HTTP verbs (GET, POST, PUT, DELETE, PATCH) mapped to their
+    #: AGTP-canonical replacements (FETCH, CREATE, REPLACE, REMOVE,
+    #: MODIFY). Operators add or override via
+    #: ``[policies.methods.aliases]`` in agtp-server.toml.
+    #:
+    #: Keys are uppercased source-side verb names; values are
+    #: uppercased target verbs. Distinct from :attr:`redirects` —
+    #: redirects rewrite ``(method, path)`` tuples after registry
+    #: resolution; aliases rewrite the verb itself ahead of catalog
+    #: validation.
+    aliases: Dict[str, str] = field(default_factory=dict)
 
     # ----- runtime checks (formerly free functions in
     # server/methods_policy.py) -----
@@ -154,6 +169,22 @@ class MethodsPolicy:
         if self.allow_all:
             return True
         return upper in self.allow
+
+    def resolve_alias(self, method: str) -> Optional[str]:
+        """RCNS-5: resolve a verb alias.
+
+        Returns the canonical target verb when ``method`` is an
+        alias on this policy, or ``None`` when no alias applies.
+        Resolution is single-hop: aliases never chain through each
+        other (an operator declaring ``A -> B`` and ``B -> C`` gets
+        ``A -> B`` only, not ``A -> C``). This keeps alias loops
+        impossible and the behavior easy to reason about.
+        """
+        upper = method.upper()
+        target = self.aliases.get(upper)
+        if target is None or target == upper:
+            return None
+        return target
 
     def resolve_redirect(
         self, method: str, path: str,
@@ -213,12 +244,42 @@ class MethodsPolicy:
                 key=lambda e: (e.get("from_method", ""), e.get("from_path", ""))
             )
             out["redirects"] = wire_redirects
+        if self.aliases:
+            # Sort for stable manifest output. Callers compare
+            # against the table to know which verbs the server will
+            # accept beyond the AGTP catalog.
+            out["aliases"] = dict(sorted(self.aliases.items()))
         return out
 
 
+def _legacy_alias_seed() -> Dict[str, str]:
+    """RCNS-5: seed the alias table with the five legacy HTTP verbs
+    mapped to their AGTP-canonical replacements.
+
+    The mapping comes from :data:`core.methods.LEGACY_VERBS` via
+    :func:`core.methods.get_legacy_preferred` so the seed never goes
+    out of sync with ``core/methods.json``. Operators can override
+    any of these via ``[policies.methods.aliases]`` (e.g. a server
+    that wants HTTP ``GET`` to be DISCOVER rather than FETCH).
+    """
+    from core.methods import LEGACY_VERBS, get_legacy_preferred
+    seed: Dict[str, str] = {}
+    for verb in LEGACY_VERBS:
+        canonical = get_legacy_preferred(verb)
+        if canonical:
+            seed[verb.upper()] = canonical.upper()
+    return seed
+
+
 def default_methods_policy() -> MethodsPolicy:
-    """Allow-all, no opt-ins, no redirects. The freshly-booted default."""
-    return MethodsPolicy(allow_all=True)
+    """Allow-all, no opt-ins, no redirects. The freshly-booted default.
+
+    RCNS-5 seeds the alias table with the five legacy HTTP verbs so
+    a fresh server admits ``GET /products`` as ``FETCH /products``
+    without operator configuration. Disable by declaring an empty
+    ``[policies.methods.aliases]`` block (``aliases = {}``).
+    """
+    return MethodsPolicy(allow_all=True, aliases=_legacy_alias_seed())
 
 
 def _normalize_method_name(name: Any) -> str:
@@ -364,6 +425,39 @@ def methods_policy_from_table(
         policy.redirects[key] = (
             to_method,
             str(to_path) if to_path is not None else None,
+        )
+
+    # RCNS-5: aliases. Seed defaults first (the legacy HTTP table)
+    # then layer the operator's declarations on top. An operator who
+    # wants a clean slate declares ``[policies.methods.aliases]`` as
+    # an empty table — the default seed is wiped before any
+    # operator-supplied entries are applied.
+    raw_aliases = table.get("aliases")
+    if raw_aliases is None:
+        # No block declared → keep the legacy seed.
+        policy.aliases = _legacy_alias_seed()
+    elif isinstance(raw_aliases, dict):
+        # Operator declared a block — start fresh so explicit empty
+        # tables disable the legacy seed entirely.
+        policy.aliases = {}
+        for source, target in raw_aliases.items():
+            src_v = _normalize_method_name(source)
+            tgt_v = _normalize_method_name(target)
+            if not src_v or not tgt_v:
+                raise ValueError(
+                    f"{source}: each alias entry needs a non-empty "
+                    f"source and target ({source!r} -> {target!r})"
+                )
+            # Target verb must be in the catalog (or legacy) so the
+            # rest of the pipeline can still validate it.
+            if not _verb_in_catalog(tgt_v, allow_legacy=True):
+                _warn_unknown_verb("alias (target)", tgt_v, source)
+                continue
+            policy.aliases[src_v] = tgt_v
+    else:
+        raise ValueError(
+            f"{source}: policies.methods.aliases must be a table "
+            f"(got {raw_aliases!r})"
         )
 
     return policy

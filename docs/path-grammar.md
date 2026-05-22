@@ -70,7 +70,11 @@ The pattern is extensible — see [`server/builtins.py`](../server/builtins.py).
 
 ## What about HTTP gateways?
 
-Out of scope for AGTP itself. Operators that need to expose AGTP behaviors over HTTP (for browser-friendly metadata, for legacy integration, for ops dashboards) should run a separate HTTP service that reads from the AGTP server. The translation logic — what becomes a `/.well-known/...` resource, what becomes a public REST endpoint — is a deployment concern, not a protocol concern.
+The AGTP wire stays AGTP-only — the path-grammar rules above apply to AGTP requests, not HTTP. Operators who need to expose AGTP behaviors to existing REST clients during the wire transition load the [`mod_http_gateway`](../operational/mod_http_gateway/README.md) sidecar (RCNS-5), which runs a parallel HTTP listener inside the daemon and translates REST → AGTP through the daemon's regular dispatch path.
+
+The translation is mechanical: HTTP verbs map to AGTP verbs via `[policies.methods.aliases]` (default seed: `GET → FETCH`, `POST → CREATE`, etc.). Paths flow through unchanged. The daemon's audit chain records the original HTTP verb as `requested_method` whenever an alias fires, so chain inspectors see exactly what came in over the wire. **REST callers cannot trigger RCNS** — by design, the `Allow-RCNS` header is stripped before dispatch.
+
+For richer translation (custom verb maps, response transformation, cross-protocol auth) operators fork the gateway module or front it with a dedicated reverse proxy. The protocol is AGTP-native; the gateway is the operator's adoption ramp.
 
 ## Worked examples
 

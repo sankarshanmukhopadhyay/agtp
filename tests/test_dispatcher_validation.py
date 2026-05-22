@@ -157,14 +157,30 @@ class MethodGrammarValidationTests(unittest.TestCase):
         payload = _decode_json(resp)
         self.assertIn("PROPOSE", payload["error"].get("suggestions", []))
 
-    def test_legacy_verb_without_opt_in_returns_459(self):
-        # GET isn't admitted by the default Allow:* policy because it
-        # isn't in the approved-verbs set; it's only legacy-set
-        # membership that admits it, and this server hasn't opted in.
+    def test_legacy_verb_resolved_via_default_alias_seed(self):
+        # RCNS-5: default methods policy seeds the alias table with the
+        # five legacy HTTP verbs mapped to their AGTP canonicals (GET ->
+        # FETCH, POST -> CREATE, etc.). A caller sending wire-level GET
+        # now resolves to FETCH at the dispatcher gate before the
+        # catalog check. FETCH is in the catalog → passes 459; no
+        # handler is registered on the test fixture → 405 method-not-
+        # implemented (the next gate down). Operators wanting the
+        # pre-RCNS-5 strict 459 declare ``[policies.methods.aliases]``
+        # as an empty table to wipe the seed.
         resp = _send(self.server, ORCH_ID, "GET")
-        self.assertEqual(resp.status_code, 459)
+        self.assertEqual(resp.status_code, 405)
         payload = _decode_json(resp)
-        self.assertIn("FETCH", payload["error"].get("suggestions", []))
+        self.assertEqual(
+            payload["error"]["code"], "method-not-implemented",
+        )
+
+    def test_unknown_verb_with_no_alias_still_returns_459(self):
+        # A verb that's neither in the catalog nor in the alias table
+        # still surfaces the helpful 459 with close-match suggestions.
+        # This is the path-to-typo case the dispatcher has always
+        # served and stays intact under RCNS-5.
+        resp = _send(self.server, ORCH_ID, "FROBNICATE")
+        self.assertEqual(resp.status_code, 459)
 
     def test_embedded_verb_passes_catalog_gate(self):
         # QUERY is embedded; the gate must let it through.
