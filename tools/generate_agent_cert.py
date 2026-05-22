@@ -66,6 +66,10 @@ from cryptography.x509.oid import NameOID
 # Reuse the daemon's Agent-ID derivation so the CLI's printed value
 # matches what the verifier computes at runtime. Sharing the function
 # is what keeps the off-line and on-line views in lockstep.
+from core.genesis import (
+    GenesisFormatError,
+    load_genesis_json,
+)
 from server.agent_cert_ext import (
     CertExtensionError,
     add_activation_certificate_id,
@@ -270,7 +274,20 @@ def main(argv: list[str] | None = None) -> int:
         "--activation-certificate-id",
         help=(
             "activation-certificate-id extension value (64 hex). "
-            "Cross-layer reference to the Agent Genesis hash."
+            "Cross-layer reference to the Agent Genesis hash. Most "
+            "callers should pass --genesis instead, which derives "
+            "both this and subject-agent-id from a Genesis file."
+        ),
+    )
+    parser.add_argument(
+        "--genesis",
+        help=(
+            "Path to an Agent Genesis JSON file. When supplied, both "
+            "subject-agent-id and activation-certificate-id are set to "
+            "sha256(Genesis) so the cert is cryptographically bound to "
+            "the Genesis at the wire layer. The cert's public key remains "
+            "independent of the Genesis (renewable certs share a Genesis "
+            "across rotations)."
         ),
     )
 
@@ -318,17 +335,39 @@ def main(argv: list[str] | None = None) -> int:
 
     agent_id = derive_agent_id_from_public_key(agent_pub)
 
-    # When the caller explicitly supplies --subject-agent-id, it MUST
-    # equal the key-derived Agent-ID. The daemon enforces the same
-    # invariant at verification time; refusing here gives a clearer
-    # error message than a 401 on the wire.
-    if args.subject_agent_id and args.subject_agent_id.lower() != agent_id:
-        print(
-            f"--subject-agent-id {args.subject_agent_id!r} does not match "
-            f"the key-derived Agent-ID {agent_id!r}.",
-            file=sys.stderr,
-        )
-        return 2
+    # --genesis: read a Genesis file and derive the canonical Agent-ID
+    # from it. Wins over both --subject-agent-id and
+    # --activation-certificate-id (the Genesis IS the source of those
+    # values).
+    genesis_agent_id = None
+    if args.genesis:
+        try:
+            genesis = load_genesis_json(
+                Path(args.genesis).read_text(encoding="utf-8")
+            )
+        except (OSError, GenesisFormatError) as exc:
+            print(f"could not load --genesis: {exc}", file=sys.stderr)
+            return 2
+        genesis_agent_id = genesis.canonical_agent_id()
+        # Refuse silent conflicts when the caller passes both
+        # --genesis and --subject-agent-id pointing different ways.
+        if args.subject_agent_id and args.subject_agent_id.lower() != genesis_agent_id:
+            print(
+                f"--subject-agent-id {args.subject_agent_id!r} conflicts "
+                f"with --genesis hash {genesis_agent_id!r}",
+                file=sys.stderr,
+            )
+            return 2
+        if (
+            args.activation_certificate_id
+            and args.activation_certificate_id.lower() != genesis_agent_id
+        ):
+            print(
+                f"--activation-certificate-id {args.activation_certificate_id!r} "
+                f"conflicts with --genesis hash {genesis_agent_id!r}",
+                file=sys.stderr,
+            )
+            return 2
 
     # Default: when any AGTP extension flag is present, also write
     # subject-agent-id so the cert is recognizably a full Agent Cert
@@ -344,10 +383,16 @@ def main(argv: list[str] | None = None) -> int:
             args.archetype,
             args.activation_certificate_id,
             args.subject_agent_id,
+            args.genesis,
         )
     )
-    effective_subject_agent_id = args.subject_agent_id or (
-        agent_id if extension_flags_present else None
+    effective_subject_agent_id = (
+        genesis_agent_id
+        or args.subject_agent_id
+        or (agent_id if extension_flags_present else None)
+    )
+    effective_activation_id = (
+        genesis_agent_id or args.activation_certificate_id
     )
 
     try:
@@ -366,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
             governance_zone=args.governance_zone,
             trust_tier=args.trust_tier,
             archetype=args.archetype,
-            activation_certificate_id=args.activation_certificate_id,
+            activation_certificate_id=effective_activation_id,
         )
     except CertExtensionError as exc:
         print(f"invalid Agent Cert extension: {exc}", file=sys.stderr)
@@ -395,7 +440,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"private key:  {key_path}")
     print(f"certificate:  {crt_path}  ({signed_by})")
     print(f"common name:  {common_name}")
-    print(f"agent_id:     {agent_id}")
+    # The Agent-ID printed is the *effective* identity the daemon
+    # will use on the wire: the Genesis hash when --genesis was
+    # supplied, otherwise the cert pubkey hash (transport-only).
+    if effective_subject_agent_id and effective_subject_agent_id != agent_id:
+        print(f"agent_id:     {effective_subject_agent_id}  (from Genesis)")
+        print(f"  key-derived: {agent_id}  (transport-only fallback)")
+    else:
+        print(f"agent_id:     {agent_id}")
     if extension_flags_present:
         print()
         print("AGTP Agent Cert extensions written:")
@@ -411,8 +463,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  trust-tier:                {args.trust_tier}")
         if args.archetype:
             print(f"  archetype:                 {args.archetype}")
-        if args.activation_certificate_id:
-            print(f"  activation-certificate-id: {args.activation_certificate_id}")
+        if effective_activation_id:
+            print(f"  activation-certificate-id: {effective_activation_id}")
+        if args.genesis:
+            print(f"  genesis (source):          {args.genesis}")
     print()
     print("This Agent-ID is derived from the cert's Ed25519 public key.")
     print("When the daemon verifies a connection presenting this cert, it")

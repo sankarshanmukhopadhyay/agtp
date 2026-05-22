@@ -308,10 +308,13 @@ def test_verifier_prefers_subject_agent_id() -> None:
     assert verified.extensions.subject_agent_id == aid
 
 
-def test_verifier_refuses_mismatched_subject_agent_id() -> None:
-    """A subject-agent-id extension whose value disagrees with the
-    key-derived Agent-ID MUST be refused with detail
-    extension-mismatch — that's the substitution-attack defense."""
+def test_verifier_accepts_genesis_derived_subject_agent_id() -> None:
+    """Phase 4 design: subject-agent-id is the Genesis hash, which is
+    *independent* of the cert's key-derived hash. The verifier MUST
+    accept the divergence and treat the extension value as
+    authoritative. Substitution defense moves to the Genesis-binding
+    check via verify_cert_genesis_binding at the application layer.
+    """
     key = Ed25519PrivateKey.generate()
     pub = key.public_key()
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "x")])
@@ -323,14 +326,17 @@ def test_verifier_refuses_mismatched_subject_agent_id() -> None:
         .not_valid_before(now - timedelta(minutes=1))
         .not_valid_after(now + timedelta(days=1))
     )
-    # Wrong subject-agent-id (a different valid hex string).
-    b = add_subject_agent_id(b, "c" * 64)
+    # A Genesis-derived Agent-ID that is NOT the key-derived hash.
+    # (Real Geneses produce hex strings unrelated to the cert key.)
+    genesis_derived = "c" * 64
+    b = add_subject_agent_id(b, genesis_derived)
     cert = b.sign(private_key=key, algorithm=None)
     der = cert.public_bytes(encoding=serialization.Encoding.DER)
 
-    with pytest.raises(CertVerificationError) as exc_info:
-        CertVerifier().verify_peer_cert(der)
-    assert exc_info.value.detail == "extension-mismatch"
+    verified = CertVerifier().verify_peer_cert(der)
+    # The extension value, not the key-derived hash, is authoritative.
+    assert verified.agent_id == genesis_derived
+    assert verified.extensions.subject_agent_id == genesis_derived
 
 
 def test_verifier_with_no_extensions_uses_key_derived_id() -> None:

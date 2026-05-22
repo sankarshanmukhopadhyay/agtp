@@ -31,6 +31,7 @@ import json as _json
 from core import status as status_codes
 from core import wire
 from core._paths import normalize
+from core.genesis import AgentGenesis
 from server.config import CONFIG_FILENAME, ServerConfig, default_config, load as load_config
 from core.identity import (
     CONTENT_TYPE_MANIFEST_JSON,
@@ -207,6 +208,12 @@ class AgentRegistry:
     def __init__(self, agents_dir: Path):
         self.agents_dir = Path(agents_dir)
         self.agents: Dict[str, AgentDocument] = {}
+        # Phase 4: per-agent Agent Genesis documents loaded from
+        # ``{name}.genesis.json`` files alongside each ``{name}.agent.json``.
+        # Missing files are tolerated (the agent runs as transport-only
+        # identity). Loaded Geneses are exposed via DISCOVER /genesis
+        # so verifiers can fetch + verify the cert-binding.
+        self.geneses: Dict[str, "AgentGenesis"] = {}
         self.synthesis_runtime: Optional[SynthesisRuntime] = (
             self._make_default_runtime()
         )
@@ -456,6 +463,48 @@ class AgentRegistry:
                 print(f"[server] loaded {doc.name} ({doc.agent_id[:12]}...)")
             except (json.JSONDecodeError, ValueError) as exc:
                 print(f"[server] skipping {json_path}: {exc}", file=sys.stderr)
+                continue
+
+            # Phase 4: optionally load the matching Agent Genesis.
+            # Naming convention: ``{stem}.genesis.json`` next to
+            # ``{stem}.agent.json``. Missing file is fine — Phase-1
+            # agents predate Genesis.
+            stem = json_path.name[: -len(".agent.json")]
+            genesis_path = self.agents_dir / f"{stem}.genesis.json"
+            if not genesis_path.exists():
+                continue
+            try:
+                from core.genesis import load_genesis_json
+                genesis = load_genesis_json(
+                    genesis_path.read_text(encoding="utf-8"),
+                )
+                # Sanity check: Genesis hash MUST equal AgentDocument's
+                # agent_id, otherwise the two artifacts disagree on
+                # who this agent is. Skip the Genesis on mismatch
+                # rather than crash boot.
+                if genesis.canonical_agent_id() != doc.agent_id:
+                    print(
+                        f"[server] skipping {genesis_path.name}: "
+                        f"Genesis hash {genesis.canonical_agent_id()[:12]}... "
+                        f"does not match agent_id {doc.agent_id[:12]}...",
+                        file=sys.stderr,
+                    )
+                    continue
+                self.geneses[doc.agent_id] = genesis
+                print(
+                    f"[server]   genesis for {doc.name} "
+                    f"(issuer={genesis.issuer}, tier={genesis.trust_tier})"
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[server] skipping {genesis_path.name}: {exc}",
+                    file=sys.stderr,
+                )
+
+    def lookup_genesis(self, agent_id: str) -> Optional["AgentGenesis"]:
+        """Return the Agent Genesis for ``agent_id``, or ``None`` when
+        the agent has no Genesis loaded (transport-only identity)."""
+        return self.geneses.get(agent_id)
 
     def lookup(self, agent_id: str) -> Optional[AgentDocument]:
         return self.agents.get(agent_id)

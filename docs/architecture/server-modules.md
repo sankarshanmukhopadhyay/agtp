@@ -49,11 +49,11 @@ agtpd owns everything inside the protocol boundary. An operator who installs agt
 | 7 | Scope and authority gate | Implemented (`server/main.py` soft_deny_check) |
 | 8 | Agent-ID resolution | Implemented |
 | 9 | Agent Manifest serving | Implemented (`server/manifest.py`) |
-| 10 | DISCOVER and discovery routing | Implemented |
+| 10 | DISCOVER and discovery routing | Implemented; supports `target` ∈ {methods, agents, tools, apis, genesis}. Phase 4's `target=genesis` returns the agent's Agent Genesis when one is loaded next to the AgentDocument. |
 | 11 | Configuration | Implemented (`agtp-server.toml`) |
 | 12 | Logging | Basic; needs structured format |
 | 13 | Session management | Specified, partial implementation |
-| 14 | Agent Certificate verification | Implemented (`server/mtls.py`, Phases B + 3); standard X.509 + Ed25519 with Agent-ID derived from public-key hash. All eight AGTP X.509 v3 extensions (`draft-hood-agtp-agent-cert`) parsed and surfaced on `VerifiedCert.extensions` and `EndpointContext.agent_cert_extensions`; SCT extension parses but isn't verified against an AGTP-CTL yet (Phase 8). |
+| 14 | Agent Certificate verification | Implemented (`server/mtls.py`, Phases B + 3 + 4); standard X.509 + Ed25519. When a cert carries the `subject-agent-id` extension that value is the canonical Agent-ID (sha256 of the Agent Genesis JSON, per AGTP-LOG §2); otherwise the daemon falls back to the SHA-256 of the cert's Ed25519 public key (transport-only identity). All eight AGTP X.509 v3 extensions (`draft-hood-agtp-agent-cert`) parsed and surfaced on `VerifiedCert.extensions` and `EndpointContext.agent_cert_extensions`. Cert ↔ Genesis binding verification (sha256(Genesis) == subject-agent-id + Genesis signature against issuer key) is layered in `core.genesis.verify_cert_genesis_binding` for inspectors and SEPs. SCT extension parses but isn't verified against an AGTP-CTL yet (Phase 8). |
 | 15 | Caching | Implemented (`mod_cache`, M9) |
 | 16 | Reverse proxy | Implemented (`mod_proxy`, M9) |
 | 17 | AGTP-LOG receipt emission | Implemented as Ed25519-signed JSONL (`mod_audit`); COSE/SCITT wrapper deferred |

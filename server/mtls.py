@@ -76,8 +76,6 @@ class CertVerificationError(MtlsError):
       * ``malformed-extension``  one of the AGTP-specific X.509 v3
                                  extensions (draft-hood-agtp-agent-cert)
                                  carries a malformed value
-      * ``extension-mismatch``  a cert extension binds an Agent-ID that
-                                disagrees with the key-derived value
     """
 
     def __init__(self, message: str, *, detail: str) -> None:
@@ -105,12 +103,24 @@ class VerifiedCert:
     """
 
     agent_id: str
-    """Canonical Agent-ID for this cert. Sourced from the
-    ``subject-agent-id`` extension when present; falls back to the
-    SHA-256 of the cert's Ed25519 public key. The two values are
-    cross-checked: a cert whose ``subject-agent-id`` disagrees with
-    the key-derived hash is refused with detail
-    ``extension-mismatch``."""
+    """Canonical Agent-ID for this cert.
+
+    When the cert carries a ``subject-agent-id`` extension, that
+    value is the canonical Agent-ID (per AGTP-LOG §2: the hash of
+    the agent's Agent Genesis document). When the extension is
+    absent — a vanilla TLS cert without Agent-Cert extensions —
+    the daemon falls back to the SHA-256 of the Ed25519 public
+    key as a transport-only identity.
+
+    Phase 4 deliberately does NOT require ``subject-agent-id`` to
+    equal the key-derived hash. Renewable Agent Certs share an
+    Agent Genesis (and therefore an Agent-ID) across cert
+    rotations, but each rotation uses a fresh keypair — equating
+    extension-with-key-hash would tie cert lifetime to Genesis
+    lifetime, defeating the AGTP-CERT 90-day renewal model.
+    Verification that ``subject-agent-id`` matches a presented
+    Genesis is handled at the application / inspector layer via
+    :func:`core.genesis.verify_cert_genesis_binding`."""
 
     fingerprint: str
     """Hex-encoded SHA-256 of the certificate DER bytes (64 chars)."""
@@ -218,25 +228,19 @@ class CertVerifier:
                 detail="malformed-extension",
             ) from exc
 
-        # When the cert carries a ``subject-agent-id`` extension, it
-        # MUST match the key-derived Agent-ID. The extension is the
-        # canonical Agent-ID per the Phase-3 design; the key-derived
-        # form is what the daemon computes transport-side. A mismatch
-        # means the cert is binding a different identity than the key
-        # it actually controls, which is exactly the substitution
-        # attack the cross-check defends against.
-        if (
-            extensions.subject_agent_id is not None
-            and extensions.subject_agent_id != key_derived_agent_id
-        ):
-            raise CertVerificationError(
-                f"subject-agent-id extension {extensions.subject_agent_id!r} "
-                f"does not match key-derived Agent-ID {key_derived_agent_id!r}",
-                detail="extension-mismatch",
-            )
-
-        # Authoritative Agent-ID: the extension when present, the
-        # key-derived form otherwise.
+        # Authoritative Agent-ID per AGTP-LOG §2: the
+        # ``subject-agent-id`` extension when present (= hash of the
+        # agent's Agent Genesis document), the key-derived form
+        # otherwise (transport-only identity, no Genesis backing).
+        #
+        # Phase 4 explicitly does NOT require the extension to equal
+        # the key-derived hash. Substitution defense moves to the
+        # Genesis-binding check at the application layer (chain
+        # inspector, registrar verifier, ``mod_agent_cert``-aware
+        # SEPs): a presented Genesis must hash to the same value as
+        # ``subject-agent-id``, and the Genesis must verify against a
+        # trusted issuer key. See
+        # :func:`core.genesis.verify_cert_genesis_binding`.
         agent_id = extensions.subject_agent_id or key_derived_agent_id
 
         return VerifiedCert(

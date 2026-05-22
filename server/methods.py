@@ -730,12 +730,39 @@ def handle_discover(
             )
     elif target in ("tools", "apis"):
         items = []
+    elif target == "genesis":
+        # Phase 4: serve the agent's signed Agent Genesis document.
+        # Verifiers (chain inspector, registrar verifiers, governance
+        # tooling) fetch via this endpoint to confirm that the cert
+        # presented during mTLS is bound to a Genesis whose hash equals
+        # subject-agent-id and whose signature verifies against a
+        # trusted issuer key.
+        genesis = None
+        lookup = getattr(server_state, "lookup_genesis", None)
+        if lookup is not None:
+            genesis = lookup(agent_doc.agent_id)
+        if genesis is None:
+            return error_response(
+                404,
+                "Not Found",
+                "genesis-not-found",
+                (
+                    f"agent {agent_doc.agent_id} has no Agent Genesis "
+                    f"loaded on this server (transport-only identity)"
+                ),
+            )
+        return json_response(
+            200,
+            "OK",
+            genesis.to_dict(),
+            method_name="DISCOVER",
+        )
     else:
         return error_response(
             422,
             "Unprocessable Entity",
             "unknown-discover-target",
-            f"target must be one of: methods, agents, tools, apis (got {target!r})",
+            f"target must be one of: methods, agents, tools, apis, genesis (got {target!r})",
         )
 
     return json_response(

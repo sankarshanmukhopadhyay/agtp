@@ -717,11 +717,15 @@ issuer:          agtp.io
 
 Deliberate scope cuts, listed for future revisions:
 
-- **Cryptographic signatures.** Agent Documents are unsigned in v1;
-  v2 wires in Agent Genesis signing.
 - **Trust scores.** Mentioned in the spec but not yet computed.
-- **Public registration UI** at `https://register.agtp.io`.
-- **AGTP-CERT integration** at `https://ca.agtp.io`.
+- **Public registration UI** at `https://register.agtp.io` —
+  a reference local registrar ships at
+  [`tools/registrar/`](tools/registrar/README.md); the hosted
+  service is future work.
+- **AGTP-CERT integration** at `https://ca.agtp.io` — local Agent
+  Cert generation is supported via
+  `python -m tools.generate_agent_cert --genesis ...`; a hosted CA
+  is future work.
 - **Methods beyond DESCRIBE** — QUERY, BOOK, DELEGATE, etc.
 - **`.well-known/agtp` bootstrap** for non-AGTP-native domains.
 - **Federated registries** — v1 hardcodes one registry.
