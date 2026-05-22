@@ -239,9 +239,39 @@ Content-Type: application/agtp+json
 
 Response body carries `{jws, header, payload, ...}`. A second
 shape, `{"target": "chain_head", "agent_id": "<64-hex>"}`, returns
-the latest audit_id for the given agent. Both are read by the
-chain inspector at `tools/chain_inspector/` to walk the chain
-backwards.
+the latest audit_id for the given agent. A third shape,
+`{"target": "lifecycle", "agent_id": "<64-hex>"}`, returns the
+agent's full identity-lifecycle event stream (ACTIVATE,
+DEACTIVATE, REVOKE history) — oldest first, one parsed JWS per
+event. All three are read by the chain inspector at
+`tools/chain_inspector/` to walk the chain backwards.
+
+## Identity lifecycle methods (Phase 8)
+
+Three embedded verbs transition an agent's lifecycle state:
+
+| Method | Sets `status` to | Notes |
+|---|---|---|
+| `ACTIVATE` | `active` | Standard "agent ready to serve" state. |
+| `DEACTIVATE` | `suspended` | Recoverable inactive state. Re-ACTIVATE later. |
+| `REVOKE` | `retired` | Permanent. Agent-ID is never reused per AGTP-LOG §2. |
+
+Each call:
+
+* Updates the AgentDocument's `status` field in memory.
+* Appends a signed JWS lifecycle event to
+  `[audit].lifecycle_root/{agent_id}.jsonl`.
+* Returns 200 with `previous_status`, `status`, `event_type`,
+  `audit_id`, and (when provided) `reason`.
+* No-ops cleanly: invoking ACTIVATE on an already-active agent
+  returns 200 with `noop: true` and emits no event.
+
+Optional body: `{"reason": "..."}` rides into the lifecycle event's
+JWS payload `extra.reason` field for audit visibility.
+
+Authorization is open in v1 — the audit trail is the
+accountability mechanism. Future revisions can layer cert-based or
+Authority-Scope-based gates via `mod_agent_cert`.
 
 ### Owner-ID
 

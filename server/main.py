@@ -1200,6 +1200,24 @@ def run(
 
     if config is None:
         config = default_config(host)
+
+    # Phase 8: refuse to boot in scitt mode until COSE_Sign1 support
+    # lands. The receipt format flag is intentionally distinct from
+    # the storage flag so operators can opt in to SCITT before all
+    # the SDK pieces support it, but until COSE land we hard-fail
+    # with a clear message rather than silently emit JWS.
+    audit_mode = getattr(getattr(config, "audit", None), "mode", "jws") or "jws"
+    if audit_mode == "scitt":
+        raise RuntimeError(
+            "[audit].mode = 'scitt' is reserved for future work — "
+            "RFC 9943 COSE_Sign1 receipts (Phase 8 second half). "
+            "Use 'jws' (default) until SCITT support lands."
+        )
+    if audit_mode != "jws":
+        raise RuntimeError(
+            f"[audit].mode must be 'jws' or 'scitt'; got {audit_mode!r}"
+        )
+
     # The registry holds a config reference so the dispatcher and
     # PROPOSE handler can read synthesis durations, audit-log
     # routing, etc. without an extra plumbing argument.

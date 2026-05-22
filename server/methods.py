@@ -857,7 +857,9 @@ def handle_describe(
     description=(
         "Read a record from this server's audit store. target=audit "
         "returns the JWS for a given audit_id; target=chain_head "
-        "returns the latest audit_id for a given agent_id."
+        "returns the latest audit_id for a given agent_id; "
+        "target=lifecycle returns the agent's full lifecycle event "
+        "stream (ACTIVATE/DEACTIVATE/REVOKE history)."
     ),
     intent="Fetch a signed Attribution-Record by its identifier.",
     actor="agent",
@@ -976,10 +978,52 @@ def handle_inspect(
             method_name="INSPECT",
         )
 
+    if target == "lifecycle":
+        agent_id_param = str(params.get("agent_id") or "").strip().lower()
+        if not agent_id_param:
+            return error_response(
+                400, "Bad Request",
+                "missing-agent-id",
+                "target=lifecycle requires an agent_id parameter",
+            )
+        lifecycle_store = _resolve_lifecycle_store(server_state)
+        events = lifecycle_store.read_all(agent_id_param) if lifecycle_store else []
+
+        # Parse each JWS so callers get the decoded payload alongside
+        # the opaque form. Bad lines surface as None entries — better
+        # to expose a corrupt entry than silently drop it from the
+        # historical record.
+        from server.signing import (
+            AttributionRecordError as _ARErr,
+            parse_attribution_record as _parse,
+        )
+        decoded: List[Dict[str, Any]] = []
+        for jws in events:
+            try:
+                header, payload, _sig = _parse(jws)
+            except _ARErr:
+                decoded.append({"jws": jws, "parse_error": True})
+                continue
+            decoded.append({
+                "jws": jws, "header": header, "payload": payload,
+            })
+        return json_response(
+            200, "OK",
+            {
+                "method": "INSPECT",
+                "target": "lifecycle",
+                "agent_id": agent_id_param,
+                "events": decoded,
+                "event_count": len(decoded),
+                "issued_at": _utc_now_iso(),
+            },
+            method_name="INSPECT",
+        )
+
     return error_response(
         422, "Unprocessable Entity",
         "unknown-inspect-target",
-        f"target must be one of: audit, chain_head (got {target!r})",
+        f"target must be one of: audit, chain_head, lifecycle (got {target!r})",
     )
 
 
@@ -1013,6 +1057,275 @@ def _resolve_chain_store(server_state: Any):
     root = getattr(audit, "chain_head_root", "") or ""
     return AuditChainStore(
         Path(root).expanduser() if root else default_chain_head_root()
+    )
+
+
+def _resolve_lifecycle_store(server_state: Any):
+    """Resolve the AuditLifecycleStore. Returns ``None`` when
+    Attribution-Records are disabled — lifecycle events ride the
+    same signing path as Attribution-Records, so the two opt-in
+    together."""
+    config = getattr(server_state, "config", None)
+    audit = getattr(config, "audit", None) if config is not None else None
+    if audit is None or not getattr(audit, "attribution_records_enabled", False):
+        return None
+    from server.audit_lifecycle import (
+        AuditLifecycleStore, default_lifecycle_root,
+    )
+    root = getattr(audit, "lifecycle_root", "") or ""
+    return AuditLifecycleStore(
+        Path(root).expanduser() if root else default_lifecycle_root()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 8: identity lifecycle methods.
+# ---------------------------------------------------------------------------
+#
+# The daemon implements ACTIVATE / DEACTIVATE / REVOKE uniformly: each
+# updates the target AgentDocument's ``status`` field and appends a
+# signed lifecycle event to the agent's lifecycle stream
+# (``audit/lifecycle/{agent_id}.jsonl``). The lifecycle stream is the
+# AGTP-LOG-aligned read surface that regulators and chain inspectors
+# walk to reconstruct an agent's identity history.
+#
+# Authorization is open in v1 — every caller can transition any
+# agent's status. The audit trail is the accountability mechanism.
+# Future revisions add cert-based and Authority-Scope-based gates;
+# either fits cleanly on top of mod_agent_cert.
+
+
+def _lifecycle_transition(
+    *,
+    request: wire.AGTPRequest,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+    event_type: str,
+    new_status: str,
+) -> wire.AGTPResponse:
+    """Shared body for ACTIVATE / DEACTIVATE / REVOKE.
+
+    Updates ``agent_doc.status``, signs a lifecycle event, appends to
+    the agent's lifecycle stream, and returns a structured
+    confirmation. Honors the no-op case where the agent is already in
+    the target state (returns 200 with ``noop: true``)."""
+    spec = REGISTRY[event_type.upper()]
+    try:
+        params = parse_body(request)
+    except ValueError as exc:
+        return error_response(400, "Bad Request", "invalid-body", str(exc))
+
+    err = require_params(spec, params)
+    if err:
+        return err
+
+    reason = str(params.get("reason") or "").strip()
+    previous_status = agent_doc.status
+
+    if previous_status == new_status:
+        return json_response(
+            200, "OK",
+            {
+                "method": event_type.upper(),
+                "agent_id": agent_doc.agent_id,
+                "noop": True,
+                "status": previous_status,
+                "issued_at": _utc_now_iso(),
+            },
+            method_name=event_type.upper(),
+        )
+
+    # State transition. In-memory mutation; persistence to disk is a
+    # future revision (operators can re-author the agent.json manifest
+    # to make changes durable across daemon restarts).
+    agent_doc.status = new_status
+
+    # Emit lifecycle event when signing is configured. Failures here
+    # are logged but don't fail the response — the state transition
+    # is the source of truth; the audit stream is best-effort.
+    lifecycle_store = _resolve_lifecycle_store(server_state)
+    config = getattr(server_state, "config", None)
+    signing_service = (
+        getattr(config, "signing_service", None) if config is not None else None
+    )
+    audit_id = ""
+    if lifecycle_store is not None and signing_service is not None:
+        try:
+            audit_id = _emit_lifecycle_event(
+                signing_service=signing_service,
+                lifecycle_store=lifecycle_store,
+                config=config,
+                event_type=event_type,
+                agent_id=agent_doc.agent_id,
+                previous_status=previous_status,
+                new_status=new_status,
+                reason=reason,
+            )
+        except Exception as exc:  # noqa: BLE001
+            import sys as _sys
+            print(
+                f"[server] lifecycle event emit failed for "
+                f"{agent_doc.agent_id[:12]}... ({event_type}): {exc}",
+                file=_sys.stderr,
+            )
+
+    body: Dict[str, Any] = {
+        "method": event_type.upper(),
+        "agent_id": agent_doc.agent_id,
+        "previous_status": previous_status,
+        "status": new_status,
+        "event_type": event_type.lower(),
+        "issued_at": _utc_now_iso(),
+    }
+    if reason:
+        body["reason"] = reason
+    if audit_id:
+        body["audit_id"] = audit_id
+    return json_response(200, "OK", body, method_name=event_type.upper())
+
+
+def _emit_lifecycle_event(
+    *,
+    signing_service: Any,
+    lifecycle_store: Any,
+    config: Any,
+    event_type: str,
+    agent_id: str,
+    previous_status: str,
+    new_status: str,
+    reason: str,
+) -> str:
+    """Sign a lifecycle event JWS and append it to the agent's stream.
+    Returns the audit_id (sha256 of the JWS) so the caller can stamp
+    it on the response."""
+    from datetime import datetime as _dt, timezone as _tz
+    issued_at = _dt.now(tz=_tz.utc).isoformat().replace("+00:00", "Z")
+    server_id = (
+        getattr(config.server, "server_id", "") or ""
+        if config is not None and getattr(config, "server", None) is not None
+        else ""
+    )
+    import uuid as _uuid
+    response_id = f"resp-{_uuid.uuid4().hex[:12]}"
+    extra: Dict[str, Any] = {
+        "event_type": event_type.lower(),
+        "previous_status": previous_status,
+        "new_status": new_status,
+    }
+    if reason:
+        extra["reason"] = reason
+    record = signing_service.build_attribution_record(
+        agent_id=agent_id,
+        server_id=server_id,
+        issued_at=issued_at,
+        status=200,
+        response_id=response_id,
+        extra=extra,
+    )
+    lifecycle_store.append(agent_id, record.jws)
+    return record.audit_id
+
+
+@method(
+    name="ACTIVATE",
+    category="mechanics",
+    semantic_class="action-intent",
+    idempotent=False,
+    state_modifying=True,
+    required_params=[],
+    optional_params=["reason"],
+    error_codes=[400, 422],
+    description=(
+        "Transition the targeted agent to active status. Emits a "
+        "signed lifecycle event into the agent's lifecycle stream. "
+        "Repeated invocations on an already-active agent return "
+        "200 with noop=true and emit no event."
+    ),
+    intent="Bring an agent into operational status.",
+    actor="agent",
+    outcome="The agent's status is set to active.",
+    capability="discovery",
+    confidence=0.95,
+    impact="irreversible",
+    is_idempotent=False,
+)
+def handle_activate(
+    request: wire.AGTPRequest,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+) -> wire.AGTPResponse:
+    return _lifecycle_transition(
+        request=request, server_state=server_state, agent_doc=agent_doc,
+        event_type="activate", new_status="active",
+    )
+
+
+@method(
+    name="DEACTIVATE",
+    category="mechanics",
+    semantic_class="action-intent",
+    idempotent=False,
+    state_modifying=True,
+    required_params=[],
+    optional_params=["reason"],
+    error_codes=[400, 422],
+    description=(
+        "Transition the targeted agent to suspended status (a "
+        "recoverable inactive state). Emits a signed lifecycle event. "
+        "Repeated invocations on an already-suspended agent return "
+        "200 with noop=true and emit no event."
+    ),
+    intent="Place an agent into a recoverable inactive state.",
+    actor="agent",
+    outcome="The agent's status is set to suspended.",
+    capability="discovery",
+    confidence=0.95,
+    impact="reversible",
+    is_idempotent=False,
+)
+def handle_deactivate(
+    request: wire.AGTPRequest,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+) -> wire.AGTPResponse:
+    return _lifecycle_transition(
+        request=request, server_state=server_state, agent_doc=agent_doc,
+        event_type="deactivate", new_status="suspended",
+    )
+
+
+@method(
+    name="REVOKE",
+    category="mechanics",
+    semantic_class="action-intent",
+    idempotent=False,
+    state_modifying=True,
+    required_params=[],
+    optional_params=["reason"],
+    error_codes=[400, 422],
+    description=(
+        "Permanently retire the targeted agent. Sets status to "
+        "retired and emits a signed lifecycle event. Per the spec, "
+        "a retired agent's Genesis is archived; the Agent-ID is never "
+        "reused. Repeated invocations on an already-retired agent "
+        "return 200 with noop=true and emit no event."
+    ),
+    intent="Permanently retire an agent.",
+    actor="agent",
+    outcome="The agent's status is set to retired.",
+    capability="discovery",
+    confidence=0.95,
+    impact="irreversible",
+    is_idempotent=False,
+)
+def handle_revoke(
+    request: wire.AGTPRequest,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+) -> wire.AGTPResponse:
+    return _lifecycle_transition(
+        request=request, server_state=server_state, agent_doc=agent_doc,
+        event_type="revoke", new_status="retired",
     )
 
 

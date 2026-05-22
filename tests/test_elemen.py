@@ -152,8 +152,9 @@ class ElemenBridgeTests(unittest.TestCase):
             self._uri(ORCH_ID), insecure=True, insecure_skip_verify=True
         )
         self.assertTrue(result["ok"], result)
-        # 12 original protocol primitives + Phase 6 INSPECT.
-        self.assertEqual(result["summary"]["embedded_count"], 13)
+        # 12 original protocol primitives + Phase 6 INSPECT + Phase 8
+        # ACTIVATE / DEACTIVATE / REVOKE.
+        self.assertEqual(result["summary"]["embedded_count"], 16)
 
     # ---- invoke_method ----
 

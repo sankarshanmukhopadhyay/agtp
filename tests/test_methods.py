@@ -215,11 +215,13 @@ class MethodSetTests(unittest.TestCase):
     # ---- registry / semantic metadata ----
 
     def test_registry_has_all_embedded_methods(self) -> None:
-        # 12 original protocol primitives + Phase 6 INSPECT.
+        # 12 original protocol primitives + Phase 6 INSPECT + Phase 8
+        # ACTIVATE / DEACTIVATE / REVOKE.
         expected = {
             "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
             "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
             "INSPECT",
+            "ACTIVATE", "DEACTIVATE", "REVOKE",
         }
         from core.methods import EMBEDDED_VERBS
         embedded = {
@@ -526,6 +528,7 @@ class EmbeddedSemanticBlockTests(unittest.TestCase):
         "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
         "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
         "INSPECT",
+        "ACTIVATE", "DEACTIVATE", "REVOKE",
     )
 
     def test_every_embedded_method_has_semantic_block(self):

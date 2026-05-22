@@ -40,6 +40,10 @@ EMBEDDED = [
     "QUERY", "DISCOVER", "DESCRIBE", "SUMMARIZE", "PLAN", "EXECUTE",
     "DELEGATE", "ESCALATE", "CONFIRM", "SUSPEND", "PROPOSE", "NOTIFY",
     "INSPECT",
+    # Phase 8: identity lifecycle methods. The daemon owns these
+    # uniformly — every AGTP server transitions agent status the same
+    # way and emits the same lifecycle stream entries.
+    "ACTIVATE", "DEACTIVATE", "REVOKE",
 ]
 
 

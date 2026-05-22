@@ -532,12 +532,30 @@ class AuditConfig:
     (``~/.agtp/audit/records/`` on POSIX,
     ``%APPDATA%\\agtp\\audit\\records\\`` on Windows). Sharded by
     a 2-char hex prefix to keep directory sizes manageable.
+
+    ``lifecycle_root`` is the filesystem directory the daemon uses
+    to persist per-agent lifecycle event streams (the Phase-8
+    ACTIVATE/DEACTIVATE/REVOKE history). Empty string selects the
+    platform default (``~/.agtp/audit/lifecycle/`` on POSIX,
+    ``%APPDATA%\\agtp\\audit\\lifecycle\\`` on Windows). One JWS per
+    line, one file per agent — append-only.
+
+    ``mode`` controls the receipt format for lifecycle events.
+
+      * ``"jws"`` (default) — Ed25519-signed JWS Compact, identical
+        in shape to Attribution-Record. Verifiable with any JWS
+        library.
+      * ``"scitt"`` — RFC 9943 SCITT COSE_Sign1 receipts. Future
+        work; the daemon refuses to boot in scitt mode today with
+        a clear message pointing at the planned implementation.
     """
 
     path: str = "stderr"
     attribution_records_enabled: bool = False
     chain_head_root: str = ""
     records_root: str = ""
+    lifecycle_root: str = ""
+    mode: str = "jws"
 
 
 @dataclass
@@ -780,6 +798,8 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         ),
         chain_head_root=str(audit_block.get("chain_head_root") or ""),
         records_root=str(audit_block.get("records_root") or ""),
+        lifecycle_root=str(audit_block.get("lifecycle_root") or ""),
+        mode=str(audit_block.get("mode") or "jws"),
     )
 
     gateway_block = data.get("gateway", {}) or {}

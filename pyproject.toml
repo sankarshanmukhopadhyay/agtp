@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agtp"
-version = "0.3.0"
-description = "Agent Transfer Protocol reference implementation"
+version = "0.0.1"
+description = "Agent Transfer Protocol"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ dependencies = [
   "cryptography>=42",
 ]
 authors = [{ name = "Chris Hood", email = "chris@nomotic.ai" }]
-keywords = ["agtp", "agent", "protocol", "ietf"]
+keywords = ["agtp", "agent", "protocol", "ietf", "agent transfer protocol"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -33,6 +33,7 @@ classifiers = [
 [project.urls]
 Homepage = "https://agtp.io"
 Repository = "https://github.com/nomoticai/agtp"
+IETF = "https://datatracker.ietf.org/doc/draft-hood-independent-agtp/"
 
 # The repo is a monorepo of products. Each top-level Python directory
 # (core, server, client, registry) is a standalone package, following

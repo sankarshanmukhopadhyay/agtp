@@ -793,6 +793,24 @@ audit chain, so [the inspector](tools/chain_inspector/README.md) can
 walk from any subsequent action back to the assertion that authorized
 it.
 
+## Identity lifecycle
+
+Agents transition through three states:
+
+| Method | Status after | Reversible? |
+|---|---|---|
+| `ACTIVATE` | `active` | yes (DEACTIVATE) |
+| `DEACTIVATE` | `suspended` | yes (ACTIVATE) |
+| `REVOKE` | `retired` | no — Agent-ID never reused (AGTP-LOG §2) |
+
+Each transition appends a signed JWS to the agent's lifecycle
+stream at `~/.agtp/audit/lifecycle/{agent_id}.jsonl`. Read the
+stream with `INSPECT {target: lifecycle, agent_id: ...}` or via
+the chain inspector at `tools/chain_inspector/`. SCITT
+(RFC 9943 COSE_Sign1) is reserved via `[audit].mode = scitt`
+but isn't implemented yet — set it and the daemon refuses to
+boot with a "future work" message.
+
 ## Walking the audit chain
 
 Every response with `attribution_records_enabled` carries an

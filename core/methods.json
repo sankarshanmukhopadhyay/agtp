@@ -13,7 +13,10 @@
     "SUSPEND",
     "PROPOSE",
     "NOTIFY",
-    "INSPECT"
+    "INSPECT",
+    "ACTIVATE",
+    "DEACTIVATE",
+    "REVOKE"
   ],
   "legacy": {
     "GET": {
