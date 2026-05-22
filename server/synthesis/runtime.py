@@ -188,6 +188,26 @@ class SynthesisRuntime:
         #: dispatcher semantics).
         self._expires_at: Dict[str, Any] = {}
         self._persistent: set = set()
+        #: RCNS-3 contract scoping: the Agent-ID that originated each
+        #: synthesis. A request from a different Agent-ID presenting
+        #: a synthesis_id is refused with 464 ``contract-not-yours``.
+        #: Optional (PROPOSE callers populate it; tests may instantiate
+        #: without). When unset, the contract is unscoped — every
+        #: caller can present the id. RCNS-3 negotiation always sets
+        #: this; explicit PROPOSE can choose to.
+        self._originating: Dict[str, str] = {}
+        #: RCNS-3 contract hash: sha256 of the canonical contract
+        #: JSON. Stamped onto Attribution-Records for any action
+        #: dispatched through the synthesis so the chain inspector
+        #: can group invocations by contract identity (same hash =
+        #: same contract, even across different synthesis_ids).
+        self._contract_hashes: Dict[str, str] = {}
+        #: RCNS-3 negotiation origin: ``"propose-explicit"`` (an
+        #: agent called PROPOSE directly), ``"rcns-confirmed"`` (the
+        #: dispatcher gate produced a 461 preview the caller
+        #: accepted), or ``"rcns-optimistic"`` (the gate executed
+        #: inline). Rides on Attribution-Records.
+        self._origin: Dict[str, str] = {}
 
     # ---- composition ----
 
@@ -247,6 +267,9 @@ class SynthesisRuntime:
         *,
         expires_at: Optional[Any] = None,
         persistent: bool = False,
+        originating_agent_id: Optional[str] = None,
+        contract_hash: Optional[str] = None,
+        negotiation_origin: str = "propose-explicit",
     ) -> str:
         """
         Register a plan as an active synthesis. Returns the
@@ -265,6 +288,24 @@ class SynthesisRuntime:
             (true) or session-scoped (false). Persistent syntheses
             survive their originating agent's session up to
             ``expires_at``.
+
+        RCNS-3 fields:
+
+          * ``originating_agent_id`` — Agent-ID that produced this
+            synthesis. A request from a different Agent-ID
+            presenting this synthesis_id is refused at the
+            dispatcher with 464 ``contract-not-yours``. ``None``
+            leaves the contract unscoped (the v1 / legacy
+            behavior).
+          * ``contract_hash`` — sha256 hex digest of the canonical
+            contract JSON. Stamped onto Attribution-Records so
+            chain inspectors can group invocations by contract
+            identity even across renegotiations.
+          * ``negotiation_origin`` — one of ``"propose-explicit"``
+            (default; an agent called PROPOSE directly),
+            ``"rcns-confirmed"`` (the dispatcher gate produced a 461
+            preview the caller accepted), or ``"rcns-optimistic"``
+            (the gate executed inline). Rides on Attribution-Records.
         """
         synthesis_id = new_synthesis_id()
         with self._lock:
@@ -273,6 +314,11 @@ class SynthesisRuntime:
                 self._expires_at[synthesis_id] = expires_at
             if persistent:
                 self._persistent.add(synthesis_id)
+            if originating_agent_id:
+                self._originating[synthesis_id] = str(originating_agent_id)
+            if contract_hash:
+                self._contract_hashes[synthesis_id] = str(contract_hash)
+            self._origin[synthesis_id] = str(negotiation_origin)
         # Backward-compat shim: write a legacy Synthesis entry whose
         # target_method/parameter_mapping reflect the plan's first step
         # (good enough for existing callers; multi-step plans always
@@ -330,6 +376,11 @@ class SynthesisRuntime:
                         "recipe_name": plan.recipe_name,
                         "recipe_version": plan.recipe_version,
                         "policy_name": plan.policy_name,
+                        "originating_agent_id": self._originating.get(sid),
+                        "contract_hash": self._contract_hashes.get(sid),
+                        "negotiation_origin": self._origin.get(
+                            sid, "propose-explicit",
+                        ),
                     }
         return None
 
@@ -371,6 +422,28 @@ class SynthesisRuntime:
         with self._lock:
             return self._expires_at.get(synthesis_id)
 
+    def originating_agent_id(self, synthesis_id: str) -> Optional[str]:
+        """RCNS-3: the Agent-ID that produced this synthesis, or
+        ``None`` when the contract is unscoped (legacy / pre-RCNS-3
+        explicit PROPOSE callers that didn't pass the field)."""
+        with self._lock:
+            return self._originating.get(synthesis_id)
+
+    def contract_hash(self, synthesis_id: str) -> Optional[str]:
+        """RCNS-3: the canonical-contract sha256 stamped at
+        instantiation, or ``None`` if the caller didn't compute one
+        (legacy syntheses)."""
+        with self._lock:
+            return self._contract_hashes.get(synthesis_id)
+
+    def negotiation_origin(self, synthesis_id: str) -> str:
+        """RCNS-3: ``"propose-explicit"`` / ``"rcns-confirmed"`` /
+        ``"rcns-optimistic"`` depending on how the synthesis was
+        created. Defaults to ``"propose-explicit"`` for entries
+        that predate the origin tracking."""
+        with self._lock:
+            return self._origin.get(synthesis_id, "propose-explicit")
+
     def sweep_expired(self) -> List[str]:
         """Walk active syntheses and expire any past their
         ``expires_at``. Returns the list of expired ids. Called at
@@ -407,6 +480,15 @@ class SynthesisRuntime:
             if synthesis_id in self.active:
                 del self.active[synthesis_id]
                 existed = True
+            # Clean up the RCNS-3 side-tables so an expired
+            # synthesis_id can't leak originating-agent or contract
+            # info to a future negotiation that happens to reuse
+            # the id (unlikely but defensible).
+            self._originating.pop(synthesis_id, None)
+            self._contract_hashes.pop(synthesis_id, None)
+            self._origin.pop(synthesis_id, None)
+            self._expires_at.pop(synthesis_id, None)
+            self._persistent.discard(synthesis_id)
         # Mirror to the legacy registry.
         if self.legacy_registry.remove(synthesis_id):
             existed = True

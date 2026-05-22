@@ -480,6 +480,73 @@ class SynthesisConfig:
 
 
 @dataclass
+class RcnsConfig:
+    """
+    RCNS — Runtime Contract Negotiation Substrate, RCNS-3.
+
+    When ``enabled = true``, the dispatcher escalates would-be 404
+    responses into a runtime negotiation for callers that satisfy
+    three additional locks: the request carries ``Allow-RCNS: true``
+    (or ``optimistic``), the agent's scopes include
+    ``rcns:negotiate``, and the agent's resolved trust tier is at
+    least as strong as ``min_trust_tier``.
+
+    ``min_trust_tier`` semantics follow the rest of the trust model:
+    lower numbers mean stronger trust. A value of ``1`` admits only
+    Tier 1 agents; ``2`` admits Tier 1 and Tier 2; ``3`` admits any
+    declared trust posture. Default ``1`` — the safest posture, the
+    operator opts callers in deliberately.
+
+    ``max_negotiations_per_minute`` is a per-agent rolling rate
+    limit. Distinct from the ordinary request rate limit because
+    negotiations are expensive (composition policies run on every
+    one) and the abuse pattern is asymmetric: a single misbehaving
+    agent should not be able to consume the server's negotiation
+    budget by spraying random paths.
+
+    ``idempotency_window_seconds`` controls how long an
+    ``RCNS-Idempotency-Key`` retains its negotiated synthesis_id.
+    Same key + same agent within the window returns the same
+    synthesis_id; outside the window the cached entry is evicted
+    and a fresh negotiation runs.
+
+    ``on_policy_change`` is reserved for RCNS-4: it governs whether
+    in-flight contracts are grandfathered to their TTL or
+    invalidated immediately when operator policy changes. RCNS-3
+    stores the value and accepts both ``"grandfather"`` (default)
+    and ``"invalidate"`` so RCNS-4 has a stable surface.
+    """
+
+    enabled: bool = False
+    min_trust_tier: int = 1
+    max_negotiations_per_minute: int = 10
+    idempotency_window_seconds: int = 60
+    on_policy_change: str = "grandfather"
+
+    def __post_init__(self) -> None:
+        if self.min_trust_tier not in (1, 2, 3):
+            raise ValueError(
+                f"rcns.min_trust_tier must be 1, 2, or 3 (got "
+                f"{self.min_trust_tier!r})"
+            )
+        if self.max_negotiations_per_minute < 0:
+            raise ValueError(
+                f"rcns.max_negotiations_per_minute must be >= 0 (got "
+                f"{self.max_negotiations_per_minute!r})"
+            )
+        if self.idempotency_window_seconds < 0:
+            raise ValueError(
+                f"rcns.idempotency_window_seconds must be >= 0 (got "
+                f"{self.idempotency_window_seconds!r})"
+            )
+        if self.on_policy_change not in ("grandfather", "invalidate"):
+            raise ValueError(
+                f"rcns.on_policy_change must be 'grandfather' or "
+                f"'invalidate' (got {self.on_policy_change!r})"
+            )
+
+
+@dataclass
 class AgentsConfig:
     """How openly the server lists the agents it hosts."""
 
@@ -689,6 +756,7 @@ class ServerConfig:
     policy: ServerPolicy = field(default_factory=ServerPolicy)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     synthesis: SynthesisConfig = field(default_factory=SynthesisConfig)
+    rcns: RcnsConfig = field(default_factory=RcnsConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     signing: SigningConfig = field(default_factory=SigningConfig)
@@ -832,6 +900,25 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         ),
     )
 
+    # RCNS-3: ``[policies.rcns]`` block. Default is fully off — the
+    # operator opts callers into runtime negotiation deliberately by
+    # setting ``enabled = true``. Pre-RCNS-3 configs without the
+    # block load cleanly via the dataclass defaults.
+    rcns_block = policy_block.get("rcns") or {}
+    rcns = RcnsConfig(
+        enabled=bool(rcns_block.get("enabled", False)),
+        min_trust_tier=int(rcns_block.get("min_trust_tier", 1)),
+        max_negotiations_per_minute=int(
+            rcns_block.get("max_negotiations_per_minute", 10)
+        ),
+        idempotency_window_seconds=int(
+            rcns_block.get("idempotency_window_seconds", 60)
+        ),
+        on_policy_change=str(
+            rcns_block.get("on_policy_change") or "grandfather"
+        ),
+    )
+
     audit_block = data.get("audit", {}) or {}
     audit = AuditConfig(
         path=str(audit_block.get("path") or "stderr"),
@@ -899,6 +986,7 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         server=server,
         policy=policy,
         synthesis=synthesis,
+        rcns=rcns,
         agents=agents,
         audit=audit,
         gateway=gateway,
@@ -919,6 +1007,7 @@ __all__ = [
     "MtlsConfig",
     "ServerConfig",
     "ServerInfo",
+    "RcnsConfig",
     "ServerPolicy",
     "SigningConfig",
     "SynthesisConfig",

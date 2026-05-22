@@ -3130,7 +3130,45 @@ def _dispatch_inner(
     if syn_id:
         runtime = getattr(server_state, "synthesis_runtime", None)
         if runtime is not None and runtime.get(syn_id) is not None:
-            return runtime.execute(syn_id, request, server_state, agent_doc)
+            # RCNS-3 contract scoping: a synthesis_id carries the
+            # originating Agent-ID. A different agent presenting the
+            # id is refused with 464 ``contract-not-yours``. When the
+            # contract has no originator stamped (legacy /
+            # pre-RCNS-3 explicit PROPOSE), this check is a no-op —
+            # unscoped contracts stay reachable by any caller.
+            from core import status as _status_cs
+            originator = runtime.originating_agent_id(syn_id)
+            if (
+                originator
+                and originator != agent_doc.agent_id
+            ):
+                return _status_cs.rcns_no_contract(
+                    reason=_status_cs.RCNS_REASON_CONTRACT_NOT_YOURS,
+                    explanation=(
+                        "this synthesis_id was negotiated for a different "
+                        "Agent-ID and is not transferable"
+                    ),
+                    details={
+                        "synthesis_id": syn_id,
+                        "presenter_agent_id": agent_doc.agent_id,
+                    },
+                )
+            # Stamp RCNS attribution extras onto the response so
+            # _finalize_response includes them in the Attribution-
+            # Record. Chain inspectors group invocations by
+            # contract_hash and trace negotiation_origin.
+            response = runtime.execute(syn_id, request, server_state, agent_doc)
+            extras = {
+                "synthesis_id": syn_id,
+                "contract_hash": runtime.contract_hash(syn_id) or "",
+                "negotiation_origin": runtime.negotiation_origin(syn_id),
+            }
+            existing = getattr(response, "_attribution_extra", None)
+            if isinstance(existing, dict):
+                existing.update(extras)
+            else:
+                response._attribution_extra = extras  # type: ignore[attr-defined]
+            return response
         # Fall through: an unrecognized Synthesis-Id with no runtime
         # match returns the same not-found shape as a registry miss.
         if runtime is not None:
@@ -3257,6 +3295,19 @@ def _dispatch_inner(
                     method_name, request_path,
                     allowed_methods_for_path=sorted(allowed),
                 )
+            # RCNS-3 dispatcher gate. When the four locks are open
+            # (server config + Allow-RCNS header + rcns:negotiate
+            # scope + trust_tier), the gate attempts synthesis and
+            # returns 461 (confirm-first) or executes inline
+            # (optimistic). Falls through to 404 when any lock is
+            # closed.
+            from server.rcns_gate import try_rcns
+            rcns_response = try_rcns(
+                request, server_state, agent_doc,
+                method=method_name, path=request_path,
+            )
+            if rcns_response is not None:
+                return rcns_response
             return _status.not_found(method_name, request_path)
         # path == "/" with no endpoint hit: fall through to method-only.
 

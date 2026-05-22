@@ -152,13 +152,12 @@ preview) or a 263 Proposal Approved with `Contract-Synthesized:
 <synthesis_id>` (optimistic execution). A failed negotiation
 returns 464 RCNS No Contract with a structured reason.
 
-RCNS-1 (this phase) reserves the status codes and the tier
-classification. RCNS-2 generalizes the synthesis runtime to
-`(method, path)` keying. RCNS-3 wires the dispatcher gate.
-RCNS-4 adds the observability surface (`DISCOVER /patterns`,
-`DISCOVER /contracts`, `INSPECT target=contract`, contract
-revocation). See [`docs/rcns.md`](rcns.md) for the wire-level
-spec when RCNS-3 lands.
+RCNS-1 reserved the status codes and tier classification. RCNS-2
+generalized the synthesis runtime to `(method, path)` keying.
+RCNS-3 wired the dispatcher gate — see [`docs/rcns.md`](rcns.md)
+for the wire-level spec. RCNS-4 (in progress) adds the
+observability surface (`DISCOVER /patterns`, `DISCOVER /contracts`,
+`INSPECT target=contract`, contract revocation).
 
 A Tier C contract is bound for the lifetime of its `synthesis_id`.
 When the contract expires (TTL elapses, operator revokes, or agent
