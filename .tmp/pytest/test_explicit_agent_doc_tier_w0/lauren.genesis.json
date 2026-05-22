@@ -1,0 +1,13 @@
+{
+  "agtp_genesis_version": "agtp-genesis/1",
+  "name": "lauren",
+  "owner_id": "nomotic.inc",
+  "principal_id": "chris",
+  "agent_public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAMJVKO2Z8kOoSJ2cDJ0x1orSW1Doylr0dQIbiVfNSbxI=\n-----END PUBLIC KEY-----\n",
+  "trust_tier": 1,
+  "verification_path": "dns-anchored",
+  "issued_at": "2026-05-22T14:06:04.540549Z",
+  "issuer": "registrar.example",
+  "issuer_public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAMJVKO2Z8kOoSJ2cDJ0x1orSW1Doylr0dQIbiVfNSbxI=\n-----END PUBLIC KEY-----\n",
+  "signature": "6LYWc3Uz53tGvffw__DnHnp7fUEEnmXH-xPY4cYzaR9n1UWfsvyDrw-fdKQCbGK7p_A7GrxnbTq5oJCU2yT8Aw"
+}

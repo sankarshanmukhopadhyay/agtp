@@ -1,0 +1,6 @@
+[server]
+server_id = "t"
+operator = "o"
+contact = "c"
+[audit]
+read_acl = "bananaphone"

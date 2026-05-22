@@ -1,0 +1,28 @@
+{
+  "agtp_version": "v0.0.6",
+  "document_version": "v2",
+  "agent_id": "5ab977c6408517de93f368840cd4a80c9e0cf7abf31807f7bbaa2165080d4a2a",
+  "name": "lauren",
+  "principal": "c",
+  "principal_id": "c",
+  "description": "",
+  "status": "active",
+  "skills": [],
+  "requires": {
+    "methods": [
+      "ACTIVATE",
+      "DEACTIVATE",
+      "REVOKE",
+      "INSPECT"
+    ],
+    "scopes": [],
+    "wildcards": false
+  },
+  "scopes_accepted": [],
+  "trust_tier": 2,
+  "verification_path": "self-signed",
+  "trust_warning": "verification-incomplete",
+  "owner_id": "nomotic.inc",
+  "issued_at": "now",
+  "issuer": "self"
+}

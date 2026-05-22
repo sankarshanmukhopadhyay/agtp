@@ -1,0 +1,13 @@
+{
+  "agtp_genesis_version": "agtp-genesis/1",
+  "name": "b",
+  "owner_id": "o",
+  "principal_id": "p",
+  "agent_public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAnZxnuawONLF026GVYrlB5ZgUskXoKTFGt3fmLFgH5gU=\n-----END PUBLIC KEY-----\n",
+  "trust_tier": 2,
+  "verification_path": "self-signed",
+  "issued_at": "2026-05-22T14:05:57.792285Z",
+  "issuer": "registrar.local",
+  "issuer_public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAT5Ajllf3BD/UCmpG+j/5RrzEwv/qDRVt0h0/mv7XItU=\n-----END PUBLIC KEY-----\n",
+  "signature": "DLGkW1Oso1SdPKeRJJqqXcWubWtbM6WnAN_UNMBOnMLeRjeAotdHKETV2GaEdSi9d00Url8Wcu7oPlZFzlD9Dw"
+}
