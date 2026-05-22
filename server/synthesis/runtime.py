@@ -293,6 +293,46 @@ class SynthesisRuntime:
         self.legacy_registry.add(legacy)
         return synthesis_id
 
+    def resolve(
+        self, method: str, path: str,
+    ) -> Optional[Dict[str, Any]]:
+        """RCNS-2: look up an active synthesis by ``(method, path)``.
+
+        Scans the active plans for one whose ``proposed_method``
+        matches the given verb and path. Returns a small record
+        carrying the synthesis_id plus the plan's recipe metadata,
+        or ``None`` when nothing matches.
+
+        This is the hook
+        :func:`core.endpoint_tiers.classify_tier` will consult once
+        RCNS-3 wires the dispatcher gate — a Tier C classification
+        is exactly "the synthesis runtime has an active plan keyed
+        to this (method, path)". A linear scan over the active dict
+        is fine for v00; an active deployment is unlikely to carry
+        more than a few hundred live contracts and the gate is not
+        on the hot path of every request.
+
+        Method matching is case-insensitive (per AGTP convention);
+        path matching is byte-exact (the path grammar enforces
+        canonical form). Method-only plans (path = ``None``) match
+        the path ``"/"`` only.
+        """
+        method_upper = method.upper()
+        with self._lock:
+            for sid, plan in self.active.items():
+                spec_method = plan.proposed_method.name.upper()
+                spec_path = plan.proposed_method.path or "/"
+                if spec_method == method_upper and spec_path == path:
+                    return {
+                        "synthesis_id": sid,
+                        "method": method_upper,
+                        "path": spec_path,
+                        "recipe_name": plan.recipe_name,
+                        "recipe_version": plan.recipe_version,
+                        "policy_name": plan.policy_name,
+                    }
+        return None
+
     def get(self, synthesis_id: str) -> Optional[SynthesisPlan]:
         """
         Return the active plan for ``synthesis_id``, or ``None`` if

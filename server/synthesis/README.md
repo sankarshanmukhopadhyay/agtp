@@ -34,9 +34,9 @@ protocol.
 ## Recipes
 
 Recipes are hand-authored in TOML. Each `[[recipe]]` block declares a
-matching pattern and a sequence of steps the runtime executes when
-the pattern matches an incoming proposal. Three sources fill each
-step's parameters:
+matching pattern, an optional version (RCNS-2), and a sequence of
+steps the runtime executes when the pattern matches an incoming
+proposal. Three sources fill each step's parameters:
 
 | Kind | Resolved at execution time as |
 |---|---|
@@ -56,6 +56,45 @@ Starter recipes ship in [`server/agtp-recipes.toml`](../agtp-recipes.toml):
     (canonical composition example).
   * `AUDIT` — `QUERY` + `SUMMARIZE` with merge aggregation.
   * `INSPECT` — `DISCOVER` + `DESCRIBE` with list aggregation.
+
+### Endpoint-keyed patterns (RCNS-2)
+
+Patterns may constrain on the proposed path as well as the verb:
+
+```toml
+[[recipe]]
+name = "recon-on-accounts"
+description = "RECONCILE only on /accounts/*"
+version = "1"
+
+[recipe.pattern]
+name_exact = "RECONCILE"
+path_regex = "^/accounts/.*$"
+
+[[recipe.steps]]
+method = "QUERY"
+```
+
+`path_exact` requires byte-exact match; `path_regex` runs the
+pattern against the proposed path. Pre-RCNS-2 recipes without
+either field match every path — the legacy method-only behavior is
+preserved.
+
+### Recipe versioning (RCNS-2)
+
+Each recipe carries a `version` string (default `"1"` when
+omitted). Bound contracts capture the version at synthesis time
+and continue to execute against the captured version until
+expiry. Pattern edits bump the version; new negotiations target
+the new version; existing contracts remain unchanged. This
+prevents an operator from accidentally changing the behavior of a
+running contract by editing its source recipe.
+
+The captured version surfaces in:
+
+  * The 263 PROPOSE response (`synthesis.recipe_version`).
+  * `INSPECT target=contract` output (RCNS-4).
+  * The audit lifecycle stream entry for the binding (RCNS-4).
 
 ## Plan execution
 

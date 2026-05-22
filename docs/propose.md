@@ -28,6 +28,47 @@ refuse with `error.code = "negotiation-refused"`) has been retired.
 The legacy helpers stay in `core/status.py` for transitional
 external callers, but the in-tree dispatcher uses the new surface.
 
+## Request shapes
+
+RCNS-2 admits two PROPOSE body shapes; they carry the same
+information and the dispatcher normalizes between them. Pick the
+one whose ergonomics fit your caller.
+
+### Legacy / method-only form
+
+```json
+{
+  "name": "RECONCILE",
+  "path": "/accounts",
+  "parameters": {"account_id": "string"},
+  "semantic": {...}
+}
+```
+
+This is the v1 shape and stays supported indefinitely. Method-only
+proposals (no `path`) normalize internally to path `/`.
+
+### Endpoint-keyed form (RCNS-2)
+
+```json
+{
+  "endpoint": {
+    "method": "RECONCILE",
+    "path": "/accounts",
+    "input_schema": {...},
+    "output_schema": {...},
+    "semantic": {...}
+  }
+}
+```
+
+This is the form RCNS-3 will use programmatically when escalating
+an unregistered `(method, path)` into a runtime negotiation. The
+two shapes are **mutually exclusive** — a body carrying both
+top-level `name` and a wrapped `endpoint` returns 400 with
+`error.details.conflict = ["name", "endpoint"]`. Use one or the
+other.
+
 ## 263 Proposal Approved
 
 Body shape:
@@ -35,6 +76,8 @@ Body shape:
 ```json
 {
   "synthesis_id": "syn-AbCdEfGhIjKlMn",
+  "method": "RECONCILE",
+  "path": "/accounts",
   "endpoint": { "method": "RECONCILE", "input": {...}, "semantic": {...}, ... },
   "persistent": false,
   "expires_at": "2026-05-11T05:00:00Z",
@@ -44,6 +87,8 @@ Body shape:
     "parameter_mapping": {"account_id": "account_id"},
     "description": "...",
     "proposal_name": "RECONCILE",
+    "recipe_name": "recon-via-query",
+    "recipe_version": "1",
     "plan": { "steps": [...], "output_aggregation": "..." }
   },
   "agent_id": "abc123..."
@@ -54,12 +99,22 @@ Notable fields:
 
 - `synthesis_id` — opaque identifier the agent passes back via the
   `Synthesis-Id` header to invoke the composed endpoint.
+- `method` and `path` (RCNS-2) — top-level echo of the resolved
+  endpoint binding so callers don't have to dig into the nested
+  `endpoint` object. A method-only proposal normalizes to
+  `path: "/"`.
 - `endpoint` — the instantiated endpoint contract (same shape as a
   manifest `endpoints[]` entry).
 - `persistent` / `expires_at` / `granted_duration` — see
   [Persistent synthesis](#persistent-synthesis) below.
 - `synthesis` — multi-step plan detail for compositions that aren't
-  a passthrough.
+  a passthrough. `recipe_name` and `recipe_version` (RCNS-2) name
+  the recipe that produced this synthesis (when the
+  `RecipeBasedPolicy` won the composition race) and the version
+  string captured at synthesis time. Pattern edits bump the recipe
+  version; in-flight contracts run against the captured version
+  until they expire — operators can't change running contracts'
+  behavior by editing the recipe under them.
 
 ## 463 Proposal Rejected
 

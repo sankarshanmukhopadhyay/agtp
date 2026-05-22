@@ -40,12 +40,19 @@ class RecipePattern:
 
     All declared fields must match for the recipe to apply (logical
     AND). Fields left at None are unconstrained.
+
+    RCNS-2 adds ``path_exact`` and ``path_regex`` for endpoint-keyed
+    matching. Method-only recipes leave both unset and continue to
+    match any path; endpoint-keyed recipes constrain on path so a
+    single verb can route to different plans depending on the URI.
     """
 
     name_exact: Optional[str] = None
     name_regex: Optional[str] = None
     category: Optional[str] = None
     has_parameters: Optional[List[str]] = None
+    path_exact: Optional[str] = None
+    path_regex: Optional[str] = None
 
     def matches(self, proposal: EndpointSpec) -> bool:
         if self.name_exact is not None and proposal.name != self.name_exact:
@@ -62,24 +69,51 @@ class RecipePattern:
             for required in self.has_parameters:
                 if required not in proposal_param_names:
                     return False
+        # RCNS-2: path constraint. A pattern without a path filter
+        # matches any path (the legacy method-only behavior). A
+        # pattern with ``path_exact`` requires byte-exact match; a
+        # pattern with ``path_regex`` requires the regex to match
+        # the proposal's path. Proposals without a path are treated
+        # as path ``"/"`` for comparison purposes.
+        if self.path_exact is not None or self.path_regex is not None:
+            proposal_path = proposal.path or "/"
+            if self.path_exact is not None and proposal_path != self.path_exact:
+                return False
+            if self.path_regex is not None and not re.match(
+                self.path_regex, proposal_path
+            ):
+                return False
         return True
 
 
 @dataclass
 class Recipe:
-    """A hand-authored synthesis recipe."""
+    """A hand-authored synthesis recipe.
+
+    The ``version`` field (RCNS-2, default ``"1"``) snapshots into the
+    :class:`SynthesisPlan` at composition time. Pattern edits bump the
+    version; existing contracts continue to execute against the
+    captured version until expiry. This prevents an operator from
+    accidentally changing the behavior of a running contract by
+    editing its source recipe — the contract holds a frozen reference.
+    """
 
     name: str
     description: str
     pattern: RecipePattern
     steps: List[CompositionStep] = field(default_factory=list)
     output_aggregation: str = "last"
+    version: str = "1"
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("recipe.name is required")
         if not self.steps:
             raise ValueError(f"recipe {self.name!r} must declare at least one step")
+        if not isinstance(self.version, str) or not self.version:
+            raise ValueError(
+                f"recipe {self.name!r} version must be a non-empty string"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -131,13 +165,18 @@ class RecipeBasedPolicy:
             referenced = [s.method_name for s in recipe.steps]
             if not all(m in available_names for m in referenced):
                 continue
-            # Materialize the plan.
+            # Materialize the plan. RCNS-2 snapshots the recipe's name
+            # and version so an operator editing the recipe later
+            # doesn't silently change the behavior of already-bound
+            # contracts — they carry the captured version forward.
             return SynthesisPlan(
                 proposed_method=proposal,
                 steps=[_clone_step(s) for s in recipe.steps],
                 output_aggregation=recipe.output_aggregation,
                 description=recipe.description,
                 policy_name=self.name,
+                recipe_name=recipe.name,
+                recipe_version=recipe.version,
             )
         return None
 
@@ -252,6 +291,8 @@ def _recipe_from_dict(raw: Dict[str, Any]) -> Recipe:
         category=pattern_block.get("category"),
         has_parameters=list(pattern_block.get("has_parameters") or [])
         or None,
+        path_exact=pattern_block.get("path_exact"),
+        path_regex=pattern_block.get("path_regex"),
     )
 
     raw_steps = raw.get("steps", [])
@@ -302,12 +343,19 @@ def _recipe_from_dict(raw: Dict[str, Any]) -> Recipe:
             f"aggregation.mode must be one of (last, merge, list); got {mode!r}"
         )
 
+    # RCNS-2: ``version`` defaults to "1" when the recipe omits it so
+    # legacy recipes (pre-versioning) load cleanly. Coerce to string so
+    # numeric YAML-style values ("1", 1, "v3") survive consistently.
+    raw_version = raw.get("version", "1")
+    version = str(raw_version) if raw_version not in ("", None) else "1"
+
     return Recipe(
         name=name,
         description=description,
         pattern=pattern,
         steps=steps,
         output_aggregation=mode,
+        version=version,
     )
 
 

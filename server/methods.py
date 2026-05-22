@@ -2291,6 +2291,67 @@ def handle_propose(
         )
         return resp
 
+    # ----- 1b. RCNS-2: unwrap the endpoint-keyed form. -----
+    # PROPOSE bodies may arrive in either of two shapes:
+    #
+    #   legacy / method-only:  {"name": "RECONCILE", "path": "/x", ...}
+    #   endpoint-keyed:        {"endpoint": {"method": "RECONCILE",
+    #                                        "path": "/x", ...}}
+    #
+    # Both shapes carry the same information; the wrapped form is the
+    # one RCNS-3 will emit programmatically when escalating a 404
+    # into a negotiation. We normalize to the legacy top-level shape
+    # internally so the rest of the handler stays unchanged.
+    #
+    # Mutual exclusivity: a body with both ``name`` and ``endpoint``
+    # is malformed (the caller meant one or the other).
+    endpoint_block = params.get("endpoint")
+    if endpoint_block is not None:
+        if not isinstance(endpoint_block, dict):
+            resp = status_codes.bad_request_for_propose(
+                issue=status_codes.BAD_REQUEST_ISSUE_MALFORMED_SCHEMA,
+                explanation=(
+                    "PROPOSE body 'endpoint' must be an object "
+                    "({method, path, ...})"
+                ),
+                details={"field": "endpoint"},
+            )
+            record_propose(
+                server_state, agent_doc=agent_doc,
+                proposal_body=params, decision="malformed",
+            )
+            return resp
+        if params.get("name"):
+            resp = status_codes.bad_request_for_propose(
+                issue=status_codes.BAD_REQUEST_ISSUE_MISSING_REQUIRED_FIELD,
+                explanation=(
+                    "PROPOSE body must carry either top-level 'name' "
+                    "OR wrapped 'endpoint', not both"
+                ),
+                details={"conflict": ["name", "endpoint"]},
+            )
+            record_propose(
+                server_state, agent_doc=agent_doc,
+                proposal_body=params, decision="malformed",
+            )
+            return resp
+        # Promote endpoint-block fields to the top-level shape that
+        # ``EndpointSpec.from_proposal`` (and the rest of this
+        # handler) consumes. ``method`` becomes ``name`` so the
+        # required-field check in step 2 still applies cleanly.
+        promoted = dict(params)
+        promoted.pop("endpoint", None)
+        if "method" in endpoint_block:
+            promoted["name"] = endpoint_block["method"]
+        for key in (
+            "path", "input_schema", "output_schema",
+            "description", "namespace", "category", "parameters",
+            "semantic", "error_codes",
+        ):
+            if key in endpoint_block and key not in promoted:
+                promoted[key] = endpoint_block[key]
+        params = promoted
+
     # ----- 2. Required-field validation — 400. -----
     name_value = params.get("name") or ""
     if not isinstance(name_value, str) or not name_value.strip():
@@ -2462,12 +2523,29 @@ def handle_propose(
                 "description": plan.description or "",
                 "proposal_name": proposal_spec.name,
             }
+            # RCNS-2: surface recipe lineage so callers can diff a
+            # contract against current recipes and detect when an
+            # operator edit has bumped the version under them.
+            if plan.recipe_name:
+                synthesis_detail["recipe_name"] = plan.recipe_name
+            if plan.recipe_version:
+                synthesis_detail["recipe_version"] = plan.recipe_version
             if (
                 len(plan.steps) > 1
                 or (plan.policy_name and plan.policy_name != "passthrough")
             ):
                 synthesis_detail["plan"] = plan.to_dict()
 
+            # RCNS-2: include the resolved (method, path) at the top
+            # level of the 263 body so callers don't have to dig into
+            # ``endpoint``. This is the canonical form RCNS-3 will
+            # consume when echoing a contract back to the caller.
+            extras: Dict[str, Any] = {
+                "synthesis": synthesis_detail,
+                "agent_id": agent_doc.agent_id,
+                "method": proposal_spec.name,
+                "path": proposal_spec.path or "/",
+            }
             resp = status_codes.proposal_approved(
                 synthesis_id=synthesis_id,
                 endpoint=proposal_spec.to_dict(),
@@ -2475,10 +2553,7 @@ def handle_propose(
                 expires_at=expires_at.isoformat().replace("+00:00", "Z")
                 if expires_at is not None else None,
                 granted_duration=granted_duration_str,
-                extra={
-                    "synthesis": synthesis_detail,
-                    "agent_id": agent_doc.agent_id,
-                },
+                extra=extras,
             )
             record_propose(
                 server_state, agent_doc=agent_doc,

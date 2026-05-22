@@ -111,6 +111,21 @@ class SynthesisPlan:
     A plan binds a proposed method (the validated spec the agent
     submitted) to a sequence of underlying invocations. Plans flow
     through the runtime as the canonical "this synthesis works" object.
+
+    Three additional fields land in RCNS-2 to support endpoint-keyed
+    binding and recipe versioning:
+
+      * ``recipe_name`` — name of the recipe that produced this plan
+        (or ``None`` for PassthroughPolicy / other non-recipe origins).
+      * ``recipe_version`` — version string captured at synthesis
+        time. Pattern edits bump the version; existing contracts
+        continue against the old version until expiry. Without this,
+        an operator editing a recipe could change the behavior of
+        already-bound contracts unexpectedly.
+      * The ``proposed_method`` :class:`EndpointSpec` now carries an
+        optional ``path`` field. Method-only proposals normalize to
+        ``path = None`` (which the dispatcher and lookup treat as
+        ``"/"``); endpoint-keyed proposals populate it.
     """
 
     proposed_method: EndpointSpec
@@ -118,6 +133,8 @@ class SynthesisPlan:
     output_aggregation: str = "last"
     description: Optional[str] = None
     policy_name: Optional[str] = None  # which policy produced this plan
+    recipe_name: Optional[str] = None      # RCNS-2: producing recipe name
+    recipe_version: Optional[str] = None   # RCNS-2: version snapshot
 
     def __post_init__(self) -> None:
         if not self.steps:
@@ -134,10 +151,19 @@ class SynthesisPlan:
             "steps": [s.to_dict() for s in self.steps],
             "output_aggregation": self.output_aggregation,
         }
+        # Surface the resolved (method, path) tuple so callers — and
+        # the 263 response body — don't have to dig into
+        # ``proposed_method`` separately.
+        if self.proposed_method.path:
+            out["proposed_path"] = self.proposed_method.path
         if self.description:
             out["description"] = self.description
         if self.policy_name:
             out["policy"] = self.policy_name
+        if self.recipe_name:
+            out["recipe_name"] = self.recipe_name
+        if self.recipe_version:
+            out["recipe_version"] = self.recipe_version
         return out
 
     @property
