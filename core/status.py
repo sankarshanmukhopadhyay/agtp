@@ -37,7 +37,17 @@ Active codes
   * 458 Counterparty Unverified      (AGTP-specific)
   * 459 Method Violation             (AGTP-specific)
   * 460 Endpoint Violation           (AGTP-specific)
+  * 461 RCNS Contract Available      (AGTP-specific; RCNS-3, confirm-
+                                      first preview of a negotiated
+                                      contract — agent re-issues with
+                                      ``Synthesis-Id`` to execute)
   * 463 Proposal Rejected            (AGTP-specific; PROPOSE refuse)
+  * 464 RCNS No Contract             (AGTP-specific; RCNS-3, the
+                                      daemon attempted negotiation
+                                      on the caller's behalf and
+                                      could not deliver — distinct
+                                      from 463, which is reserved
+                                      for explicit PROPOSE refusals)
   * 500 Server Error
   * 503 Unavailable      (Suspended or temporarily down)
   * 550 Delegation Failure           (AGTP-specific)
@@ -116,6 +126,13 @@ ENDPOINT_GRAMMAR_VIOLATION  = (460, "Endpoint Violation")
 DELEGATION_FAILURE          = (550, "Delegation Failure")
 AUTHORITY_CHAIN_BROKEN      = (551, "Authority Chain Broken")
 
+# AGTP-specific (RCNS — Runtime Contract Negotiation Substrate, RCNS-3).
+# Wire reservations land in RCNS-1 so the rest of the build can target
+# stable codes; the dispatcher gate that actually returns them ships
+# in RCNS-3.
+RCNS_CONTRACT_AVAILABLE     = (461, "RCNS Contract Available")
+RCNS_NO_CONTRACT            = (464, "RCNS No Contract")
+
 # Backward-compat alias. The previous 459 helper keyed off
 # ``GRAMMAR_VIOLATION``; keep the constant exported under both names
 # so call sites that imported the old form keep working through the
@@ -158,6 +175,28 @@ ALL_BAD_REQUEST_ISSUES = {
     BAD_REQUEST_ISSUE_MISSING_REQUIRED_FIELD,
     BAD_REQUEST_ISSUE_MALFORMED_SEMANTIC,
     BAD_REQUEST_ISSUE_MALFORMED_SCHEMA,
+}
+
+#: Reason codes carried on a 464 RCNS No Contract response. Distinct
+#: from :data:`ALL_PROPOSAL_REJECT_REASONS` so RCNS refusals don't get
+#: confused with explicit-PROPOSE refusals — they're different debug
+#: stories. RCNS-3 plumbs the dispatcher to return these; RCNS-1 just
+#: reserves the vocabulary so downstream code can target stable
+#: strings.
+RCNS_REASON_RCNS_DISABLED            = "rcns-disabled"
+RCNS_REASON_TRUST_TIER_INSUFFICIENT  = "trust-tier-insufficient"
+RCNS_REASON_COMPOSITION_IMPOSSIBLE   = "composition-impossible"
+RCNS_REASON_SYNTHESIS_ERROR          = "synthesis-error"
+RCNS_REASON_CONTRACT_NOT_YOURS       = "contract-not-yours"
+RCNS_REASON_CONTRACT_REVOKED         = "contract-revoked"
+
+ALL_RCNS_REFUSAL_REASONS = {
+    RCNS_REASON_RCNS_DISABLED,
+    RCNS_REASON_TRUST_TIER_INSUFFICIENT,
+    RCNS_REASON_COMPOSITION_IMPOSSIBLE,
+    RCNS_REASON_SYNTHESIS_ERROR,
+    RCNS_REASON_CONTRACT_NOT_YOURS,
+    RCNS_REASON_CONTRACT_REVOKED,
 }
 
 #: Type codes carried on a 262 Authorization Required response.
@@ -567,6 +606,128 @@ def bad_request_for_propose(
     if details:
         body["error"]["details"] = dict(details)
     return _build(BAD_REQUEST, body=body)
+
+
+# -- RCNS helpers (461 / 464) ------------------------------------------
+#
+# RCNS-1 reserves the wire codes and helpers; RCNS-3 wires the
+# dispatcher gate that returns them. Keeping the helpers here, beside
+# the existing PROPOSE family, makes the shared vocabulary obvious
+# and lets downstream phases target stable signatures.
+
+
+def rcns_contract_available(
+    *,
+    contract: Dict[str, Any],
+    proposed_synthesis_id: str,
+    expires_at: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> wire.AGTPResponse:
+    """
+    Confirm-first RCNS preview. Wire status: **461 RCNS Contract
+    Available**.
+
+    Returned by the RCNS dispatcher gate (RCNS-3) when an agent
+    requesting ``Allow-RCNS: true`` hits an unregistered (method,
+    path) and the synthesis runtime produced a plan. The caller
+    inspects ``contract`` and re-issues the original request with
+    ``Synthesis-Id: <proposed_synthesis_id>`` to execute.
+
+    Body shape::
+
+        {
+          "contract": {
+            "method": "...",
+            "path": "...",
+            "input_schema": {...},
+            "output_schema": {...},
+            "plan_summary": "...",
+            ...
+          },
+          "proposed_synthesis_id": "syn-...",
+          "expires_at": "2026-05-23T05:00:00Z"
+        }
+
+    ``contract`` carries the full proposed contract shape; the agent
+    is expected to inspect it before re-issuing. ``expires_at`` is
+    optional but typically populated so the caller knows how long the
+    proposed binding is honored before the daemon evicts it.
+    """
+    body: Dict[str, Any] = {
+        "contract": dict(contract),
+        "proposed_synthesis_id": proposed_synthesis_id,
+    }
+    if expires_at is not None:
+        body["expires_at"] = expires_at
+    if extra:
+        body.update(extra)
+    return _build(RCNS_CONTRACT_AVAILABLE, body=body)
+
+
+def rcns_no_contract(
+    *,
+    reason: str,
+    explanation: str,
+    method: Optional[str] = None,
+    path: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> wire.AGTPResponse:
+    """
+    RCNS refusal response. Wire status: **464 RCNS No Contract**.
+
+    Returned when the RCNS dispatcher gate (RCNS-3) attempted
+    negotiation on the caller's behalf and could not deliver. Distinct
+    from 463 (which is reserved for explicit-PROPOSE refusals): a 464
+    is a *negotiation outcome*, not a PROPOSE outcome.
+
+    ``reason`` is one of :data:`ALL_RCNS_REFUSAL_REASONS`:
+
+      * ``rcns-disabled``               — server policy
+                                           ``[policies.rcns].enabled``
+                                           is false. The gate refused
+                                           before any synthesis ran.
+      * ``trust-tier-insufficient``     — agent's resolved trust tier
+                                           does not meet
+                                           ``min_trust_tier``. Refused
+                                           before synthesis.
+      * ``composition-impossible``      — synthesis runtime tried every
+                                           policy and none returned a
+                                           plan. Honest negative.
+      * ``synthesis-error``             — synthesis runtime raised or
+                                           returned a malformed plan;
+                                           operator should consult
+                                           the high-fidelity audit
+                                           record.
+      * ``contract-not-yours``          — caller presented a
+                                           synthesis_id whose
+                                           originating Agent-ID does
+                                           not match the caller.
+      * ``contract-revoked``            — operator revoked the
+                                           contract since synthesis;
+                                           caller should re-negotiate.
+
+    ``method`` / ``path`` are included when known so the caller can
+    correlate the refusal with the request they made.
+    """
+    if reason not in ALL_RCNS_REFUSAL_REASONS:
+        raise ValueError(
+            f"rcns_no_contract: unknown reason {reason!r} "
+            f"(expected one of {sorted(ALL_RCNS_REFUSAL_REASONS)})"
+        )
+    body: Dict[str, Any] = {
+        "error": {
+            "code": "rcns-no-contract",
+            "reason": reason,
+            "explanation": explanation,
+        }
+    }
+    if method is not None:
+        body["error"]["method"] = str(method).upper()
+    if path is not None:
+        body["error"]["path"] = path
+    if details:
+        body["error"]["details"] = dict(details)
+    return _build(RCNS_NO_CONTRACT, body=body)
 
 
 # -- Pre-§7 PROPOSE helpers (422 / counter_proposal) ------------------
@@ -985,6 +1146,8 @@ __all__ = [
     "NOT_FOUND",
     "PROPOSAL_APPROVED",
     "PROPOSAL_REJECTED",
+    "RCNS_CONTRACT_AVAILABLE",
+    "RCNS_NO_CONTRACT",
     "SCOPE_VIOLATION",
     "UNPROCESSABLE",
     "ZONE_VIOLATION",
@@ -1004,6 +1167,14 @@ __all__ = [
     "PROPOSAL_REASON_COMPOSITION_IMPOSSIBLE",
     "PROPOSAL_REASON_OUT_OF_SCOPE",
     "PROPOSAL_REASON_POLICY_REFUSED",
+    # RCNS vocabulary (RCNS-1 reservation; RCNS-3 wires the dispatcher).
+    "ALL_RCNS_REFUSAL_REASONS",
+    "RCNS_REASON_COMPOSITION_IMPOSSIBLE",
+    "RCNS_REASON_CONTRACT_NOT_YOURS",
+    "RCNS_REASON_CONTRACT_REVOKED",
+    "RCNS_REASON_RCNS_DISABLED",
+    "RCNS_REASON_SYNTHESIS_ERROR",
+    "RCNS_REASON_TRUST_TIER_INSUFFICIENT",
     # Pre-§7 refusal reason strings (retained for back-compat).
     "ALL_REFUSAL_REASONS",
     "REFUSAL_AMBIGUOUS",
@@ -1033,6 +1204,8 @@ __all__ = [
     "not_found",
     "proposal_approved",
     "proposal_rejected",
+    "rcns_contract_available",
+    "rcns_no_contract",
     "scope_violation",
     "wildcards_refused",
     "zone_violation",

@@ -881,6 +881,13 @@ def _discover_index(agent_doc: AgentDocument) -> wire.AGTPResponse:
     server. Used when a caller invokes ``DISCOVER`` on the bare
     URI without a target — gives them a self-describing way to
     learn what they can DISCOVER without prior catalog knowledge.
+
+    Each entry carries a ``tier`` field per the Tier A/B/C taxonomy
+    (see ``docs/endpoint-tiers.md``). The bare-`DISCOVER /` index
+    surfaces only Tier A reserved roots — operator-registered
+    (Tier B) DISCOVER endpoints surface via ``DISCOVER /methods``
+    and the full manifest. RCNS-3 may surface negotiable (Tier C)
+    patterns separately via ``DISCOVER /patterns``.
     """
     endpoints = []
     for path, target in sorted(_DISCOVER_PATH_TO_TARGET.items()):
@@ -888,6 +895,7 @@ def _discover_index(agent_doc: AgentDocument) -> wire.AGTPResponse:
             "path": path,
             "target": target,
             "reserved": True,
+            "tier": "A",
         })
     return json_response(
         200, "OK",

@@ -48,7 +48,7 @@ Fragments (`/path#anchor`) are rejected at the wire layer with a structured `Wir
 
 ## Built-in endpoints
 
-AGTP exposes server metadata via AGTP methods, not HTTP-style well-known locations.
+AGTP exposes server metadata via AGTP methods, not HTTP-style well-known locations. The full taxonomy lives in [Endpoint tiers](endpoint-tiers.md) — this section covers the Tier A surface from the path-grammar angle.
 
 The pattern: at server startup, the registry is populated with built-in endpoints alongside operator-authored TOML. Built-ins use ordinary AGTP semantics — they show up in the manifest, agents DISCOVER them naturally, the dispatcher gates fire normally. They differ from operator endpoints only in that the `EndpointSpec` and handler closure are constructed in code rather than loaded from a file.
 

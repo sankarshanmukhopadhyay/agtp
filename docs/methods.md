@@ -1,5 +1,12 @@
 # AGTP method validation
 
+> **Note on terminology.** A *method* is an entry in the open AGTP
+> verb catalog. An *endpoint* is a `(method, path)` binding on a
+> particular server. The two are orthogonal: every server admits the
+> same method vocabulary, but each server registers its own
+> endpoints. See [Endpoint tiers](endpoint-tiers.md) for the binding
+> taxonomy (Tier A native / Tier B application / Tier C RCNS).
+
 The protocol's method vocabulary is the curated method list at
 [`core/methods.json`](../core/methods.json). Validation reduces to two
 list lookups:
@@ -161,4 +168,32 @@ Returned when the dispatcher refuses a malformed path. Body:
 The `segment` field names the offending path segment when one
 exists; structural failures (missing leading slash, trailing
 slash) leave it absent.
+
+### 461 RCNS Contract Available
+
+Reserved by RCNS-1, returned by RCNS-3. The dispatcher's RCNS gate
+synthesized a contract for an unregistered `(method, path)` and is
+offering a preview before execution. The body carries the proposed
+contract plus a `proposed_synthesis_id` the agent presents via
+`Synthesis-Id` to actually invoke. See
+[Endpoint tiers — Tier C](endpoint-tiers.md#tier-c--rcns-negotiated-layer-future).
+
+### 464 RCNS No Contract
+
+Reserved by RCNS-1, returned by RCNS-3. The dispatcher attempted
+RCNS negotiation on the caller's behalf and could not deliver. The
+`error.reason` field names the refusal type:
+
+| Reason | Meaning |
+|---|---|
+| `rcns-disabled` | Server policy `[policies.rcns].enabled` is false |
+| `trust-tier-insufficient` | Agent's trust tier below `min_trust_tier` |
+| `composition-impossible` | Synthesis runtime found no plan |
+| `synthesis-error` | Runtime raised; check audit record |
+| `contract-not-yours` | Synthesis_id belongs to a different agent |
+| `contract-revoked` | Operator revoked the contract; re-negotiate |
+
+Distinct from 463 Proposal Rejected: 463 is reserved for *explicit*
+PROPOSE refusals; 464 is for *implicit* RCNS-gate negotiation
+outcomes. Different debug stories, different codes.
 

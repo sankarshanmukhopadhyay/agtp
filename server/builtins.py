@@ -1,19 +1,27 @@
 """
-Server-internal built-in endpoints.
+Tier A registered built-in endpoints.
+
+This module is one of two implementation mechanisms for Tier A
+endpoints (the other being dispatcher-direct short-circuits like
+the reserved DISCOVER roots). What lives here is registered into
+the endpoint registry at startup, walks every dispatcher gate the
+same way operator endpoints do, and shows up in the manifest like
+any other endpoint — but the handler closure carries the
+``__agtp_builtin__`` marker so
+:func:`core.endpoint_tiers.classify_tier` knows the endpoint is
+protocol-reserved, not operator-supplied.
 
 AGTP exposes server metadata via AGTP methods at AGTP-native paths
-rather than via HTTP-style well-known locations. The built-in
-endpoints here are registered at server startup; they are not
-declared in any operator-authored TOML file but they show up in
-the manifest like any other endpoint, and agents invoke them
-through normal AGTP semantics.
+rather than via HTTP-style well-known locations. Operator-authored
+TOML can override a built-in by declaring an endpoint at the same
+``(method, path)`` pair; in that case the built-in registration
+silently skips on :class:`DuplicateEndpointError` so the operator's
+choice wins. This is a deliberate escape hatch — in practice
+operators rarely shadow built-ins.
 
-The pattern is extensible — add a new built-in by writing a
-handler closure and registering it from
-:func:`register_builtins`. Operator-authored TOML can override a
-built-in by declaring an endpoint at the same ``(method, path)``
-pair; in that case the built-in registration silently skips so the
-operator's choice wins.
+See [`server/builtins.md`](builtins.md) for the operator-facing
+catalogue and [`docs/endpoint-tiers.md`](../docs/endpoint-tiers.md)
+for the full Tier A/B/C taxonomy.
 
 Built-ins shipped today:
 
@@ -35,6 +43,24 @@ a ``methods.txt`` policy file. That file format has been retired
 (see ``agtp-api §8``); the per-server method policy now lives in
 ``[policies.methods]`` of ``agtp-server.toml`` and surfaces in the
 manifest's ``policies.methods`` block.
+
+Adding a Tier A built-in
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Write a handler closure. Attach
+   ``handler.__agtp_handler_kind__ = "registered_function"`` and
+   ``handler.__agtp_builtin__ = "<short_label>"`` — the second
+   marker is what
+   :func:`core.endpoint_tiers.classify_tier` reads to distinguish
+   Tier A from Tier B at lookup time.
+2. Build an :class:`EndpointSpec` declaring the contract.
+3. Add a ``_register(...)`` call in :func:`register_builtins`.
+4. Update the Tier A inventory in
+   :data:`core.endpoint_tiers.TIER_A_RESERVED_ENDPOINTS` if the
+   new endpoint is also a protocol guarantee (most are).
+5. Cross-reference the new built-in in
+   [`server/builtins.md`](builtins.md) and
+   [`docs/endpoint-tiers.md`](../docs/endpoint-tiers.md).
 """
 
 from __future__ import annotations
