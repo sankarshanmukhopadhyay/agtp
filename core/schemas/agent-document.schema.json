@@ -102,6 +102,26 @@
     "issuer": {
       "type": "string",
       "description": "Domain or identifier of the issuing authority."
+    },
+    "trust_tier": {
+      "type": "integer",
+      "description": "Trust tier per draft-hood-independent-agtp §6.2. 1 = Verified (DNS / log / hybrid-anchored), 2 = Org-Asserted (default), 3 = Experimental. Defaults to 2 when omitted. (Added v1.2.0.)",
+      "enum": [1, 2, 3],
+      "default": 2
+    },
+    "verification_path": {
+      "type": "string",
+      "description": "Verification path that backs the trust_tier claim. 'self-signed' is the default for development; Tier 1 requires one of the production paths. (Added v1.2.0.)",
+      "enum": ["dns-anchored", "log-anchored", "hybrid", "self-signed"],
+      "default": "self-signed"
+    },
+    "trust_warning": {
+      "type": "string",
+      "description": "Per §6.2, Tier 2 Agent Documents MUST carry a trust_warning. The daemon auto-populates 'verification-incomplete' for Tier 2 documents that don't set it; clients display it as a trust indicator. Omitted (or empty) when not applicable. (Added v1.2.0.)"
+    },
+    "owner_id": {
+      "type": "string",
+      "description": "Legal owner — the entity that registered this agent. Mirrors the Agent Genesis's owner_id when one is loaded. Surfaced on responses as the Owner-ID header. Empty when no Genesis backs this agent. (Added v1.2.0.)"
     }
   }
 }

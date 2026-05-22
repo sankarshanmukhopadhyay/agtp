@@ -49,7 +49,7 @@ agtpd owns everything inside the protocol boundary. An operator who installs agt
 | 7 | Scope and authority gate | Implemented (`server/main.py` soft_deny_check) |
 | 8 | Agent-ID resolution | Implemented |
 | 9 | Agent Manifest serving | Implemented (`server/manifest.py`) |
-| 10 | DISCOVER and discovery routing | Implemented; supports `target` ∈ {methods, agents, tools, apis, genesis}. Phase 4's `target=genesis` returns the agent's Agent Genesis when one is loaded next to the AgentDocument. |
+| 10 | DISCOVER and discovery routing | Implemented; supports `target` ∈ {methods, agents, tools, apis, genesis}. Phase 4's `target=genesis` returns the agent's Agent Genesis when one is loaded next to the AgentDocument. Phase 5: `target=agents` entries carry `trust_tier`, `verification_path`, optional `trust_warning` (auto-set for Tier 2 per §6.2) and `owner_id` (lifted from the agent's Genesis when one is loaded). |
 | 11 | Configuration | Implemented (`agtp-server.toml`) |
 | 12 | Logging | Basic; needs structured format |
 | 13 | Session management | Specified, partial implementation |

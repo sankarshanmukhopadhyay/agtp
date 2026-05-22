@@ -495,6 +495,17 @@ class AgentRegistry:
                     f"[server]   genesis for {doc.name} "
                     f"(issuer={genesis.issuer}, tier={genesis.trust_tier})"
                 )
+                # Phase 5: when the AgentDocument doesn't declare its
+                # own trust posture, lift it from the Genesis. The
+                # Genesis is the governance-layer source of truth, so
+                # an undeclared AgentDocument inherits whatever the
+                # registrar issued. Explicit AgentDocument values win
+                # — an operator who hard-codes a tier in the .json
+                # file is opting out of the auto-derivation.
+                _derive_trust_from_genesis(doc, genesis, data)
+                # And the owner_id, similarly.
+                if not doc.owner_id and genesis.owner_id:
+                    doc.owner_id = genesis.owner_id
             except Exception as exc:  # noqa: BLE001
                 print(
                     f"[server] skipping {genesis_path.name}: {exc}",
@@ -511,6 +522,36 @@ class AgentRegistry:
 
     def list_ids(self) -> List[str]:
         return list(self.agents.keys())
+
+
+def _derive_trust_from_genesis(
+    doc: AgentDocument,
+    genesis: AgentGenesis,
+    source_data: Dict[str, Any],
+) -> None:
+    """Lift trust_tier / verification_path from a Genesis when the
+    AgentDocument JSON didn't declare them explicitly.
+
+    Detection rule: presence in the source JSON wins, even when the
+    declared value equals the default. The dataclass can't tell
+    "operator set tier=2" from "operator omitted tier"; the raw dict
+    from disk can.
+    """
+    from core.identity import TIER_2_TRUST_WARNING
+    declared_tier = "trust_tier" in source_data
+    declared_path = "verification_path" in source_data
+    if not declared_tier:
+        doc.trust_tier = int(genesis.trust_tier)
+    if not declared_path:
+        doc.verification_path = str(genesis.verification_path)
+    # The dataclass __post_init__ auto-populated trust_warning at
+    # construction time based on the *default* trust_tier. If the
+    # tier changed during derivation, re-evaluate.
+    if doc.trust_tier == 2 and not doc.trust_warning:
+        doc.trust_warning = TIER_2_TRUST_WARNING
+    elif doc.trust_tier != 2 and not source_data.get("trust_warning"):
+        # Lifting to tier 1 / 3 invalidates the auto-tier-2 warning.
+        doc.trust_warning = ""
 
 
 def _select_target(

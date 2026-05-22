@@ -713,11 +713,45 @@ scopes_accepted: [identity:read, capability:read]
 issuer:          agtp.io
 ```
 
+## Trust posture
+
+Every loaded AgentDocument carries a `trust_tier` (1, 2, or 3) and a
+`verification_path` (`dns-anchored` / `log-anchored` / `hybrid` /
+`self-signed`). The defaults are conservative — Tier 2 + self-signed
+— so anything loaded without explicit fields lands at "Org-Asserted"
+with the spec-required `trust_warning: verification-incomplete`.
+
+When an Agent Genesis is loaded alongside an AgentDocument (the
+`{name}.genesis.json` companion file landed in Phase 4), the daemon
+lifts `trust_tier`, `verification_path`, and `owner_id` from the
+Genesis whenever the AgentDocument doesn't declare them. The
+Genesis is the governance-layer source of truth; the AgentDocument
+can override only when the operator deliberately writes a value.
+
+`DISCOVER target=agents` includes the trust block on every listing
+entry so a registry browser or client CLI can render trust badges
+without a follow-up `DESCRIBE`:
+
+```json
+{
+  "agent_id": "f82d6e7f...",
+  "name": "lauren",
+  "trust_tier": 1,
+  "verification_path": "dns-anchored",
+  "owner_id": "nomotic.inc"
+}
+```
+
+Tier 2 entries also carry `"trust_warning": "verification-incomplete"`
+per draft-hood-independent-agtp §6.2.
+
 ## What's not in v1
 
 Deliberate scope cuts, listed for future revisions:
 
-- **Trust scores.** Mentioned in the spec but not yet computed.
+- **Behavioral trust scores.** The 0.0–1.0 reputation score
+  referenced in v06 §6.2 is not yet computed; `trust_tier` is the
+  binary-ish proxy until then.
 - **Public registration UI** at `https://register.agtp.io` —
   a reference local registrar ships at
   [`tools/registrar/`](tools/registrar/README.md); the hosted

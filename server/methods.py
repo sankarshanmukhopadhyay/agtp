@@ -712,22 +712,31 @@ def handle_discover(
     items: List[Dict[str, Any]]
 
     if target == "agents":
-        # v2-aware lightweight entries: skills_summary + methods_count.
-        # Full per-agent details require a follow-up DESCRIBE.
+        # v2-aware lightweight entries: skills_summary + methods_count
+        # plus Phase 5 trust posture (trust_tier, verification_path,
+        # trust_warning, owner_id). The trust block answers "should I
+        # trust this agent?" without requiring a follow-up DESCRIBE.
         from server.manifest import _summarize_skills  # local to avoid cycle
         items = []
         for aid in server_state.list_ids():
             doc = server_state.lookup(aid)
             if doc is None:
                 continue
-            items.append(
-                {
-                    "agent_id": doc.agent_id,
-                    "name": doc.name,
-                    "skills_summary": _summarize_skills(doc.skills),
-                    "methods_count": len(doc.requires.methods),
-                }
-            )
+            entry = {
+                "agent_id": doc.agent_id,
+                "name": doc.name,
+                "skills_summary": _summarize_skills(doc.skills),
+                "methods_count": len(doc.requires.methods),
+                "trust_tier": doc.trust_tier,
+                "verification_path": doc.verification_path,
+            }
+            # Optional fields: only emitted when present so clients
+            # can branch on "field present" cleanly.
+            if doc.trust_warning:
+                entry["trust_warning"] = doc.trust_warning
+            if doc.owner_id:
+                entry["owner_id"] = doc.owner_id
+            items.append(entry)
     elif target in ("tools", "apis"):
         items = []
     elif target == "genesis":

@@ -87,9 +87,34 @@ FIELD_ORDER = [
     "skills",
     "requires",
     "scopes_accepted",
+    "trust_tier",
+    "verification_path",
+    "trust_warning",
+    "owner_id",
     "issued_at",
     "issuer",
 ]
+
+
+# Trust posture enumerations. Mirrors core.genesis on purpose so the
+# two stay aligned; AgentDocument validates against the same vocab.
+VALID_TRUST_TIERS = (1, 2, 3)
+
+VALID_VERIFICATION_PATHS = frozenset({
+    "dns-anchored",
+    "log-anchored",
+    "hybrid",
+    "self-signed",
+})
+
+DEFAULT_TRUST_TIER = 2
+DEFAULT_VERIFICATION_PATH = "self-signed"
+
+# Per draft-hood-independent-agtp §6.2: every Tier 2 Agent Document
+# MUST carry a trust_warning field declaring the verification status.
+# The daemon auto-populates this when the AgentDocument doesn't set
+# it explicitly.
+TIER_2_TRUST_WARNING = "verification-incomplete"
 
 
 @dataclass
@@ -130,6 +155,38 @@ class AgentDocument:
     issued_at: str             # ISO 8601 UTC
     issuer: str
     document_version: str = DOCUMENT_VERSION_V2
+    # Phase 5 trust posture. Defaults match the most conservative
+    # interpretation: org-asserted (tier 2), no verification path
+    # claimed. The daemon's loader auto-populates from the agent's
+    # Agent Genesis when one is loaded alongside and the
+    # AgentDocument doesn't declare these fields explicitly.
+    trust_tier: int = DEFAULT_TRUST_TIER
+    verification_path: str = DEFAULT_VERIFICATION_PATH
+    trust_warning: str = ""
+    # Phase 4 cross-reference: when the agent has a Genesis, this is
+    # its owner_id (the legal entity that registered the agent).
+    # Surfaced on responses as the Owner-ID header by the daemon.
+    # Empty string when no Genesis backs this agent (transport-only
+    # identity).
+    owner_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.trust_tier not in VALID_TRUST_TIERS:
+            raise ValueError(
+                f"trust_tier must be one of {VALID_TRUST_TIERS}; "
+                f"got {self.trust_tier!r}"
+            )
+        if self.verification_path not in VALID_VERIFICATION_PATHS:
+            raise ValueError(
+                f"verification_path must be one of "
+                f"{sorted(VALID_VERIFICATION_PATHS)}; "
+                f"got {self.verification_path!r}"
+            )
+        # Per §6.2: Tier 2 documents MUST carry trust_warning.
+        # Auto-populate when the operator hasn't set it explicitly so
+        # the wire shape always satisfies the spec.
+        if self.trust_tier == 2 and not self.trust_warning:
+            self.trust_warning = TIER_2_TRUST_WARNING
 
     @property
     def is_migrated(self) -> bool:
@@ -157,7 +214,14 @@ class AgentDocument:
         return method_name.upper() in {m.upper() for m in self.requires.methods}
 
     def to_dict(self) -> Dict[str, Any]:
-        """Return a dict in canonical field order. Always emits v2."""
+        """Return a dict in canonical field order. Always emits v2.
+
+        Optional empty-string fields (``trust_warning``, ``owner_id``)
+        are elided to keep the serialized shape clean. Tier 1 agents
+        don't need a trust_warning and agents without a Genesis
+        don't have an owner_id; emitting empty strings would clutter
+        every agent.json file.
+        """
         raw = asdict(self)
         # asdict converts the nested dataclass; rewrite using
         # RequiresDeclaration.to_dict for stable key order.
@@ -171,8 +235,12 @@ class AgentDocument:
                     if self.is_migrated
                     else self.document_version
                 )
-            else:
-                out[key] = raw[key]
+                continue
+            value = raw[key]
+            # Elide empty-string optional fields.
+            if key in ("trust_warning", "owner_id") and not value:
+                continue
+            out[key] = value
         return out
 
     def to_json(self, *, pretty: bool = True) -> str:
@@ -188,6 +256,10 @@ class AgentDocument:
         d = self.to_dict()
         lines: List[str] = []
         for key in FIELD_ORDER:
+            # to_dict elides optional empty-string fields; skip them
+            # in the YAML rendering too.
+            if key not in d:
+                continue
             value = d[key]
             if key == "requires":
                 lines.append("requires:")
@@ -301,6 +373,12 @@ def from_dict(data: Dict[str, Any]) -> AgentDocument:
         skills=list(data["skills"]),
         requires=requires,
         scopes_accepted=list(data["scopes_accepted"]),
+        trust_tier=int(data.get("trust_tier", DEFAULT_TRUST_TIER)),
+        verification_path=str(
+            data.get("verification_path", DEFAULT_VERIFICATION_PATH)
+        ),
+        trust_warning=str(data.get("trust_warning") or ""),
+        owner_id=str(data.get("owner_id") or ""),
         issued_at=str(data["issued_at"]),
         issuer=str(data["issuer"]),
     )
@@ -364,6 +442,8 @@ __all__ = [
     "CONTENT_TYPE_YAML",
     "CONTENT_TYPE_HTML",
     "CONTENT_TYPE_MANIFEST_JSON",
+    "DEFAULT_TRUST_TIER",
+    "DEFAULT_VERIFICATION_PATH",
     "DOC_TYPE_AGENT_DOCUMENT",
     "DOC_TYPE_SERVER_IDENTITY",
     "DOC_TYPE_SERVER_MANIFEST",
@@ -373,6 +453,9 @@ __all__ = [
     "HEADER_APPLICATION",
     "HEADER_APPLICATION_VERSION",
     "HEADER_DOCUMENT_TYPE",
+    "TIER_2_TRUST_WARNING",
+    "VALID_TRUST_TIERS",
+    "VALID_VERIFICATION_PATHS",
     "AgentDocument",
     "RequiresDeclaration",
     "from_dict",
