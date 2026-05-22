@@ -117,6 +117,7 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.tmp/
 
 # Virtual environments
 venv/

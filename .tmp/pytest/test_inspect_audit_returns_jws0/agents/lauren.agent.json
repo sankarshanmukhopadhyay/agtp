@@ -1,1 +1,0 @@
-{"agtp_version": "v0.0.6", "agent_id": "a854697da813e296107b3d9489590e790cabfe35fd09316e816a9426b3ad65f5", "name": "lauren", "principal": "c", "principal_id": "c", "description": "", "status": "active", "skills": [], "requires": {"methods": ["INSPECT", "DESCRIBE"], "scopes": [], "wildcards": false}, "scopes_accepted": [], "issued_at": "now", "issuer": "self"}

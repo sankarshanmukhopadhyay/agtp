@@ -1,1 +1,0 @@
-{"agtp_version": "v0.0.6", "agent_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "name": "trust-tier-2", "principal": "p", "principal_id": "p", "description": "", "status": "active", "skills": [], "requires": {"methods": ["DESCRIBE"], "scopes": [], "wildcards": false}, "scopes_accepted": [], "issued_at": "now", "issuer": "self"}

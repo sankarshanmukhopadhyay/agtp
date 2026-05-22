@@ -1,2 +1,0 @@
-{"agent_id":"7fa4de62fead6ae8fd5ed31cb7d62c0b6dae103b390b516364297a9ddcfca195","name":"a","owner_id":"o","issued_at":"2026-05-22T14:05:57.790398Z","issuer":"registrar.local","trust_tier":2,"verification_path":"self-signed"}
-{"agent_id":"c998fb2e2252c438d6bc881c4fb52ea388754c7c0f0c1b8b2b920d3643211fb0","name":"b","owner_id":"o","issued_at":"2026-05-22T14:05:57.792285Z","issuer":"registrar.local","trust_tier":2,"verification_path":"self-signed"}
