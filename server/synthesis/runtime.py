@@ -444,6 +444,98 @@ class SynthesisRuntime:
         with self._lock:
             return self._origin.get(synthesis_id, "propose-explicit")
 
+    # ---- RCNS-4 follow-up: on_policy_change sweep ----
+
+    def sweep_for_policy_change(
+        self,
+        *,
+        mode: str = "grandfather",
+    ) -> List[Dict[str, Any]]:
+        """Identify (and in ``invalidate`` mode, evict) contracts whose
+        captured recipe lineage no longer matches the current recipe
+        set on this runtime.
+
+        Two policy-change modes per ``[policies.rcns].on_policy_change``:
+
+          * ``grandfather`` (default) — read-only. Walk active
+            contracts, return records for every one whose captured
+            ``recipe_version`` differs from the current version of
+            the same-named recipe (or whose recipe was removed
+            entirely). Records carry ``action = "grandfathered"`` so
+            the operator can see the drift without losing any
+            contracts.
+          * ``invalidate`` — destructive. Same walk; for each
+            mismatch, expire the contract from the runtime with
+            ``reason = "policy-change-invalidation"``. Records carry
+            ``action = "evicted"``.
+
+        Passthrough contracts (no recipe lineage, e.g. plain
+        verb-match syntheses) are unaffected — there's no recipe to
+        drift against.
+
+        Returns the list of records (synthesis_id, originating_agent_id,
+        recipe_name, captured_version, current_version, action).
+        Operators surface this via ``REVOKE target=stale-contracts``;
+        the audit-event emission lives there too so the runtime
+        stays free of audit-store coupling.
+        """
+        if mode not in ("grandfather", "invalidate"):
+            raise ValueError(
+                f"sweep mode must be 'grandfather' or 'invalidate' "
+                f"(got {mode!r})"
+            )
+        # Build a fresh snapshot of current recipe versions across
+        # every recipe-bearing policy. A recipe that's been removed
+        # entirely (no entry under its name) counts as a mismatch.
+        current_versions: Dict[str, str] = {}
+        for policy in self.policies:
+            recipes = getattr(policy, "recipes", None)
+            if not recipes:
+                continue
+            for r in recipes:
+                current_versions[r.name] = r.version
+
+        records: List[Dict[str, Any]] = []
+        with self._lock:
+            sids = list(self.active.keys())
+        for sid in sids:
+            with self._lock:
+                plan = self.active.get(sid)
+            if plan is None:
+                continue
+            captured_name = plan.recipe_name
+            captured_version = plan.recipe_version
+            if captured_name is None:
+                # Passthrough or other non-recipe origin — no recipe
+                # to drift against, nothing to invalidate.
+                continue
+            current = current_versions.get(captured_name)
+            if current == captured_version:
+                continue
+            # Mismatch — recipe was edited, replaced, or removed.
+            with self._lock:
+                originator = self._originating.get(sid, "")
+                contract_h = self._contract_hashes.get(sid, "")
+                negotiation_origin = self._origin.get(
+                    sid, "propose-explicit",
+                )
+            record: Dict[str, Any] = {
+                "synthesis_id": sid,
+                "originating_agent_id": originator or None,
+                "contract_hash": contract_h or None,
+                "negotiation_origin": negotiation_origin,
+                "method": plan.proposed_method.name,
+                "path": plan.proposed_method.path or "/",
+                "recipe_name": captured_name,
+                "captured_version": captured_version,
+                "current_version": current,  # None when recipe removed
+                "action": "evicted" if mode == "invalidate" else "grandfathered",
+            }
+            if mode == "invalidate":
+                self.expire(sid, reason="policy-change-invalidation")
+            records.append(record)
+        return records
+
     def sweep_expired(self) -> List[str]:
         """Walk active syntheses and expire any past their
         ``expires_at``. Returns the list of expired ids. Called at

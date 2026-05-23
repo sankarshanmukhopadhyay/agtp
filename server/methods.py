@@ -2122,6 +2122,14 @@ def handle_revoke(
     target = str(params.get("target") or "agent").lower()
     if target == "contract":
         return _revoke_contract(request, server_state, agent_doc, params)
+    if target == "stale-contracts":
+        # RCNS-4 follow-up: operator-fired sweep that walks the
+        # active contract set and (in invalidate mode) evicts the
+        # entries whose captured recipe_version no longer matches
+        # the current recipe set.
+        return _revoke_stale_contracts(
+            request, server_state, agent_doc, params,
+        )
     return _lifecycle_transition(
         request=request, server_state=server_state, agent_doc=agent_doc,
         event_type="revoke", new_status="retired",
@@ -2225,6 +2233,116 @@ def _revoke_contract(
     if audit_id:
         body["audit_id"] = audit_id
     return json_response(200, "OK", body, method_name="REVOKE")
+
+
+def _revoke_stale_contracts(
+    request: wire.AGTPRequest,
+    server_state: ServerState,
+    agent_doc: AgentDocument,
+    params: Dict[str, Any],
+) -> wire.AGTPResponse:
+    """RCNS-4 follow-up: sweep the active contract set against the
+    current recipe versions.
+
+    Authorization: ``inspect:all`` scope. The sweep can evict
+    contracts owned by any agent on the server so it needs the
+    operator-level gate that ``DISCOVER /contracts?scope=all`` and
+    cross-agent ``INSPECT target=contract`` already use.
+
+    The mode (``grandfather`` / ``invalidate``) comes from
+    ``[policies.rcns].on_policy_change`` by default; an operator can
+    override per-call by passing ``mode`` in the body — useful for
+    a dry-run sweep on a server normally configured to invalidate
+    (call with ``mode=grandfather`` to see what would happen).
+
+    Each evicted contract gets an ``rcns_release`` lifecycle event
+    on the originating agent's stream with
+    ``reason = "policy-change-invalidation"`` and an
+    ``actor_agent_id`` of the operator that fired the sweep —
+    distinguishable in audit from agent-initiated SUSPEND releases.
+    """
+    declared_scopes = set(
+        getattr(getattr(agent_doc, "requires", None), "scopes", []) or []
+    )
+    if "inspect:all" not in declared_scopes:
+        return error_response(
+            403, "Forbidden",
+            "operator-scope-required",
+            (
+                "REVOKE target=stale-contracts requires the "
+                "inspect:all scope (operator-only sweep)"
+            ),
+        )
+    runtime = getattr(server_state, "synthesis_runtime", None)
+    if runtime is None:
+        return error_response(
+            500, "Internal Server Error",
+            "runtime-misconfigured",
+            "server has no synthesis_runtime configured",
+        )
+    config = getattr(server_state, "config", None)
+    rcns_cfg = getattr(config, "rcns", None) if config else None
+    default_mode = str(
+        getattr(rcns_cfg, "on_policy_change", "grandfather")
+        or "grandfather"
+    )
+    # Operator may override per-call. Both modes use the same sweep
+    # method; the runtime decides what to evict based on ``mode``.
+    requested_mode = str(params.get("mode") or default_mode).lower()
+    if requested_mode not in ("grandfather", "invalidate"):
+        return error_response(
+            400, "Bad Request",
+            "invalid-mode",
+            (
+                f"mode must be 'grandfather' or 'invalidate' (got "
+                f"{requested_mode!r})"
+            ),
+        )
+
+    records = runtime.sweep_for_policy_change(mode=requested_mode)
+
+    # Emit one rcns_release event per evicted contract. In
+    # grandfather mode no events fire — the sweep is read-only.
+    audit_ids: List[str] = []
+    if requested_mode == "invalidate":
+        for r in records:
+            target_agent_id = r.get("originating_agent_id") or agent_doc.agent_id
+            snapshot = {
+                "synthesis_id": r["synthesis_id"],
+                "originating_agent_id": r.get("originating_agent_id"),
+                "contract_hash": r.get("contract_hash"),
+                "negotiation_origin": r.get("negotiation_origin"),
+                "method": r["method"],
+                "path": r["path"],
+                "recipe_name": r["recipe_name"],
+                "captured_recipe_version": r["captured_version"],
+                "current_recipe_version": r["current_version"],
+            }
+            audit_id = _maybe_emit_rcns_event(
+                server_state=server_state,
+                event_type="rcns_release",
+                agent_id=target_agent_id,
+                snapshot=snapshot,
+                actor_agent_id=agent_doc.agent_id,
+                reason="policy-change-invalidation",
+            )
+            if audit_id:
+                audit_ids.append(audit_id)
+
+    return json_response(
+        200, "OK",
+        {
+            "method": "REVOKE",
+            "target": "stale-contracts",
+            "mode": requested_mode,
+            "swept_at": _utc_now_iso(),
+            "actor_agent_id": agent_doc.agent_id,
+            "records": records,
+            "stale_count": len(records),
+            "audit_ids": audit_ids,
+        },
+        method_name="REVOKE",
+    )
 
 
 def _maybe_emit_rcns_event(

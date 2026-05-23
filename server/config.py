@@ -604,11 +604,17 @@ class RcnsConfig:
     synthesis_id; outside the window the cached entry is evicted
     and a fresh negotiation runs.
 
-    ``on_policy_change`` is reserved for RCNS-4: it governs whether
-    in-flight contracts are grandfathered to their TTL or
-    invalidated immediately when operator policy changes. RCNS-3
-    stores the value and accepts both ``"grandfather"`` (default)
-    and ``"invalidate"`` so RCNS-4 has a stable surface.
+    ``on_policy_change`` governs the default mode of the
+    operator-fired ``REVOKE target=stale-contracts`` sweep
+    (RCNS-4 follow-up). The sweep walks active contracts and
+    compares each contract's captured ``recipe_version`` against
+    the current recipe set; mismatches are reported (``grandfather``,
+    read-only) or evicted with an ``rcns_release`` audit event
+    carrying ``reason = "policy-change-invalidation"``
+    (``invalidate``). An operator can override the default per-call
+    by passing ``mode`` in the REVOKE body. Default
+    ``"grandfather"`` so a stale recipe edit doesn't unexpectedly
+    evict callers.
     """
 
     enabled: bool = False

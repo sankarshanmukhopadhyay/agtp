@@ -325,6 +325,66 @@ the resulting audit_id when an event was written.
 Use SUSPEND for clean-up: an agent done with a contract releases
 it politely rather than waiting for TTL expiry.
 
+### `REVOKE target=stale-contracts`
+
+Operator-fired sweep that walks the active contract set and
+identifies (and optionally evicts) contracts whose captured
+recipe lineage no longer matches the current recipe set on the
+runtime. The natural use case: operator edits a recipe (bumping
+its `version`), then runs the sweep to either preview the drift
+or invalidate the now-stale contracts.
+
+```json
+{"target": "stale-contracts", "mode": "invalidate"}
+```
+
+Authorization: `inspect:all` scope. The sweep crosses
+agent boundaries so it gets the same operator-only gate that
+`DISCOVER /contracts?scope=all` uses.
+
+Two modes:
+
+| Mode | Effect |
+|---|---|
+| `grandfather` (default) | Read-only. Returns one record per drifted contract with `action = "grandfathered"`. Nothing is evicted. Useful as a dry-run preview. |
+| `invalidate` | Destructive. Each drifted contract is expired from the runtime with `reason = "policy-change-invalidation"` and an `rcns_release` audit event is written to the originating agent's lifecycle stream. The event's `actor_agent_id` is the operator's id, distinguishing this from agent-initiated SUSPEND releases. |
+
+The default mode comes from `[policies.rcns].on_policy_change`.
+An operator can override per-call by passing `mode` in the body —
+useful for previewing on a server normally configured to
+invalidate (call with `mode=grandfather`).
+
+Response body:
+
+```json
+{
+  "method": "REVOKE",
+  "target": "stale-contracts",
+  "mode": "invalidate",
+  "actor_agent_id": "...",
+  "swept_at": "2026-05-23T...",
+  "stale_count": 2,
+  "records": [
+    {
+      "synthesis_id": "syn-...",
+      "originating_agent_id": "...",
+      "method": "RECONCILE",
+      "path": "/accounts",
+      "recipe_name": "recon-on-accounts",
+      "captured_version": "1",
+      "current_version": "2",
+      "action": "evicted"
+    }
+  ],
+  "audit_ids": ["..."]
+}
+```
+
+`current_version` is `null` when the captured recipe was removed
+entirely (vs. just edited). Passthrough contracts (no recipe
+lineage) are skipped by the sweep — there's no recipe to drift
+against.
+
 ## Configuration reference
 
 ```toml
@@ -333,7 +393,7 @@ enabled                       = true
 min_trust_tier                = 1            # 1 strictest, 3 most permissive
 max_negotiations_per_minute   = 10           # per agent; 0 = unlimited
 idempotency_window_seconds    = 60           # 0 disables the cache
-on_policy_change              = "grandfather"  # or "invalidate" — RCNS-4
+on_policy_change              = "grandfather"  # or "invalidate"; default mode for REVOKE target=stale-contracts
 ```
 
 All keys are optional; defaults give the safest posture (`enabled
