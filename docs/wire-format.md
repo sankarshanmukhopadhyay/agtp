@@ -127,7 +127,7 @@ Request-ID: req-2026-05-21-001
 ## Optional request headers — PURCHASE counterparty verification
 
 These two headers ride on **PURCHASE** requests. Per
-`draft-hood-agtp-merchant-identity-01 §4`, they let the receiving
+`draft-hood-agtp-merchant-identity-02 §4`, they let the receiving
 merchant verify that the buyer's intent matches the actual
 counterparty (substitution-attack defense). The headers are
 processed by `mod_merchant`; servers without that module loaded

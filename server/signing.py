@@ -396,24 +396,37 @@ class SigningService:
           * ``payload``   the decoded payload dict (test/inspection aid;
                           not part of the wire shape)
         """
+        # AGTP-IDENTIFIERS §Attribution-Record schema mandates the
+        # following payload shape:
+        #   * ``audit_record_version`` MUST be present (currently "1").
+        #   * Identifier-chain MUSTs (``agent_id``, ``owner_id``,
+        #     ``request_id``, ``response_id``) MUST be present even
+        #     when the daemon doesn't have a value — empty string is
+        #     the "field present, value unknown" sentinel.
+        #   * ``previous_audit_id`` MUST be present on every record;
+        #     the chain head uses 64 zeros as the sentinel "no prior
+        #     record" marker. Verifiers walk the chain by following
+        #     this field, so dropping it on the first record breaks
+        #     the inductive integrity proof.
+        #   * Conditional fields (``principal_id``, ``session_id``,
+        #     ``task_id``) ride only when populated — they're
+        #     legitimately absent for many requests.
         payload: Dict[str, Any] = {
+            "audit_record_version": "1",
             "server_id": server_id,
+            "agent_id": agent_id or "",
+            "owner_id": owner_id or "",
+            "request_id": request_id or "",
+            "response_id": response_id or "",
+            "previous_audit_id": previous_audit_id or "0" * 64,
             "issued_at": issued_at,
             "status": status,
         }
-        # Optional identifier-chain fields. Empty strings are dropped
-        # so the JWS payload only carries values the daemon actually
-        # observed; verifiers can rely on "field present" = "value
-        # known" without checking for empty strings.
+        # Truly-optional identifier-chain fields — drop when empty.
         for key, value in [
-            ("agent_id", agent_id),
-            ("owner_id", owner_id),
             ("principal_id", principal_id),
             ("session_id", session_id),
             ("task_id", task_id),
-            ("request_id", request_id),
-            ("response_id", response_id),
-            ("previous_audit_id", previous_audit_id),
         ]:
             if value:
                 payload[key] = value
@@ -466,20 +479,23 @@ class SigningService:
         key. Verifiers MUST treat ``alg: none`` records as advisory
         only — no cryptographic guarantee of origin.
         """
+        # Same payload-shape MUSTs as the signed builder — the
+        # unsecured form differs only in the JOSE header.
         payload: Dict[str, Any] = {
+            "audit_record_version": "1",
             "server_id": server_id,
+            "agent_id": agent_id or "",
+            "owner_id": owner_id or "",
+            "request_id": request_id or "",
+            "response_id": response_id or "",
+            "previous_audit_id": previous_audit_id or "0" * 64,
             "issued_at": issued_at,
             "status": status,
         }
         for key, value in [
-            ("agent_id", agent_id),
-            ("owner_id", owner_id),
             ("principal_id", principal_id),
             ("session_id", session_id),
             ("task_id", task_id),
-            ("request_id", request_id),
-            ("response_id", response_id),
-            ("previous_audit_id", previous_audit_id),
         ]:
             if value:
                 payload[key] = value

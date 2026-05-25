@@ -231,8 +231,16 @@ def walk_chain(
         if step.fetch_error:
             continue
 
-        # Enqueue same-agent predecessor.
-        if step.previous_audit_id:
+        # Enqueue same-agent predecessor. The chain-head sentinel
+        # (64 zeros, per AGTP-IDENTIFIERS) terminates the walk —
+        # it's the present-but-empty marker that means "no prior
+        # record." An empty string also terminates for compat with
+        # records that predate the audit_record_version: "1"
+        # conformance pass.
+        if (
+            step.previous_audit_id
+            and step.previous_audit_id != "0" * 64
+        ):
             frontier.append((target_uri, step.previous_audit_id, step_id))
 
         # Enqueue cross-agent predecessors.

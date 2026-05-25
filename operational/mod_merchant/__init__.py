@@ -5,7 +5,7 @@ Loaded by ``agtpd`` via ``--load-module mod_merchant``. The module's
 ``install(server_state)`` function registers a :class:`MerchantHook`
 that runs before every PURCHASE dispatch and verifies the inbound
 request is correctly addressed to *this* merchant. Per
-``draft-hood-agtp-merchant-identity-01 §4.2`` the hook enforces:
+``draft-hood-agtp-merchant-identity-02 §4.2`` the hook enforces:
 
   * The agent the request targets has ``role == "merchant"``.
   * The inbound ``Merchant-ID`` header (if present) equals that

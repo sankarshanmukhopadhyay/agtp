@@ -712,9 +712,11 @@ class AuditConfig:
       * ``"jws"`` (default) — Ed25519-signed JWS Compact, identical
         in shape to Attribution-Record. Verifiable with any JWS
         library.
-      * ``"scitt"`` — RFC 9943 SCITT COSE_Sign1 receipts. Future
-        work; the daemon refuses to boot in scitt mode today with
-        a clear message pointing at the planned implementation.
+      * ``"scitt"`` — RFC 9943 SCITT-style COSE_Sign1 receipts
+        (shipped T4.2). Same Ed25519 key signs both forms; the
+        per-line prefix (``cose:`` for COSE; bare for JWS) lets
+        readers disambiguate mixed-format streams across a mode
+        flip. INSPECT lifecycle parses both transparently.
     """
 
     path: str = "stderr"

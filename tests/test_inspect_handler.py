@@ -162,11 +162,12 @@ def test_inspect_chain_walks_via_previous(tmp_path: Path) -> None:
     body = json.loads(resp.body_bytes)
     assert body["payload"]["previous_audit_id"] == first
 
-    # First record has no predecessor.
+    # First record has no predecessor — represented by the 64-zero
+    # chain-head sentinel per AGTP-IDENTIFIERS.
     req2 = _inspect_request(aid, {"target": "audit", "audit_id": first})
     resp2 = handle_inspect(req2, reg, doc)
     body2 = json.loads(resp2.body_bytes)
-    assert "previous_audit_id" not in body2["payload"]
+    assert body2["payload"]["previous_audit_id"] == "0" * 64
 
 
 # ---------------------------------------------------------------------------

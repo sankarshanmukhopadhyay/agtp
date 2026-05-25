@@ -3,7 +3,7 @@
 ## v1.0.0 — Phase 7 landing
 
 Initial release. Operational module that gates PURCHASE requests
-against merchant counterparty identity (`draft-hood-agtp-merchant-identity-01`):
+against merchant counterparty identity (`draft-hood-agtp-merchant-identity-02`):
 
 - Reads dispatched AgentDocument via `server_state.lookup()`.
 - No-op for non-PURCHASE methods and for `role: agent` targets.

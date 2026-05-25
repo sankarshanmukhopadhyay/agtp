@@ -104,7 +104,7 @@ Operational modules extend daemon capability without crossing a language boundar
 - `mod_metrics` — Prometheus and OpenTelemetry exporters.
 - `mod_audit` — AGTP-LOG receipt emission and SCITT transparency log integration.
 - `mod_agent_cert` — Scope-Enforcement-Point gating from AGTP Agent Certificate extensions (`draft-hood-agtp-agent-cert`). Reads the parsed `authority-scope-commitment` and `governance-zone` extensions on the verified peer cert and refuses out-of-scope or out-of-zone requests at the wire layer with 455 / 457 before the handler runs.
-- `mod_merchant` — PURCHASE counterparty verification (`draft-hood-agtp-merchant-identity-01`). For `role: merchant` agents, verifies `Merchant-ID` and `Merchant-Manifest-Fingerprint` headers and merchant lifecycle state, returning 458 Counterparty Unverified on mismatch.
+- `mod_merchant` — PURCHASE counterparty verification (`draft-hood-agtp-merchant-identity-02`). For `role: merchant` agents, verifies `Merchant-ID` and `Merchant-Manifest-Fingerprint` headers and merchant lifecycle state, returning 458 Counterparty Unverified on mismatch.
 
 Operational modules ship with agtpd or as official add-ons. They are configured the same way runtime modules are, in agtpd's main config file.
 
@@ -344,7 +344,7 @@ The function call inside `dispatch()` that today invokes a handler in-process be
 
 ## 9. What This Document Does Not Cover
 
-- The AGTP wire format itself (defined in `draft-hood-independent-agtp-07`)
+- The AGTP wire format itself (defined in `draft-hood-independent-agtp-08`)
 - The AGTP method catalog (defined in `core/methods.json` and the AGTP-API draft)
 - Agent identity and trust tiers (defined in the core draft and AGTP-Trust)
 - Discovery and the Agent Name Service (defined in AGTP-Discovery)

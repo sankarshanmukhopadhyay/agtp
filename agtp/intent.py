@@ -124,7 +124,7 @@ def build_intent_assertion(
             )
 
     Required claims (mandatory per
-    ``draft-hood-agtp-merchant-identity-01 §6``):
+    ``draft-hood-agtp-merchant-identity-02 §6``):
 
       * ``iss``   issuer — the buyer's Canonical Agent-ID
       * ``sub``   subject — the principal authorizing the spend

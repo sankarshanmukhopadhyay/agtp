@@ -1,7 +1,7 @@
 """
 AGTP Agent Certificate X.509 v3 extensions.
 
-Per ``draft-hood-agtp-agent-cert-00``, AGTP Agent Certificates carry
+Per ``draft-hood-agtp-agent-cert-01``, AGTP Agent Certificates carry
 eight governance-specific extensions on top of a standard X.509 v3
 cert. This module defines the OIDs, value formats, and encode/decode
 helpers used by both the CLI generator and the daemon's verifier.

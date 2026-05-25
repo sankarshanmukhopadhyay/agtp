@@ -9,8 +9,8 @@ request time:
   * :func:`is_approved_verb` — name in the canonical AGTP set?
   * :func:`is_legacy_verb` — name is one of the recognized legacy
     HTTP verbs (GET / POST / PUT / DELETE / PATCH)?
-  * :func:`is_embedded_verb` — name is one of the 12 embedded AGTP
-    primitives?
+  * :func:`is_embedded_verb` — name is one of the 18 embedded AGTP
+    primitives (7 cognitive + 6 mechanics + 5 lifecycle)?
   * :func:`categorize` — return the category list a verb belongs to.
   * :func:`get_legacy_preferred` — given a legacy verb, return its
     AGTP-canonical replacement (e.g., GET -> FETCH).
@@ -70,7 +70,10 @@ _METHODS_DOC = _load_methods_doc()
 #: All AGTP-approved methods (everything in the curated catalog).
 APPROVED_VERBS: Set[str] = set(_METHODS_DOC["methods"].keys())
 
-#: The 12 embedded primitives.
+#: The 18 embedded primitives — 7 cognitive (QUERY, DISCOVER,
+#: DESCRIBE, INSPECT, SUMMARIZE, PLAN, PROPOSE), 6 mechanics
+#: (EXECUTE, DELEGATE, ESCALATE, CONFIRM, SUSPEND, NOTIFY), and
+#: 5 lifecycle (ACTIVATE, DEACTIVATE, REVOKE, REINSTATE, DEPRECATE).
 EMBEDDED_VERBS: Set[str] = set(_METHODS_DOC["embedded"])
 
 #: Recognized legacy HTTP methods. Servers admit them only by opt-in
@@ -96,7 +99,7 @@ def is_legacy_verb(name: str) -> bool:
 
 
 def is_embedded_verb(name: str) -> bool:
-    """True when ``name`` is one of the 12 embedded AGTP primitives."""
+    """True when ``name`` is one of the 18 embedded AGTP primitives."""
     return name.upper() in EMBEDDED_VERBS
 
 

@@ -224,12 +224,20 @@ def test_attribution_record_round_trip(tmp_path: Path) -> None:
     assert header["typ"] == "JWT"
     assert header["kid"] == service.key_id
 
-    # Payload carries the daemon-known fields; empty values are omitted.
+    # Payload carries the AGTP-IDENTIFIERS-mandated MUST fields:
+    # audit_record_version, server_id, agent_id, owner_id,
+    # request_id, response_id, previous_audit_id, issued_at, status.
+    # MUSTs that the caller didn't supply ride as empty strings
+    # (present-but-unknown); previous_audit_id rides as the 64-zero
+    # sentinel for chain-head records.
+    assert payload["audit_record_version"] == "1"
     assert payload["server_id"] == "agents.example.com"
     assert payload["status"] == 200
     assert payload["agent_id"] == "a" * 64
     assert payload["request_id"] == "req-1"
-    assert "owner_id" not in payload  # not set
+    assert payload["owner_id"] == ""           # MUST present; value unknown
+    assert payload["response_id"] == ""        # MUST present; value unknown
+    assert payload["previous_audit_id"] == "0" * 64  # chain head sentinel
 
     # Verifier accepts a valid signature.
     verified = verify_attribution_record(record.jws, service.public_key)
@@ -270,9 +278,17 @@ def test_attribution_record_chain_field(tmp_path: Path) -> None:
     assert payload["previous_audit_id"] == "aud-prev"
 
 
-def test_attribution_record_omits_empty_fields(tmp_path: Path) -> None:
-    """Empty-string identifier fields drop from the payload so
-    verifiers see only what the daemon actually observed."""
+def test_attribution_record_keeps_must_fields_as_empty_sentinel(
+    tmp_path: Path,
+) -> None:
+    """AGTP-IDENTIFIERS Attribution-Record schema makes a small set
+    of fields MUST be present on every record. When the daemon
+    legitimately doesn't have a value (server-level operation, no
+    chain head yet), the field rides as an empty string
+    (present-but-unknown) — never dropped. Genuinely optional
+    fields (principal_id, session_id, task_id) still drop when
+    empty.
+    """
     from server.signing import parse_attribution_record
 
     service = SigningService.from_key_path(str(_write_key(tmp_path)))
@@ -282,8 +298,29 @@ def test_attribution_record_omits_empty_fields(tmp_path: Path) -> None:
         status=200,
     )
     _, payload, _ = parse_attribution_record(record.jws)
-    # Mandatory always-present fields.
-    assert set(payload.keys()) == {"server_id", "issued_at", "status"}
+    # MUST fields per AGTP-IDENTIFIERS — always present even when
+    # the value is unknown.
+    assert set(payload.keys()) == {
+        "audit_record_version",
+        "server_id",
+        "agent_id",
+        "owner_id",
+        "request_id",
+        "response_id",
+        "previous_audit_id",
+        "issued_at",
+        "status",
+    }
+    assert payload["audit_record_version"] == "1"
+    assert payload["agent_id"] == ""             # MUST; unknown
+    assert payload["owner_id"] == ""             # MUST; unknown
+    assert payload["request_id"] == ""           # MUST; unknown
+    assert payload["response_id"] == ""          # MUST; unknown
+    assert payload["previous_audit_id"] == "0" * 64  # chain head sentinel
+    # Genuinely-optional fields still drop when empty.
+    assert "principal_id" not in payload
+    assert "session_id" not in payload
+    assert "task_id" not in payload
 
 
 def test_unsigned_attribution_record(tmp_path: Path) -> None:

@@ -1,9 +1,23 @@
 """
-Minimal COSE_Sign1 encoder/verifier for SCITT receipts.
+Minimal COSE_Sign1 encoder/verifier for the local lifecycle stream.
 
 Implements just the slice of CBOR (RFC 8949) and COSE (RFC 8152)
-the AGTP-LOG transparency-log spec needs: signed identity-lifecycle
-events emitted as RFC 9943 SCITT statements.
+needed to wrap signed identity-lifecycle events in a SCITT-shaped
+envelope (RFC 9943) for the per-agent ``audit_lifecycle`` stream.
+
+**Scope note**: this module produces *AGTP local lifecycle
+envelopes*, not full AGTP-LOG transparency-log statements. The two
+share the COSE_Sign1 carrier but differ in payload and protected-
+header parameters: a transparency-log statement per AGTP-LOG
+§Entry Format carries deterministic-CBOR payload and the
+``agtp-event-type`` / ``agtp-subject`` / ``agtp-issuer`` /
+``agtp-issued-at`` header parameters with content type
+``application/agtp-log-statement+cbor``. This module emits the
+simpler local-stream envelope (UTF-8 JSON payload, content type
+``application/agtp-lifecycle+json``) that AGTP-LOG §Local
+Lifecycle Stream permits. Conversion to a full transparency-log
+statement happens at submission time, in the transparency-log
+client (not yet implemented).
 
 We hand-roll the CBOR codec rather than pulling in ``cbor2`` so
 that turning on ``[audit].mode = scitt`` doesn't add a third-party

@@ -2,7 +2,7 @@
 Agent Certificate verification for mTLS-secured AGTP connections.
 
 This module implements the full set of AGTP Agent Certificate
-extensions defined in ``draft-hood-agtp-agent-cert-00``:
+extensions defined in ``draft-hood-agtp-agent-cert-01``:
 ``subject-agent-id``, ``principal-id``,
 ``authority-scope-commitment``, ``governance-zone``, ``trust-tier``,
 ``archetype``, ``activation-certificate-id``, and ``agtp-ctl-sct``.
@@ -21,13 +21,18 @@ This produces a 64-hex-char identifier matching the format used
 elsewhere in the protocol.
 
 When the cert carries a ``subject-agent-id`` extension, that value
-is the canonical Agent-ID and **MUST** equal the key-derived form;
-a mismatch is refused with ``detail="extension-mismatch"``. The
-extension's value is what eventually ties the cert to the agent's
-governance-layer Agent Genesis (Phase 4 adds the Genesis-document
-fetch + hash verification). When the extension is absent — a vanilla
-TLS cert without Agent-Cert extensions — the key-derived form is
-authoritative; the daemon treats this as "transport-only" identity.
+is the canonical Agent-ID (sha256 of the canonical Agent Genesis
+JSON, per draft-hood-agtp-agent-cert-01 §3.2.1). It is treated as
+authoritative and is decoupled from the cert's public-key hash —
+this is by design so the same Agent-ID can ride on multiple certs
+across key rotations. The Genesis-binding cross-check
+(``sha256(Genesis) == subject_agent_id`` plus Genesis signature
+verification against a trusted issuer key) is layered at the
+application layer in :func:`core.genesis.verify_cert_genesis_binding`;
+verifiers run it once on connection establishment. When the
+``subject-agent-id`` extension is absent — a vanilla TLS cert
+without Agent-Cert extensions — the key-derived form is the
+fallback and the daemon treats this as "transport-only" identity.
 
 ## Scope-Enforcement at the daemon
 

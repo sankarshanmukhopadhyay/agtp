@@ -105,13 +105,20 @@ FIELD_ORDER = [
 VALID_TRUST_TIERS = (1, 2, 3)
 
 VALID_VERIFICATION_PATHS = frozenset({
-    "dns-anchored",
-    "log-anchored",
-    "hybrid",
+    # AGTP-TRUST §verification-path canonical enum:
+    "dns-anchored",   # Tier 1 — DNS record + CA chain
+    "log-anchored",   # Tier 1 — transparency-log inclusion proof
+    "hybrid",         # Tier 1 — DNS + blockchain anchor
+    "org-asserted",   # Tier 2 — organization-signed, no external proof
+    # Code-only extension. Marks dev / local / test deployments
+    # where no organizational attestation exists. Treated as Tier 2
+    # for trust-posture purposes; distinguished from "org-asserted"
+    # only so operators can see at a glance that the AgentDocument
+    # was issued without any external signing authority.
     "self-signed",
 })
 
-# Identity role per draft-hood-agtp-merchant-identity-01. ``agent``
+# Identity role per draft-hood-agtp-merchant-identity-02. ``agent``
 # is the default; ``merchant`` agents gate inbound PURCHASE through
 # mod_merchant.
 VALID_ROLES = frozenset({
@@ -182,7 +189,7 @@ class AgentDocument:
     # Empty string when no Genesis backs this agent (transport-only
     # identity).
     owner_id: str = ""
-    # Phase 7 role per draft-hood-agtp-merchant-identity-01. Mirrors
+    # Phase 7 role per draft-hood-agtp-merchant-identity-02. Mirrors
     # AgentGenesis.role. ``agent`` (default) follows the standard
     # dispatch path; ``merchant`` triggers mod_merchant's PURCHASE
     # gate when that module is loaded.

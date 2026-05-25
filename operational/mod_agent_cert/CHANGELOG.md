@@ -3,7 +3,7 @@
 ## v1.0.0 — Phase 3 landing
 
 Initial release. Operational module that gates AGTP requests against
-Agent Certificate extensions (`draft-hood-agtp-agent-cert-00`):
+Agent Certificate extensions (`draft-hood-agtp-agent-cert-01`):
 
 - Reads `EndpointContext.agent_cert_extensions` populated by the
   daemon's dispatcher from the verified peer cert.

@@ -33,7 +33,7 @@
     },
     "agent_id": {
       "type": "string",
-      "description": "Canonical Agent-ID. SHA-256 hex of the agent's Genesis document per draft-hood-independent-agtp-07.",
+      "description": "Canonical Agent-ID. SHA-256 hex of the agent's Genesis document per draft-hood-independent-agtp-08.",
       "pattern": "^[0-9a-f]{64}$"
     },
     "name": {
@@ -111,8 +111,8 @@
     },
     "verification_path": {
       "type": "string",
-      "description": "Verification path that backs the trust_tier claim. 'self-signed' is the default for development; Tier 1 requires one of the production paths. (Added v1.2.0.)",
-      "enum": ["dns-anchored", "log-anchored", "hybrid", "self-signed"],
+      "description": "Verification path that backs the trust_tier claim. 'dns-anchored' / 'log-anchored' / 'hybrid' are Tier 1 production paths per AGTP-TRUST; 'org-asserted' is the Tier 2 production path (organization-signed, no external proof); 'self-signed' is a code-only Tier 2 marker for dev / local / test deployments. (Added v1.2.0; 'org-asserted' added v1.3.0.)",
+      "enum": ["dns-anchored", "log-anchored", "hybrid", "org-asserted", "self-signed"],
       "default": "self-signed"
     },
     "trust_warning": {
@@ -125,7 +125,7 @@
     },
     "role": {
       "type": "string",
-      "description": "Identity role per draft-hood-agtp-merchant-identity-01. 'agent' (default) follows the standard dispatch path; 'merchant' triggers mod_merchant's PURCHASE counterparty gate. Mirrors the Agent Genesis's role field. (Added v1.3.0.)",
+      "description": "Identity role per draft-hood-agtp-merchant-identity-02. 'agent' (default) follows the standard dispatch path; 'merchant' triggers mod_merchant's PURCHASE counterparty gate. Mirrors the Agent Genesis's role field. (Added v1.3.0.)",
       "enum": ["agent", "merchant"],
       "default": "agent"
     },

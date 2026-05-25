@@ -14,7 +14,7 @@ Two modes:
     valid against any deployment that trusts the same CA.
 
 The CLI also writes the AGTP X.509 v3 extensions defined in
-``draft-hood-agtp-agent-cert-00`` when the matching flags are
+``draft-hood-agtp-agent-cert-01`` when the matching flags are
 supplied. Without them the cert is a vanilla TLS cert (Phase 2
 shape) and the daemon treats it as transport-only identity. With
 them the cert becomes a full Agent Certificate and unlocks

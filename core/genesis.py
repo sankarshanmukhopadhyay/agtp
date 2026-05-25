@@ -83,10 +83,15 @@ class GenesisSignatureError(GenesisError):
 VALID_TRUST_TIERS = (1, 2, 3)
 
 VALID_VERIFICATION_PATHS = frozenset({
-    "dns-anchored",
-    "log-anchored",
-    "hybrid",
-    "self-signed",  # development convenience; not Tier 1
+    # AGTP-TRUST §verification-path canonical enum:
+    "dns-anchored",   # Tier 1 — DNS record + CA chain
+    "log-anchored",   # Tier 1 — transparency-log inclusion proof
+    "hybrid",         # Tier 1 — DNS + blockchain anchor
+    "org-asserted",   # Tier 2 — organization-signed, no external proof
+    # Code-only extension. Marks Genesis docs issued without any
+    # organizational signing authority — dev / local / test only.
+    # Treated as Tier 2 for trust-posture purposes.
+    "self-signed",
 })
 
 VALID_ARCHETYPES = frozenset({

@@ -3,7 +3,7 @@
 A dedicated application-layer protocol for AI agent traffic.
 Specification, Internet-Draft, and reference implementation.
 
-- **IETF submission:** `draft-hood-independent-agtp-07`
+- **IETF submission:** `draft-hood-independent-agtp-08`
 - **IANA-registered ports:** 4480/TCP (`agtp`) and 4480/UDP (`agtp-quic`)
 - **Reference implementation:** `core/`, `server/`, `client/`, `registry/` (this repository)
 - **First registered agent:** Lauren —

@@ -5,7 +5,7 @@ Loaded by ``agtpd`` via ``--load-module mod_agent_cert``. The module's
 ``install(server_state)`` function registers an :class:`AgentCertHook`
 against the daemon's :class:`HookRegistry`. The hook runs before
 every handler invocation and enforces two constraints derived from
-the AGTP Agent Certificate (`draft-hood-agtp-agent-cert-00`)
+the AGTP Agent Certificate (`draft-hood-agtp-agent-cert-01`)
 extensions:
 
   * **Authority-Scope** — every token in the inbound

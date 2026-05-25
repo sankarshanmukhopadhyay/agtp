@@ -178,8 +178,11 @@ def test_signed_jws_when_signing_enabled(tmp_path: Path) -> None:
     assert payload["session_id"] == "sess-1"
     assert "response_id" in payload
     assert "issued_at" in payload
-    # First record for this agent: no predecessor.
-    assert "previous_audit_id" not in payload
+    # First record for this agent: chain-head zero sentinel per
+    # AGTP-IDENTIFIERS (previous_audit_id MUST be present on
+    # every record; 64 zeros mark "no prior record").
+    assert payload["previous_audit_id"] == "0" * 64
+    assert payload["audit_record_version"] == "1"
 
     # Audit-ID matches sha256(JWS).
     assert response.headers["Audit-ID"] == audit_id_for(jws)

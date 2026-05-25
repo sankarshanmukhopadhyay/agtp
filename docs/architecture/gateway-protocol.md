@@ -14,7 +14,7 @@ implement this protocol: the **daemon side** runs inside `agtpd`; the
 **module side** runs inside a separate handler process.
 
 This is **not** the AGTP protocol. AGTP is the agent-facing wire
-format on TCP/4480 (see `draft-hood-independent-agtp-07`). The
+format on TCP/4480 (see `draft-hood-independent-agtp-08`). The
 gateway protocol is the daemon-to-handler IPC that exists strictly
 inside one operator's deployment. It is not exposed to the public
 network and it is not a substitute for AGTP.
@@ -576,11 +576,11 @@ no resumption protocol in v1.
 ## 9. Trusted headers and mTLS forward-compatibility
 
 In v1, agent identity rides as the `Agent-ID` request header (per
-`draft-hood-independent-agtp-07` §10). The daemon resolves the
+`draft-hood-independent-agtp-08` §10). The daemon resolves the
 agent against its registry, populates `envelope.agent_id`, and sets
 `trust.method = "agent_id_header"`, `trust.verified = true`.
 
-When mTLS / Agent-Cert lands (`draft-hood-agtp-agent-cert-00`):
+When mTLS / Agent-Cert lands (`draft-hood-agtp-agent-cert-01`):
 
 - The daemon verifies the client certificate during the AGTP-level
   TLS handshake.
@@ -858,7 +858,7 @@ shape:
 
 ## 15. What this document does not cover
 
-- The AGTP wire format (`draft-hood-independent-agtp-07`).
+- The AGTP wire format (`draft-hood-independent-agtp-08`).
 - The method catalog and path grammar (`AGTP-API` draft and
   `core/methods.json`).
 - The operator manifest format itself — the manifest is `agtpd`'s

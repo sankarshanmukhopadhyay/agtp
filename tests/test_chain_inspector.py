@@ -96,7 +96,10 @@ def test_walks_single_record_chain() -> None:
     assert steps[0].audit_id == rec["audit_id"]
     assert steps[0].signed is True
     assert steps[0].verified is None  # no key supplied → not verified
-    assert steps[0].previous_audit_id == ""
+    # Chain head: previous_audit_id rides as the 64-zero sentinel per
+    # AGTP-IDENTIFIERS. Walker terminates on the sentinel without
+    # following it (no walk-to-zeros).
+    assert steps[0].previous_audit_id == "0" * 64
 
 
 def test_walks_multi_record_chain_newest_first() -> None:

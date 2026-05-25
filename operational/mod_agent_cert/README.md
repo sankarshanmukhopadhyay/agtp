@@ -1,7 +1,7 @@
 # mod_agent_cert
 
 Operational module: Scope-Enforcement-Point gating from AGTP Agent
-Certificate extensions (`draft-hood-agtp-agent-cert-00`).
+Certificate extensions (`draft-hood-agtp-agent-cert-01`).
 
 ## What it does
 
