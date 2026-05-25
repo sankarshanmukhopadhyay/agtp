@@ -602,6 +602,178 @@ def test_apply_revocation_notify_ignores_non_certificate_revoked() -> None:
     assert len(reg) == 1  # untouched
 
 
+# ---------------------------------------------------------------------------
+# Key-encoding interop — PEM ↔ base64url-of-raw-bytes (Batch E).
+# ---------------------------------------------------------------------------
+
+
+def _ed25519_keypair():
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key()
+    pem = pub.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    raw = pub.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    import base64 as _b64
+    b64url = _b64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    return pem, b64url, raw
+
+
+def test_pem_to_b64url_raw_round_trip() -> None:
+    """Converting PEM → b64url-raw → PEM produces the original
+    PEM bytes (modulo line endings / framing whitespace)."""
+    from core.key_encoding import b64url_raw_to_pem, pem_to_b64url_raw
+    pem, b64url_expected, _ = _ed25519_keypair()
+    converted_b64url = pem_to_b64url_raw(pem)
+    assert converted_b64url == b64url_expected
+    # Round-trip back to PEM.
+    pem_again = b64url_raw_to_pem(converted_b64url)
+    # PEM round-trip should be byte-equivalent (cryptography
+    # normalizes line endings).
+    assert b64url_expected == pem_to_b64url_raw(pem_again)
+
+
+def test_b64url_raw_to_pem_accepts_padded_or_unpadded() -> None:
+    """Tolerant parsing — spec form is unpadded but PEM-from-b64url
+    helper accepts both."""
+    from core.key_encoding import b64url_raw_to_pem
+    _, b64url, _ = _ed25519_keypair()
+    # Unpadded (canonical).
+    pem_unpadded = b64url_raw_to_pem(b64url)
+    # Padded (tolerant).
+    padded = b64url + "=" * (-len(b64url) % 4)
+    pem_padded = b64url_raw_to_pem(padded)
+    assert pem_unpadded == pem_padded
+
+
+def test_b64url_raw_to_pem_rejects_wrong_length() -> None:
+    """A 31-byte or 33-byte payload is not a valid Ed25519 key."""
+    from core.key_encoding import KeyEncodingError, b64url_raw_to_pem
+    import base64 as _b64
+    wrong = _b64.urlsafe_b64encode(b"x" * 31).rstrip(b"=").decode()
+    with pytest.raises(KeyEncodingError, match="32 bytes"):
+        b64url_raw_to_pem(wrong)
+
+
+def test_b64url_raw_to_pem_rejects_invalid_base64() -> None:
+    from core.key_encoding import KeyEncodingError, b64url_raw_to_pem
+    with pytest.raises(KeyEncodingError):
+        b64url_raw_to_pem("not!valid!base64!")
+
+
+def test_pem_to_b64url_raw_rejects_non_ed25519() -> None:
+    """A PEM block that isn't Ed25519 (e.g. RSA) gets refused."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from core.key_encoding import KeyEncodingError, pem_to_b64url_raw
+    rsa_pub = rsa.generate_private_key(
+        public_exponent=65537, key_size=2048,
+    ).public_key()
+    rsa_pem = rsa_pub.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    with pytest.raises(KeyEncodingError, match="Ed25519"):
+        pem_to_b64url_raw(rsa_pem)
+
+
+def test_fingerprint_b64url_raw_format_agnostic() -> None:
+    """Same key, two encodings → same fingerprint. Different
+    keys → always-different fingerprints."""
+    from core.key_encoding import fingerprint_b64url_raw
+    pem_a, b64url_a, _ = _ed25519_keypair()
+    pem_b, b64url_b, _ = _ed25519_keypair()
+    # Same key in two formats hashes identically.
+    assert fingerprint_b64url_raw(pem_a) == fingerprint_b64url_raw(b64url_a)
+    # Two different keys hash differently.
+    assert fingerprint_b64url_raw(pem_a) != fingerprint_b64url_raw(pem_b)
+    # Hex length is 64 (sha256).
+    assert len(fingerprint_b64url_raw(pem_a)) == 64
+
+
+def test_fingerprint_matches_spec_formula() -> None:
+    """The fingerprint is exactly sha256 of the raw 32-byte key
+    bytes (AGTP-CERT / AGTP-IDENTIFIERS canonical formula)."""
+    import hashlib as _hash
+    from core.key_encoding import fingerprint_b64url_raw
+    _, _, raw = _ed25519_keypair()
+    expected = _hash.sha256(raw).hexdigest()
+    # Build the b64url-raw form ourselves and verify.
+    import base64 as _b64
+    b64url = _b64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+    assert fingerprint_b64url_raw(b64url) == expected
+
+
+def test_detect_format_identifies_pem() -> None:
+    from core.key_encoding import detect_format
+    pem, b64url, _ = _ed25519_keypair()
+    assert detect_format(pem) == "pem"
+    assert detect_format(b64url) == "b64url_raw"
+
+
+def test_genesis_issuer_public_key_b64url_raw_accessor() -> None:
+    """AgentGenesis surfaces the spec-canonical form regardless of
+    which encoding it was loaded with."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+    from core.genesis import AgentGenesis, public_key_pem
+    from core.key_encoding import pem_to_b64url_raw
+
+    k = Ed25519PrivateKey.generate()
+    pem = public_key_pem(k.public_key())
+    g = AgentGenesis(
+        name="lauren", owner_id="nomotic.inc",
+        principal_id="chris", agent_public_key=pem,
+        issued_at="2026-05-25T00:00:00Z",
+        issuer="self", issuer_public_key=pem,
+    )
+    expected = pem_to_b64url_raw(pem)
+    assert g.issuer_public_key_b64url_raw() == expected
+    # Fingerprint matches the spec formula.
+    import hashlib as _hash
+    import base64 as _b64
+    raw = _b64.urlsafe_b64decode(
+        expected + "=" * (-len(expected) % 4),
+    )
+    assert g.issuer_public_key_fingerprint() == _hash.sha256(raw).hexdigest()
+
+
+def test_agent_document_manifest_issuer_public_key_b64url_raw_accessor() -> None:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+    )
+    from core.key_encoding import pem_to_b64url_raw
+
+    k = Ed25519PrivateKey.generate()
+    pem = k.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    doc = _base_doc(
+        manifest_issuer="registrar.example",
+        manifest_issuer_public_key=pem,
+    )
+    expected = pem_to_b64url_raw(pem)
+    assert doc.manifest_issuer_public_key_b64url_raw() == expected
+
+
+def test_agent_document_manifest_accessors_empty_when_unsigned() -> None:
+    """Unsigned documents return empty strings, not error."""
+    doc = _base_doc()  # no manifest_issuer_public_key
+    assert doc.manifest_issuer_public_key_b64url_raw() == ""
+    assert doc.manifest_issuer_public_key_fingerprint() == ""
+
+
 def test_trust_score_field_order_in_serialization() -> None:
     """trust_score sits between trust_warning and owner_id in the
     canonical key order so agent.json files stay byte-stable."""

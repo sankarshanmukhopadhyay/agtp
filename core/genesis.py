@@ -247,6 +247,41 @@ class AgentGenesis:
         canonical = self.to_canonical_json(exclude_signature=True)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    def issuer_public_key_b64url_raw(self) -> str:
+        """Return :attr:`issuer_public_key` in the spec-canonical
+        base64url-of-raw-bytes form.
+
+        The dataclass stores keys in whatever format the source
+        file used (typically PEM today). Spec-aligned consumers —
+        cross-implementation verifiers expecting the format from
+        AGTP-IDENTIFIERS — call this helper to get the 32 raw
+        bytes encoded with URL-safe base64 (no padding), per
+        RFC 8032 §5.1.2 / the AGTP-CERT issuer-key wire form.
+
+        Idempotent: input already in b64url-raw returns unchanged.
+        Raises :class:`core.key_encoding.KeyEncodingError` when
+        the stored key isn't a valid Ed25519 key in either format.
+        """
+        from core.key_encoding import detect_format, pem_to_b64url_raw
+        if not self.issuer_public_key:
+            return ""
+        if detect_format(self.issuer_public_key) == "pem":
+            return pem_to_b64url_raw(self.issuer_public_key)
+        return self.issuer_public_key.strip()
+
+    def issuer_public_key_fingerprint(self) -> str:
+        """Spec-canonical fingerprint of the issuer key: 64-char
+        lowercase hex of ``sha256(raw_ed25519_public_key_bytes)``.
+
+        Used by AGTP-CERT verifiers to compare the issuer key
+        across encodings — two implementations may store the same
+        key in different formats but their fingerprints match.
+        """
+        from core.key_encoding import fingerprint_b64url_raw
+        if not self.issuer_public_key:
+            return ""
+        return fingerprint_b64url_raw(self.issuer_public_key)
+
     # ----- Signing / verification -----
 
     def sign(self, issuer_private_key: Ed25519PrivateKey) -> None:

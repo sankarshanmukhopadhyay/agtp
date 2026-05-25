@@ -276,6 +276,44 @@ class AgentDocument:
         """
         return list(self.requires.methods)
 
+    def manifest_issuer_public_key_b64url_raw(self) -> str:
+        """Return :attr:`manifest_issuer_public_key` in the spec-
+        canonical base64url-of-raw-bytes form.
+
+        The dataclass stores keys in whatever format the source
+        file used (typically PEM today). Spec-aligned consumers —
+        cross-implementation verifiers expecting the format from
+        AGTP-IDENTIFIERS — call this helper to get the 32 raw
+        bytes encoded with URL-safe base64 (no padding), per
+        RFC 8032 §5.1.2.
+
+        Idempotent: input already in b64url-raw returns unchanged.
+        Empty string when the document is unsigned (no manifest
+        attestation). Raises
+        :class:`core.key_encoding.KeyEncodingError` when the
+        stored key isn't a valid Ed25519 key in either format.
+        """
+        from core.key_encoding import detect_format, pem_to_b64url_raw
+        if not self.manifest_issuer_public_key:
+            return ""
+        if detect_format(self.manifest_issuer_public_key) == "pem":
+            return pem_to_b64url_raw(self.manifest_issuer_public_key)
+        return self.manifest_issuer_public_key.strip()
+
+    def manifest_issuer_public_key_fingerprint(self) -> str:
+        """Spec-canonical fingerprint of the manifest-issuer key:
+        64-char lowercase hex of ``sha256(raw_ed25519_public_key_bytes)``.
+
+        Empty string when the document is unsigned. Used by
+        relying parties to identify which registrar key signed
+        the AgentDocument without trusting an untrusted in-band
+        lookup.
+        """
+        from core.key_encoding import fingerprint_b64url_raw
+        if not self.manifest_issuer_public_key:
+            return ""
+        return fingerprint_b64url_raw(self.manifest_issuer_public_key)
+
     def accepts_method(self, method_name: str) -> bool:
         """
         True when this agent will dispatch ``method_name`` inbound.
