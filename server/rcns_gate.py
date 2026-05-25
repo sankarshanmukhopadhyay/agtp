@@ -390,7 +390,7 @@ def try_rcns(
 
     # Idempotency key — return the cached synthesis_id for repeated
     # negotiations with the same key within the window.
-    idem_key = wire.header(request, "RCNS-Idempotency-Key") or ""
+    idem_key = wire.read_idempotency_key(request) or ""
     cached_sid: Optional[str] = None
     if idem_key:
         cached_sid = _idempotent_lookup(

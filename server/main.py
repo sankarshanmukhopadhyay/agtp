@@ -78,7 +78,7 @@ def _maybe_redirect_via_synthesis(
     synthesis-driven requests by checking
     :data:`SYNTHESES` membership separately.
     """
-    syn_id = wire.header(request, "Synthesis-Id")
+    syn_id = wire.read_synthesis_id(request)
     via_synthesis = bool(syn_id and SYNTHESES.get(syn_id) is not None)
     return request, via_synthesis
 

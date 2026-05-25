@@ -290,3 +290,87 @@ def read_agent_id(message, default: str = "") -> str:
         )
         return legacy_value
     return default
+
+
+_SYNTHESIS_HEADER_WARNED: set = set()
+
+
+def read_synthesis_id(message, default: str = "") -> str:
+    """Read the synthesis_id from an AGTPRequest.
+
+    Per AGTP-API §9 / draft-hood-independent-agtp §4.4, the canonical
+    request-side header for presenting a previously-negotiated
+    synthesis is ``Contract-Synthesized``. The original RCNS-3
+    implementation used ``Synthesis-Id`` (predating the
+    spec-aligned name); the spec eventually settled on overloading
+    ``Contract-Synthesized`` for both directions — request side
+    ("I present this contract") and response side ("the server
+    synthesized this contract on your behalf in optimistic mode").
+
+    This helper reads ``Contract-Synthesized`` first; falls back
+    to ``Synthesis-Id`` with a per-process one-shot deprecation
+    warning when the legacy name is the only one present.
+    """
+    new_value = header(message, "Contract-Synthesized")
+    if new_value:
+        return new_value
+    legacy_value = header(message, "Synthesis-Id")
+    if legacy_value:
+        if legacy_value not in _SYNTHESIS_HEADER_WARNED:
+            _SYNTHESIS_HEADER_WARNED.add(legacy_value)
+            import sys as _sys
+            import warnings as _warnings
+            _warnings.warn(
+                "Synthesis-Id request header is deprecated; use "
+                "Contract-Synthesized instead (AGTP-API §9).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            print(
+                "[server] Warning: Synthesis-Id request header is "
+                "deprecated; use Contract-Synthesized instead.",
+                file=_sys.stderr,
+            )
+        return legacy_value
+    return default
+
+
+_IDEMPOTENCY_HEADER_WARNED: set = set()
+
+
+def read_idempotency_key(message, default: str = "") -> str:
+    """Read the idempotency key from an AGTPRequest.
+
+    Per AGTP-API §9, the canonical request-side header is the
+    generic ``Idempotency-Key`` (matching the convention used by
+    other modern protocols for per-(caller, key) replay safety).
+    The RCNS-3 implementation introduced the RCNS-scoped
+    ``RCNS-Idempotency-Key`` name; this helper accepts both,
+    preferring the spec-canonical form.
+
+    Currently consulted only by the RCNS dispatcher gate, but
+    structured here so other components needing per-request
+    idempotency share the same reader.
+    """
+    new_value = header(message, "Idempotency-Key")
+    if new_value:
+        return new_value
+    legacy_value = header(message, "RCNS-Idempotency-Key")
+    if legacy_value:
+        if legacy_value not in _IDEMPOTENCY_HEADER_WARNED:
+            _IDEMPOTENCY_HEADER_WARNED.add(legacy_value)
+            import sys as _sys
+            import warnings as _warnings
+            _warnings.warn(
+                "RCNS-Idempotency-Key request header is deprecated; "
+                "use Idempotency-Key instead (AGTP-API §9).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            print(
+                "[server] Warning: RCNS-Idempotency-Key request "
+                "header is deprecated; use Idempotency-Key instead.",
+                file=_sys.stderr,
+            )
+        return legacy_value
+    return default

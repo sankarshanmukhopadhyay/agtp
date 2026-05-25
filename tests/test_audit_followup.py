@@ -252,6 +252,171 @@ def test_trust_score_round_trips_through_serialization() -> None:
     assert re_loaded.trust_score_computed_at == "2026-05-25T00:00:00Z"
 
 
+# ---------------------------------------------------------------------------
+# Header aliasing — Contract-Synthesized + Idempotency-Key (Batch C).
+# ---------------------------------------------------------------------------
+
+
+def _make_request(headers: dict):
+    from core import wire
+    return wire.AGTPRequest(
+        method="QUERY", path="/",
+        headers=headers, body_bytes=b"{}",
+    )
+
+
+def test_read_synthesis_id_prefers_contract_synthesized() -> None:
+    """Spec-canonical Contract-Synthesized header takes precedence
+    over the legacy Synthesis-Id name."""
+    from core import wire
+    req = _make_request({
+        "Contract-Synthesized": "syn-spec",
+        "Synthesis-Id": "syn-legacy",
+    })
+    assert wire.read_synthesis_id(req) == "syn-spec"
+
+
+def test_read_synthesis_id_falls_back_to_legacy_with_warning() -> None:
+    """Synthesis-Id alone still works but emits a deprecation
+    warning. Mirrors the Target-Agent → Agent-ID precedent."""
+    import warnings as _warnings
+    from core import wire
+    # Reset the one-shot guard so the warning fires for this test.
+    wire._SYNTHESIS_HEADER_WARNED.clear()
+    req = _make_request({"Synthesis-Id": "syn-legacy-only"})
+    with _warnings.catch_warnings(record=True) as captured:
+        _warnings.simplefilter("always")
+        value = wire.read_synthesis_id(req)
+    assert value == "syn-legacy-only"
+    assert any(
+        issubclass(w.category, DeprecationWarning)
+        and "Contract-Synthesized" in str(w.message)
+        for w in captured
+    )
+
+
+def test_read_synthesis_id_warning_is_one_shot_per_value() -> None:
+    """A retry of the same legacy id doesn't spam the log."""
+    import warnings as _warnings
+    from core import wire
+    wire._SYNTHESIS_HEADER_WARNED.clear()
+    req = _make_request({"Synthesis-Id": "syn-x"})
+    with _warnings.catch_warnings(record=True) as captured:
+        _warnings.simplefilter("always")
+        wire.read_synthesis_id(req)
+        wire.read_synthesis_id(req)
+    deprecations = [
+        w for w in captured
+        if issubclass(w.category, DeprecationWarning)
+    ]
+    assert len(deprecations) == 1
+
+
+def test_read_synthesis_id_returns_default_when_neither_set() -> None:
+    from core import wire
+    req = _make_request({})
+    assert wire.read_synthesis_id(req) == ""
+    assert wire.read_synthesis_id(req, default="none") == "none"
+
+
+def test_read_idempotency_key_prefers_canonical_name() -> None:
+    """Spec-canonical Idempotency-Key takes precedence over the
+    RCNS-scoped legacy name."""
+    from core import wire
+    req = _make_request({
+        "Idempotency-Key": "key-spec",
+        "RCNS-Idempotency-Key": "key-legacy",
+    })
+    assert wire.read_idempotency_key(req) == "key-spec"
+
+
+def test_read_idempotency_key_falls_back_to_legacy_with_warning() -> None:
+    import warnings as _warnings
+    from core import wire
+    wire._IDEMPOTENCY_HEADER_WARNED.clear()
+    req = _make_request({"RCNS-Idempotency-Key": "key-legacy-only"})
+    with _warnings.catch_warnings(record=True) as captured:
+        _warnings.simplefilter("always")
+        value = wire.read_idempotency_key(req)
+    assert value == "key-legacy-only"
+    assert any(
+        issubclass(w.category, DeprecationWarning)
+        and "Idempotency-Key" in str(w.message)
+        for w in captured
+    )
+
+
+def test_rcns_gate_reads_canonical_idempotency_key_header() -> None:
+    """End-to-end: the RCNS gate's idempotency cache works when the
+    caller sends the spec-canonical Idempotency-Key header."""
+    from unittest.mock import MagicMock
+    from core import wire
+    from core.identity import AgentDocument, RequiresDeclaration
+    from server.config import (
+        AuditConfig, RcnsConfig, ServerConfig, ServerInfo,
+        ServerPolicy, SigningConfig, SynthesisConfig,
+    )
+    from server.rcns_gate import reset_state_for_tests, try_rcns
+    from server.synthesis.runtime import SynthesisRuntime
+
+    reset_state_for_tests()
+    cfg = ServerConfig(
+        server=ServerInfo(server_id="t.local", operator="o", contact="c"),
+        policy=ServerPolicy(synthesis_enabled=True),
+        synthesis=SynthesisConfig(),
+        rcns=RcnsConfig(
+            enabled=True, min_trust_tier=3,
+            max_negotiations_per_minute=100,
+        ),
+        audit=AuditConfig(),
+        signing=SigningConfig(),
+    )
+    runtime = SynthesisRuntime()
+    state = MagicMock()
+    state.config = cfg
+    state.synthesis_runtime = runtime
+    state.endpoint_registry = None
+    doc = AgentDocument(
+        agtp_version="1.0", agent_id="a" * 64, name="x",
+        principal="p", principal_id="pid", description="",
+        status="active", skills=[],
+        requires=RequiresDeclaration(
+            methods=["QUERY"], scopes=["rcns:negotiate"],
+        ),
+        scopes_accepted=[], issued_at="now", issuer="self",
+        trust_tier=1,
+    )
+    body = b"{}"
+    base_headers = {
+        "Agent-ID": "a" * 64,
+        "Content-Length": str(len(body)),
+        "Allow-RCNS": "true",
+    }
+
+    # First request with spec-canonical Idempotency-Key.
+    req1 = wire.AGTPRequest(
+        method="QUERY", path="/things",
+        headers={**base_headers, "Idempotency-Key": "key-canonical"},
+        body_bytes=body,
+    )
+    r1 = try_rcns(req1, state, doc, method="QUERY", path="/things")
+
+    # Second request with the LEGACY name, same key value.
+    req2 = wire.AGTPRequest(
+        method="QUERY", path="/things",
+        headers={**base_headers, "RCNS-Idempotency-Key": "key-canonical"},
+        body_bytes=body,
+    )
+    r2 = try_rcns(req2, state, doc, method="QUERY", path="/things")
+
+    # Both should resolve to the same synthesis_id — proving both
+    # header names hit the same cache entry.
+    import json as _json
+    sid1 = _json.loads(r1.body_bytes)["proposed_synthesis_id"]
+    sid2 = _json.loads(r2.body_bytes)["proposed_synthesis_id"]
+    assert sid1 == sid2
+
+
 def test_trust_score_field_order_in_serialization() -> None:
     """trust_score sits between trust_warning and owner_id in the
     canonical key order so agent.json files stay byte-stable."""

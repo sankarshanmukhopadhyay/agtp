@@ -164,13 +164,22 @@ def _make_handler(server_state: Any, pinned_agent_id: str) -> type:
                 "Content-Length": str(length),
             }
             # Translate a handful of common HTTP headers to their
-            # AGTP equivalents.
+            # AGTP equivalents. Headers prefixed by REST clients
+            # with X- pass through to their canonical AGTP names;
+            # legacy header names (Synthesis-Id, RCNS-Idempotency-Key)
+            # are accepted for back-compat but the spec-aligned
+            # names (Contract-Synthesized, Idempotency-Key) take
+            # precedence.
             forwards = {
                 "x-request-id": "Request-ID",
                 "x-task-id": "Task-ID",
                 "x-session-id": "Session-ID",
-                "x-synthesis-id": "Synthesis-Id",
-                "rcns-idempotency-key": "RCNS-Idempotency-Key",
+                "x-contract-synthesized": "Contract-Synthesized",
+                "contract-synthesized": "Contract-Synthesized",
+                "x-synthesis-id": "Synthesis-Id",  # legacy alias
+                "x-idempotency-key": "Idempotency-Key",
+                "idempotency-key": "Idempotency-Key",
+                "rcns-idempotency-key": "RCNS-Idempotency-Key",  # legacy alias
                 "content-type": "Content-Type",
             }
             for hk, ak in forwards.items():

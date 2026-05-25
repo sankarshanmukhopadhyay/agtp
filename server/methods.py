@@ -3819,7 +3819,7 @@ def _dispatch_inner(
     # works — the original PROPOSE was the authorization. Inner
     # steps still go through dispatch() and fire capability /
     # scope checks.
-    syn_id = wire.header(request, "Synthesis-Id")
+    syn_id = wire.read_synthesis_id(request)
     if syn_id:
         runtime = getattr(server_state, "synthesis_runtime", None)
         if runtime is not None and runtime.get(syn_id) is not None:
