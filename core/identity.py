@@ -91,6 +91,8 @@ FIELD_ORDER = [
     "trust_tier",
     "verification_path",
     "trust_warning",
+    "trust_score",
+    "trust_score_computed_at",
     "owner_id",
     "issued_at",
     "issuer",
@@ -183,6 +185,20 @@ class AgentDocument:
     trust_tier: int = DEFAULT_TRUST_TIER
     verification_path: str = DEFAULT_VERIFICATION_PATH
     trust_warning: str = ""
+    # AGTP-TRUST §trust-score: behavioral trust score in [0.0, 1.0]
+    # with at least 2 decimal precision. Distinct from trust_tier
+    # (which is the binary-ish identity-verification posture);
+    # trust_score is a continuous behavioral metric optionally
+    # computed by governance platforms over time. Optional;
+    # implementations that compute it MUST also populate
+    # trust_score_computed_at. v00 daemon ships the slot for
+    # spec conformance but does not compute scores itself.
+    trust_score: Optional[float] = None
+    # ISO 8601 UTC timestamp (Z-suffixed) when trust_score was
+    # computed. MUST be present when trust_score is present;
+    # otherwise the score is meaningless to relying parties that
+    # enforce freshness.
+    trust_score_computed_at: str = ""
     # Phase 4 cross-reference: when the agent has a Genesis, this is
     # its owner_id (the legal entity that registered the agent).
     # Surfaced on responses as the Owner-ID header by the daemon.
@@ -231,6 +247,20 @@ class AgentDocument:
         # the wire shape always satisfies the spec.
         if self.trust_tier == 2 and not self.trust_warning:
             self.trust_warning = TIER_2_TRUST_WARNING
+        # AGTP-TRUST §trust-score: range [0.0, 1.0]; out-of-range
+        # MUST be rejected. trust_score_computed_at MUST accompany
+        # any populated score.
+        if self.trust_score is not None:
+            if not (0.0 <= self.trust_score <= 1.0):
+                raise ValueError(
+                    f"trust_score must be in [0.0, 1.0]; "
+                    f"got {self.trust_score!r}"
+                )
+            if not self.trust_score_computed_at:
+                raise ValueError(
+                    "trust_score is set but trust_score_computed_at "
+                    "is empty; both fields are required together"
+                )
 
     @property
     def is_migrated(self) -> bool:
@@ -284,11 +314,15 @@ class AgentDocument:
             # Elide empty-string optional fields.
             if key in (
                 "trust_warning",
+                "trust_score_computed_at",
                 "owner_id",
                 "manifest_issuer",
                 "manifest_issuer_public_key",
                 "manifest_signature",
             ) and not value:
+                continue
+            # Elide trust_score when not set (None).
+            if key == "trust_score" and value is None:
                 continue
             # Elide default role to keep agent.json files clean —
             # only merchant role is interesting at the document level.
@@ -540,6 +574,14 @@ def from_dict(data: Dict[str, Any]) -> AgentDocument:
             data.get("verification_path", DEFAULT_VERIFICATION_PATH)
         ),
         trust_warning=str(data.get("trust_warning") or ""),
+        trust_score=(
+            float(data["trust_score"])
+            if data.get("trust_score") is not None
+            else None
+        ),
+        trust_score_computed_at=str(
+            data.get("trust_score_computed_at") or ""
+        ),
         owner_id=str(data.get("owner_id") or ""),
         role=str(data.get("role") or DEFAULT_ROLE),
         manifest_issuer=str(data.get("manifest_issuer") or ""),

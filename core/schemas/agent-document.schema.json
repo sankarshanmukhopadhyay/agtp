@@ -119,6 +119,16 @@
       "type": "string",
       "description": "Per §6.2, Tier 2 Agent Documents MUST carry a trust_warning. The daemon auto-populates 'verification-incomplete' for Tier 2 documents that don't set it; clients display it as a trust indicator. Omitted (or empty) when not applicable. (Added v1.2.0.)"
     },
+    "trust_score": {
+      "type": ["number", "null"],
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "AGTP-TRUST §trust-score: behavioral trust score in [0.0, 1.0] with at least 2 decimal precision. Distinct from trust_tier (identity-verification posture); trust_score is a continuous behavioral metric optionally computed by governance platforms over time. Out-of-range values MUST be rejected. When populated, trust_score_computed_at MUST also be set. (Added v1.4.0.)"
+    },
+    "trust_score_computed_at": {
+      "type": "string",
+      "description": "ISO 8601 UTC timestamp (Z-suffixed) of when trust_score was computed. MUST be present when trust_score is populated; freshness thresholds per AGTP-TRUST §freshness govern relying-party acceptance. (Added v1.4.0.)"
+    },
     "owner_id": {
       "type": "string",
       "description": "Legal owner — the entity that registered this agent. Mirrors the Agent Genesis's owner_id when one is loaded. Surfaced on responses as the Owner-ID header. Empty when no Genesis backs this agent. (Added v1.2.0.)"
