@@ -417,6 +417,191 @@ def test_rcns_gate_reads_canonical_idempotency_key_header() -> None:
     assert sid1 == sid2
 
 
+# ---------------------------------------------------------------------------
+# AGTP-CERT operational MUSTs (Batch D).
+# ---------------------------------------------------------------------------
+
+
+def _verified_cert_with_extensions(
+    agent_id: str = "a" * 64,
+    principal_id: str = "chris@nomotic.inc",
+):
+    """Mock VerifiedCert with an AgentCertExtensions block populated."""
+    from datetime import datetime, timezone
+    from server.agent_cert_ext import AgentCertExtensions
+    from server.mtls import VerifiedCert
+    ext = AgentCertExtensions(
+        subject_agent_id=agent_id,
+        principal_id=principal_id,
+    )
+    now = datetime.now(tz=timezone.utc)
+    return VerifiedCert(
+        agent_id=agent_id,
+        fingerprint="f" * 64,
+        not_before=now, not_after=now,
+        subject_common_name="lauren",
+        extensions=ext,
+    )
+
+
+def test_cross_check_principal_id_passes_when_matching() -> None:
+    from server.mtls import CertVerifier
+    v = _verified_cert_with_extensions(principal_id="chris@nomotic.inc")
+    # No raise = pass.
+    CertVerifier.cross_check_principal_id_header(v, "chris@nomotic.inc")
+
+
+def test_cross_check_principal_id_refuses_when_mismatched() -> None:
+    from server.mtls import CertVerificationError, CertVerifier
+    v = _verified_cert_with_extensions(principal_id="chris@nomotic.inc")
+    with pytest.raises(CertVerificationError) as exc_info:
+        CertVerifier.cross_check_principal_id_header(v, "imposter@evil.example")
+    assert exc_info.value.detail == "principal-id-mismatch"
+
+
+def test_cross_check_principal_id_is_noop_when_header_absent() -> None:
+    """Caller didn't claim a Principal-ID; the daemon takes the
+    cert-supplied value as authoritative without raising."""
+    from server.mtls import CertVerifier
+    v = _verified_cert_with_extensions(principal_id="chris@nomotic.inc")
+    CertVerifier.cross_check_principal_id_header(v, "")
+
+
+def test_cross_check_principal_id_is_noop_when_extension_absent() -> None:
+    """Cert without a principal-id extension can't be cross-checked;
+    the header takes precedence (with no contradicting source)."""
+    from datetime import datetime, timezone
+    from server.agent_cert_ext import AgentCertExtensions
+    from server.mtls import CertVerifier, VerifiedCert
+    now = datetime.now(tz=timezone.utc)
+    v = VerifiedCert(
+        agent_id="a" * 64, fingerprint="f" * 64,
+        not_before=now, not_after=now,
+        subject_common_name="lauren",
+        extensions=AgentCertExtensions(),
+    )
+    CertVerifier.cross_check_principal_id_header(v, "chris@nomotic.inc")
+
+
+def test_cert_session_registry_basic_register_and_lookup() -> None:
+    from server.cert_sessions import CertSessionRegistry
+    reg = CertSessionRegistry()
+    reg.register(
+        cert_serial="12345", session_id="sess-1",
+        subject_agent_id="a" * 64,
+    )
+    reg.register(
+        cert_serial="12345", session_id="sess-2",
+        subject_agent_id="a" * 64,
+    )
+    reg.register(
+        cert_serial="67890", session_id="sess-3",
+        subject_agent_id="b" * 64,
+    )
+    assert reg.sessions_for_serial("12345") == ["sess-1", "sess-2"]
+    assert reg.sessions_for_serial("67890") == ["sess-3"]
+    assert reg.sessions_for_agent("a" * 64) == ["sess-1", "sess-2"]
+
+
+def test_cert_session_registry_revoke_serial() -> None:
+    from server.cert_sessions import CertSessionRegistry
+    reg = CertSessionRegistry()
+    reg.register(
+        cert_serial="12345", session_id="sess-1",
+        subject_agent_id="a" * 64,
+    )
+    terminated = reg.revoke_serial("12345")
+    assert terminated == ["sess-1"]
+    assert reg.sessions_for_serial("12345") == []
+
+
+def test_cert_session_registry_revoke_agent_sweeps_rotated_certs() -> None:
+    """Cert rotation produces multiple serials authorizing the same
+    agent. Agent-wide revocation sweeps them all."""
+    from server.cert_sessions import CertSessionRegistry
+    reg = CertSessionRegistry()
+    reg.register(
+        cert_serial="111", session_id="sess-a",
+        subject_agent_id="a" * 64,
+    )
+    reg.register(
+        cert_serial="222", session_id="sess-b",
+        subject_agent_id="a" * 64,
+    )
+    reg.register(
+        cert_serial="333", session_id="sess-c",
+        subject_agent_id="b" * 64,
+    )
+    terminated = reg.revoke_agent("a" * 64)
+    assert set(terminated) == {"sess-a", "sess-b"}
+    # b * 64's session is untouched.
+    assert reg.sessions_for_serial("333") == ["sess-c"]
+
+
+def test_revocation_notify_envelope_shape() -> None:
+    """The envelope matches AGTP-CERT §6.2 byte-for-byte so any
+    emitter produces the same wire shape."""
+    from server.cert_sessions import build_revocation_notify_envelope
+    env = build_revocation_notify_envelope(
+        subject_agent_id="a" * 64,
+        cert_serial="12345",
+        reason="key-compromise",
+        revoked_at="2026-05-25T00:00:00Z",
+        issuer="ca.example",
+    )
+    assert env["event_type"] == "certificate_revoked"
+    assert env["recipient"] == "infrastructure:broadcast"
+    assert env["urgency"] == "critical"
+    assert env["payload"]["subject_agent_id"] == "a" * 64
+    assert env["payload"]["cert_serial"] == "12345"
+    assert env["payload"]["reason"] == "key-compromise"
+
+
+def test_apply_revocation_notify_terminates_sessions() -> None:
+    """End-to-end: receive a revocation envelope, sweep the
+    registry, return a structured summary."""
+    from server.cert_sessions import (
+        CertSessionRegistry,
+        apply_revocation_notify,
+        build_revocation_notify_envelope,
+    )
+    reg = CertSessionRegistry()
+    reg.register(
+        cert_serial="12345", session_id="sess-x",
+        subject_agent_id="a" * 64,
+    )
+    reg.register(
+        cert_serial="12345", session_id="sess-y",
+        subject_agent_id="a" * 64,
+    )
+    envelope = build_revocation_notify_envelope(
+        subject_agent_id="a" * 64, cert_serial="12345",
+    )
+    summary = apply_revocation_notify(envelope, reg)
+    assert set(summary["terminated_sessions"]) == {"sess-x", "sess-y"}
+    assert summary["serials_swept"] == ["12345"]
+    # Registry is empty afterwards.
+    assert len(reg) == 0
+
+
+def test_apply_revocation_notify_ignores_non_certificate_revoked() -> None:
+    """Wrong event_type → no-op, returns empty summary."""
+    from server.cert_sessions import (
+        CertSessionRegistry, apply_revocation_notify,
+    )
+    reg = CertSessionRegistry()
+    reg.register(
+        cert_serial="12345", session_id="sess-x",
+        subject_agent_id="a" * 64,
+    )
+    summary = apply_revocation_notify(
+        {"event_type": "agent_lifecycle_revoked", "payload": {}},
+        reg,
+    )
+    assert summary["terminated_sessions"] == []
+    assert len(reg) == 1  # untouched
+
+
 def test_trust_score_field_order_in_serialization() -> None:
     """trust_score sits between trust_warning and owner_id in the
     canonical key order so agent.json files stay byte-stable."""

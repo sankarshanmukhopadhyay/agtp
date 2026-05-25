@@ -77,6 +77,9 @@ class CertVerificationError(MtlsError):
       * ``not-ed25519``        the cert's public key isn't Ed25519
       * ``expired``            current time is outside not_before/not_after
       * ``agent-id-mismatch``  header Agent-ID doesn't match cert-derived
+      * ``principal-id-mismatch``  header Principal-ID doesn't match the
+                                   cert's principal-id extension
+                                   (AGTP-CERT §5.1)
       * ``chain-untrusted``    chain doesn't validate against the CA bundle
       * ``malformed-extension``  one of the AGTP-specific X.509 v3
                                  extensions (draft-hood-agtp-agent-cert)
@@ -277,6 +280,42 @@ class CertVerifier:
                 f"cert-derived identity {verified.agent_id!r}; the "
                 f"agent presented a cert for a different identity",
                 detail="agent-id-mismatch",
+            )
+
+    @staticmethod
+    def cross_check_principal_id_header(
+        verified: VerifiedCert, header_principal_id: str,
+    ) -> None:
+        """Refuse when an inbound ``Principal-ID`` header disagrees with
+        the cert's ``principal-id`` extension value.
+
+        AGTP-CERT §5.1 step 2: on the first request after TLS
+        establishment, the server MUST verify that the
+        ``principal-id`` extension carried on the verified cert
+        matches whatever the request advertises as ``Principal-ID``.
+        Mismatch MUST be refused with 401 to prevent an agent
+        signing in for one principal and asserting another in the
+        application layer.
+
+        Called by the dispatcher after :meth:`cross_check_agent_id_header`.
+        When either the header or the cert extension is empty this
+        is a no-op — the daemon accepts the populated side as
+        authoritative (the cert-supplied principal-id is the more
+        trustworthy of the two when both are present anyway).
+        """
+        if not header_principal_id:
+            return
+        cert_principal_id = ""
+        if verified.extensions is not None:
+            cert_principal_id = verified.extensions.principal_id or ""
+        if not cert_principal_id:
+            return
+        if header_principal_id.strip() != cert_principal_id.strip():
+            raise CertVerificationError(
+                f"Principal-ID header {header_principal_id!r} does not "
+                f"match the cert's principal-id extension "
+                f"{cert_principal_id!r}; refuse per AGTP-CERT §5.1",
+                detail="principal-id-mismatch",
             )
 
     # ----- Internals -----

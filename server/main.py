@@ -991,6 +991,28 @@ def handle_connection(
                         _finalize_response(response, request, config)
                         conn.sendall(response.serialize())
                         return
+                # AGTP-CERT §5.1 step 2: principal-id cross-check.
+                # When the cert carries a principal-id extension AND
+                # the request claims a Principal-ID header, the two
+                # MUST agree. Mismatch is 401 — an agent cannot
+                # present a cert for one principal and advertise
+                # another to the application layer.
+                principal_header = wire.header(request, "Principal-ID")
+                if principal_header:
+                    try:
+                        cert_verifier.cross_check_principal_id_header(
+                            request.verified_cert, principal_header,
+                        )
+                    except CertVerificationError as exc:
+                        response = error_response(
+                            401, "Unauthorized",
+                            "principal-id-mismatch",
+                            str(exc),
+                            extra={"detail": exc.detail},
+                        )
+                        _finalize_response(response, request, config)
+                        conn.sendall(response.serialize())
+                        return
                 if not target_header:
                     target_header = request.verified_cert.agent_id
                     request.headers["Agent-ID"] = request.verified_cert.agent_id
