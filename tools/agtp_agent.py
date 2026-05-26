@@ -101,6 +101,78 @@ def _split_csv(value: Optional[str]) -> List[str]:
     return [s.strip() for s in value.split(",") if s.strip()]
 
 
+def _build_policies(args: argparse.Namespace) -> Dict[str, Any]:
+    """Translate ``--oauth-*`` CLI flags into the AgentDocument's
+    ``policies`` dict.
+
+    Returns ``{}`` when no OAuth flags are set so the resulting
+    document elides the ``policies`` key entirely (Pattern 1
+    documents emit no OAuth machinery on the wire). When
+    ``--oauth-validator`` is set, builds the canonical
+    ``policies.oauth`` block consumed by
+    :func:`server.methods._resolve_oauth_config`.
+    """
+    validator = getattr(args, "oauth_validator", None)
+    if not validator:
+        return {}
+    oauth_block: Dict[str, Any] = {
+        "enabled": True,
+        "validator": str(validator).strip(),
+    }
+    required = _split_csv(getattr(args, "oauth_required_on", ""))
+    if required:
+        oauth_block["required_on_methods"] = [
+            m.upper() for m in required
+        ]
+    claim = (getattr(args, "oauth_principal_id_claim", "") or "").strip()
+    if claim:
+        oauth_block["principal_id_claim"] = claim
+    raw_cfg = getattr(args, "oauth_config", None)
+    if raw_cfg:
+        try:
+            parsed = json.loads(raw_cfg)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"--oauth-config is not valid JSON: {exc}"
+            )
+        if not isinstance(parsed, dict):
+            raise SystemExit(
+                f"--oauth-config must be a JSON object (got {type(parsed).__name__})"
+            )
+        oauth_block["validator_config"] = parsed
+    return {"oauth": oauth_block}
+
+
+def _install_trust_anchor(
+    src_path: str, agents_dir: Path, *, force: bool,
+) -> Optional[Path]:
+    """Copy a Pattern-3 trust-anchors file into the agents dir.
+
+    Returns the destination path (or ``None`` when the source is
+    not configured). The daemon's startup scan looks for
+    ``trust-anchors.json`` in the agents dir; that name is
+    intentionally hardcoded so the operator never has to wire
+    config + file paths in two places.
+    """
+    if not src_path:
+        return None
+    src = Path(src_path).expanduser().resolve()
+    if not src.exists():
+        raise SystemExit(f"trust-anchor file not found: {src}")
+    # Parse to fail-fast on malformed JSON. The daemon's loader
+    # tolerates this, but the operator running `register` deserves
+    # an immediate error rather than silent ignore at boot.
+    try:
+        json.loads(src.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"trust-anchor file is not valid JSON: {src} ({exc})"
+        )
+    dst = agents_dir / "trust-anchors.json"
+    _write_text(dst, src.read_text(encoding="utf-8"), force=force)
+    return dst
+
+
 # ---------------------------------------------------------------------------
 # `new` — keypair + Genesis.
 # ---------------------------------------------------------------------------
@@ -325,6 +397,7 @@ def _cmd_install(args: argparse.Namespace) -> int:
         verification_path=genesis.verification_path,
         owner_id=genesis.owner_id,
         role=args.role,
+        policies=_build_policies(args),
     )
 
     # Write all three artifacts.
@@ -341,6 +414,14 @@ def _cmd_install(args: argparse.Namespace) -> int:
     print(f"agent document: {doc_path}")
     print(f"genesis:        {genesis_target}")
     print(f"agent_id:       {doc.agent_id}")
+
+    anchor_target = _install_trust_anchor(
+        getattr(args, "trust_anchor", "") or "",
+        agents_dir,
+        force=args.force,
+    )
+    if anchor_target is not None:
+        print(f"trust anchors:  {anchor_target}")
 
     if args.cert:
         cert_path = Path(args.cert).expanduser().resolve()
@@ -446,6 +527,15 @@ def _cmd_register(args: argparse.Namespace) -> int:
             wildcards=args.wildcards,
             cert=str(cert_path) if cert_path else "",
             cert_key=str(cert_key_path) if cert_key_path else "",
+            # OAuth composition flags pass through unchanged.
+            oauth_validator=getattr(args, "oauth_validator", None),
+            oauth_required_on=getattr(args, "oauth_required_on", ""),
+            oauth_principal_id_claim=getattr(
+                args, "oauth_principal_id_claim", "",
+            ),
+            oauth_config=getattr(args, "oauth_config", None),
+            # Trust anchor (Pattern 3) passes through unchanged.
+            trust_anchor=getattr(args, "trust_anchor", "") or "",
             force=args.force,
         )
         _cmd_install(install_args)
@@ -561,6 +651,38 @@ def _add_document_flags(p: argparse.ArgumentParser) -> None:
         help="Human-readable principal label (defaults to "
              "principal_id from the Genesis).",
     )
+    # OAuth composition (Pattern 2). When supplied, the generated
+    # AgentDocument carries a policies.oauth block that overrides
+    # the server-wide [policies.oauth] config for this agent.
+    p.add_argument(
+        "--oauth-validator",
+        help="OAuth validator name (e.g. 'noop', 'jwt'). Sets "
+             "policies.oauth.enabled=true on the AgentDocument and "
+             "pins the validator. Without this flag, the agent "
+             "inherits whatever the server's [policies.oauth] block "
+             "says (default: no OAuth — Pattern 1).",
+    )
+    p.add_argument(
+        "--oauth-required-on", default="",
+        help="Comma-separated AGTP methods that REQUIRE a valid "
+             "OAuth bearer token (e.g. 'PURCHASE,WRITE'). Methods "
+             "outside this list still validate any token presented, "
+             "but missing tokens are tolerated. Ignored unless "
+             "--oauth-validator is also set.",
+    )
+    p.add_argument(
+        "--oauth-principal-id-claim", default="",
+        help="Token claim lifted onto request.acting_principal_id "
+             "after successful validation. Defaults to 'sub'. "
+             "Ignored unless --oauth-validator is also set.",
+    )
+    p.add_argument(
+        "--oauth-config",
+        help="JSON object passed verbatim into the validator's "
+             "config (e.g. '{\"public_key\": \"-----BEGIN ...\"}' "
+             "for JWTValidator). Ignored unless --oauth-validator "
+             "is also set.",
+    )
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -650,6 +772,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--cert-key", help="Path to the cert's private key.",
     )
     p_install.add_argument(
+        "--trust-anchor",
+        help="Path to a JSON trust-anchors file (Pattern 3 — "
+             "Genesis-issuer federation). Copied into the agents "
+             "directory as trust-anchors.json for the daemon to "
+             "load on boot. Existing file is overwritten only when "
+             "--force is set.",
+    )
+    p_install.add_argument(
         "--force", action="store_true",
         help="Overwrite existing AgentDocument / Genesis / cert "
              "files in the agents directory.",
@@ -678,6 +808,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_reg.add_argument(
         "--cert-valid-days", type=int,
         help="Cert validity in days when --with-cert is set.",
+    )
+    p_reg.add_argument(
+        "--trust-anchor",
+        help="Path to a JSON trust-anchors file (Pattern 3 — "
+             "Genesis-issuer federation). Copied into the agents "
+             "directory as trust-anchors.json.",
     )
     p_reg.add_argument(
         "--force", action="store_true",

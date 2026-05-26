@@ -286,6 +286,31 @@ property of the agent's identity.
 Owner-ID: nomotic.inc
 ```
 
+### Authorization (OAuth bearer — optional, Pattern 2)
+
+When the deployment composes AGTP with OAuth (Pattern 2 in the
+OAuth-composition story), the principal the agent is acting for
+at this moment is identified by an OAuth bearer token in the
+standard `Authorization` header (RFC 7235 §2.1):
+
+```
+Authorization: Bearer eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJjaHJpcy4uLn0.SGVsbG8...
+```
+
+The header is opt-in and never required by AGTP itself —
+Pattern 1 deployments (the unconditional baseline) emit no
+Authorization header and the daemon never asks for one. When the
+operator's `[policies.oauth]` block (or an agent's
+`policies.oauth` override) requires a token on a given method,
+the daemon validates via a pluggable validator and lifts one
+configured claim onto the request's `acting_principal_id` for
+downstream handlers and the Attribution-Record. The token itself
+never appears in the Attribution-Record.
+
+See [`oauth-composition.md`](oauth-composition.md) for the full
+story (Patterns 1 / 2 / 3, server config, CLI flags, failure
+vocabulary).
+
 ## Headers that are NOT part of §10
 
 Pre-§10 drafts mentioned several headers that the §10 model
