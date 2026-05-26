@@ -132,33 +132,52 @@ to prevent collisions.
 
 ## End-to-end flow
 
+The realistic operator path uses the unified
+[`agtp-agent`](../agtp_agent.py) CLI rather than calling the
+three lower-level tools by hand. One command produces every file
+the daemon's `agents/` directory needs:
+
+```bash
+python -m tools.agtp_agent register \
+    --name lauren \
+    --owner nomotic.inc \
+    --principal chris@nomotic.ai \
+    --registrar https://registrar.example.com/issue \
+    --agents-dir /var/agtp/agents \
+    --methods "DISCOVER,DESCRIBE,QUERY,BOOK" \
+    --scopes "bookings:write" \
+    --skills "scheduling" \
+    --description "Reception scheduling agent"
 ```
-1.  Agent operator runs:
-        python -m tools.agtp_genesis create --name lauren \
-            --owner nomotic.inc --out lauren.genesis.json
 
-    or POSTs to the registrar's /issue endpoint, then saves the
-    returned Genesis as lauren.genesis.json.
+That command:
 
-2.  Agent operator generates an Agent Cert bound to that Genesis:
-        python -m tools.generate_agent_cert agents/lauren \
-            --genesis lauren.genesis.json \
-            --principal-id chris@nomotic.ai \
-            --authority-scope bookings:write
+1. Mints the agent's Ed25519 keypair locally.
+2. POSTs the public key to the registrar (HTTPS), receives the
+   signed Genesis back.
+3. Generates the AgentDocument from the Genesis (cryptographic
+   identity) + flags (mutable capability declarations).
+4. Drops `lauren.genesis.json`, `lauren.agent.json`, `lauren.key`,
+   `lauren.pub` into `/var/agtp/agents/`.
+5. Daemon picks them up on next boot (or hot-reload, if wired).
 
-3.  Agent operator drops lauren.agent.json and lauren.genesis.json
-    next to each other in agtpd's agents/ directory. Daemon picks
-    them up at boot.
+Pass `--with-cert` to also generate an X.509 Agent Cert bound to
+the Genesis for mTLS deployments.
 
-4.  Inbound request arrives over mTLS with the cert from step 2.
-    CertVerifier extracts subject-agent-id = sha256(Genesis).
-    Daemon serves Genesis at DISCOVER /genesis on request.
+Then at request time:
 
-5.  Inspector / governance tool fetches DISCOVER /genesis, verifies
-        verify_cert_genesis_binding(genesis=fetched,
-                                    subject_agent_id=cert.subject_agent_id)
-    which checks (a) sha256(Genesis) == subject-agent-id, and
-    (b) Genesis signature verifies against issuer_public_key.
-    Trust-anchor decisions (is this registrar trusted?) are
-    layered on top.
-```
+- Inbound request arrives over mTLS with the cert from step (5).
+  `CertVerifier` extracts `subject-agent-id = sha256(Genesis)`.
+- Daemon serves Genesis at `DISCOVER /genesis` on request.
+- Inspector / governance tool fetches `DISCOVER /genesis` and
+  calls `verify_cert_genesis_binding(genesis=fetched,
+  subject_agent_id=cert.subject_agent_id)` to check
+  `sha256(Genesis) == subject-agent-id` and the Genesis
+  signature against the registrar's `issuer_public_key`. Trust-
+  anchor decisions (is this registrar trusted?) layer on top.
+
+The lower-level CLIs (`tools.agtp_genesis`, `tools.registrar
+issue`, `tools.generate_agent_cert`) stay as escape hatches for
+operators who want one piece at a time — useful when the agent
+key lives on a HSM and the keypair-minting step must happen
+elsewhere.
