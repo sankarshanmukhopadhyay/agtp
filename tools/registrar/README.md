@@ -3,22 +3,49 @@
 Reference AGTP registrar — the "GoDaddy" of Agent Genesis issuance.
 
 `tools.registrar` is **not part of `agtpd`**. It's a separate
-service (default port 4481) that issues signed Agent Genesis
-documents on demand. Agents present their Genesis through the
-daemon's `DISCOVER /genesis` endpoint and through the
-`subject-agent-id` X.509 extension on their Agent Cert. The
-registrar's role is parallel to a domain registrar issuing a
-certificate; once issued, the Genesis is the source of truth and
-the registrar can go offline without breaking active agents.
+HTTPS service that issues signed Agent Genesis documents on
+demand. Agents present their Genesis through the daemon's
+`DISCOVER /genesis` endpoint and through the `subject-agent-id`
+X.509 extension on their Agent Cert. The registrar's role is
+parallel to a domain registrar issuing a certificate; once issued,
+the Genesis is the source of truth and the registrar can go
+offline without breaking active agents.
+
+**Port note.** The registrar runs on **HTTPS, not AGTP**. Port
+4480 is IANA-registered for AGTP and is reserved for the daemon's
+wire protocol — running anything else there violates the
+registration. The registrar is operator tooling that happens to
+issue identity documents AGTP consumes; it lives on 443 (or
+behind a reverse proxy doing TLS termination on a high-numbered
+plaintext port).
 
 ## Running it
 
+The realistic production posture is the registrar behind a
+real TLS-terminating reverse proxy (nginx, Caddy, Apache,
+Cloudflare). The daemon binds plaintext on a high-numbered port
+and the proxy handles certificates:
+
 ```bash
-python -m tools.registrar serve --port 4481 --data-dir ~/.agtp/registrar
+# Behind nginx — daemon binds plaintext on a non-privileged port
+python -m tools.registrar serve --port 8443 --data-dir ~/.agtp/registrar
 ```
 
+For direct HTTPS without a fronting proxy:
+
+```bash
+sudo python -m tools.registrar serve \
+    --port 443 \
+    --tls-cert /etc/letsencrypt/live/registrar.example.com/fullchain.pem \
+    --tls-key  /etc/letsencrypt/live/registrar.example.com/privkey.pem \
+    --data-dir /var/lib/agtp/registrar
+```
+
+(`sudo` because 443 is privileged. Most operators front the
+service with a reverse proxy and skip the sudo.)
+
 The first run generates an Ed25519 issuer keypair at
-`~/.agtp/registrar/registrar.key` / `.pub`. Every issued Genesis
+`{data-dir}/registrar.key` / `.pub`. Every issued Genesis
 references this key as its `issuer_public_key`. **Don't rotate the
 key without reissuing all outstanding Geneses** — old Geneses will
 stop verifying.

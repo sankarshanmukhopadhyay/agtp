@@ -347,15 +347,54 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
 
-def serve(store: RegistrarStore, *, port: int = 4481, bind: str = "0.0.0.0") -> None:
-    """Run the reference registrar HTTP server. Blocks until
-    interrupted."""
+def serve(
+    store: RegistrarStore,
+    *,
+    port: int = 443,
+    bind: str = "0.0.0.0",
+    tls_cert: str = "",
+    tls_key: str = "",
+) -> None:
+    """Run the reference registrar HTTP(S) server. Blocks until
+    interrupted.
+
+    The registrar is an HTTPS operator-tooling service, not AGTP —
+    port 4480 is reserved for AGTP and MUST NOT be re-used. The
+    canonical deployment posture is HTTPS on 443 (or behind a
+    real TLS-terminating reverse proxy that forwards to a local
+    plaintext listener).
+
+    Pass both ``tls_cert`` and ``tls_key`` to bind the listener
+    with TLS directly. Omit both to bind plaintext — fine for
+    development and for production deployments that front the
+    registrar with nginx/Apache/Caddy doing TLS termination.
+
+    Operators who can't bind 443 (typical on non-root user
+    accounts) either run behind a reverse proxy or pass a
+    non-privileged ``--port`` (e.g. 8443). Either way, the wire
+    is HTTP/HTTPS, not AGTP.
+    """
     handler_cls = type(
         "BoundHandler",
         (_Handler,),
         {"store": store},
     )
     server = ThreadingHTTPServer((bind, port), handler_cls)
+    if tls_cert and tls_key:
+        import ssl as _ssl
+        ctx = _ssl.create_default_context(_ssl.Purpose.CLIENT_AUTH)
+        ctx.load_cert_chain(certfile=tls_cert, keyfile=tls_key)
+        # TLS 1.2+ for the registrar's HTTPS surface; the AGTP
+        # daemon requires TLS 1.3 but the registrar is a vanilla
+        # HTTPS service and most operator browsers / CLIs support
+        # 1.2 fine.
+        ctx.minimum_version = _ssl.TLSVersion.TLSv1_2
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    elif tls_cert or tls_key:
+        raise ValueError(
+            "registrar TLS requires both --tls-cert and --tls-key, "
+            "or neither (for a plaintext listener behind a reverse proxy)"
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -103,8 +103,10 @@ attribution_records_enabled  = false
 # Two transport forms:
 #   socket = "/var/run/agtpd/gateway.sock"   # Unix domain socket
 #   socket = "127.0.0.1:4485"                # TCP loopback
-#                                            # (4481 = registrar,
-#                                            #  4482 = chain inspector)
+#                                            # (4482 = chain inspector;
+#                                            #  registrar is HTTPS/443,
+#                                            #  not in the AGTP port
+#                                            #  space at all)
 #
 # See docs/architecture/gateway-protocol.md.
 [gateway]

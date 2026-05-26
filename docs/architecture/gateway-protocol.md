@@ -76,10 +76,11 @@ sibling containers, TCP loopback is the alternative:
 listen = "127.0.0.1:4485"
 ```
 
-(Avoid 4481/4482 in examples — those are the reference registrar
-and chain inspector defaults respectively. Operators are free to
-pick any free port; the gateway is the daemon's choice, not a
-protocol constant.)
+(Avoid 4482 in examples — that's the chain inspector default.
+The registrar runs on HTTPS/443, not AGTP, so it doesn't collide
+with the AGTP-port space at all. Operators are free to pick any
+free port for the gateway socket; it's the daemon's choice, not
+a protocol constant.)
 
 Loopback is bound to `127.0.0.1` only (never a non-loopback
 address). Cross-host gateway connections are out of scope; the

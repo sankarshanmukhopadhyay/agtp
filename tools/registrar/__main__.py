@@ -3,7 +3,8 @@ tools.registrar.__main__ — CLI entry for the reference registrar.
 
 Subcommands:
 
-    python -m tools.registrar serve   [--port 4481] [--data-dir PATH]
+    python -m tools.registrar serve   [--port 443] [--tls-cert ...] \
+                                      [--tls-key ...] [--data-dir PATH]
     python -m tools.registrar issue   --name NAME --owner OWNER \\
                                        --public-key PATH \\
                                        [--principal PRINCIPAL] \\
@@ -56,11 +57,22 @@ def _store(args: argparse.Namespace) -> RegistrarStore:
 def _cmd_serve(args: argparse.Namespace) -> int:
     from tools.registrar.server import serve
     store = _store(args)
+    scheme = "https" if (args.tls_cert and args.tls_key) else "http"
     print(f"registrar data dir: {store.data_dir}")
     print(f"issuer id:          {store.issuer_id}")
-    print(f"listening on:       http://0.0.0.0:{args.port}/")
-    print(f"public key:         http://0.0.0.0:{args.port}/pubkey")
-    serve(store, port=args.port, bind=args.bind)
+    print(f"listening on:       {scheme}://{args.bind}:{args.port}/")
+    print(f"public key:         {scheme}://{args.bind}:{args.port}/pubkey")
+    if scheme == "http":
+        print(
+            "[registrar] WARNING: plaintext HTTP. Run behind a TLS "
+            "terminator (nginx / Apache / Caddy) or pass --tls-cert "
+            "and --tls-key for direct HTTPS."
+        )
+    serve(
+        store,
+        port=args.port, bind=args.bind,
+        tls_cert=args.tls_cert, tls_key=args.tls_key,
+    )
     return 0
 
 
@@ -135,10 +147,35 @@ def main(argv: Optional[list] = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     # serve
-    p_serve = sub.add_parser("serve", help="Run the registrar HTTP server.")
+    p_serve = sub.add_parser(
+        "serve",
+        help=(
+            "Run the registrar HTTPS server. Default port 443; pass "
+            "--port for non-privileged binding (e.g. 8443) or run "
+            "behind a TLS-terminating reverse proxy. The registrar "
+            "is an HTTPS service, NOT AGTP — port 4480 is reserved "
+            "for AGTP and must not be re-used here."
+        ),
+    )
     _add_common_args(p_serve)
-    p_serve.add_argument("--port", type=int, default=4481)
+    p_serve.add_argument(
+        "--port", type=int, default=443,
+        help="HTTPS port. Default 443. Use 8443 or similar for "
+             "non-root user accounts; the realistic deployment runs "
+             "behind a TLS-terminating reverse proxy on a plaintext "
+             "high-numbered port.",
+    )
     p_serve.add_argument("--bind", default="0.0.0.0")
+    p_serve.add_argument(
+        "--tls-cert", default="",
+        help="Path to TLS certificate (PEM). Required with --tls-key "
+             "for direct HTTPS binding; omit both to bind plaintext "
+             "(for use behind a reverse proxy that terminates TLS).",
+    )
+    p_serve.add_argument(
+        "--tls-key", default="",
+        help="Path to TLS private key (PEM). See --tls-cert.",
+    )
     p_serve.set_defaults(func=_cmd_serve)
 
     # issue (offline)

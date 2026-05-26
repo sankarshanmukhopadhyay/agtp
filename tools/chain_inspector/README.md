@@ -10,8 +10,9 @@ the chain with per-step signature verification status.
 
 The chain inspector itself is **not part of `agtpd`**. It runs as a
 separate web app (default port 4482), parallel to the registrar
-(port 4481). The protocol the inspector speaks (AGTP INSPECT on
-port 4480) is what matters; this tool is the reference UI.
+(HTTPS, typically on 443 or behind a reverse proxy). The protocol
+the inspector speaks (AGTP INSPECT on port 4480) is what matters;
+this tool is the reference UI.
 
 ## Running it
 
