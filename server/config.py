@@ -647,6 +647,66 @@ class RcnsConfig:
 
 
 @dataclass
+class OAuthConfig:
+    """
+    Pattern 2 OAuth composition (see ``docs/oauth-composition.md``).
+
+    AGTP identifies *which agent* is making the call (the wire
+    layer's Agent-ID / cert); an OAuth bearer token carried in the
+    standard HTTP ``Authorization: Bearer <token>`` header identifies
+    *which principal* the agent is acting on behalf of (the
+    application layer). The two are orthogonal — Agent-ID answers
+    "who is asking?", OAuth principal answers "for whom?".
+
+    Default posture is OFF: ``enabled = false`` means existing
+    Pattern 1 deployments (Agent-ID + cert + Authority-Scope, no
+    external IdP) keep working unchanged. The dispatcher skips OAuth
+    extraction and validation entirely when this is off.
+
+    When on, ``required_on_methods`` lists the methods that MUST
+    carry an Authorization header. Empty list means the token is
+    accepted-but-optional on every method — useful for transitional
+    rollouts where some callers have updated their clients to send
+    a token and others haven't yet. Servers return **401
+    Unauthorized** with ``error.reason: oauth-required`` when the
+    header is missing on a required method.
+
+    ``validator`` names the validator class (registered with
+    :func:`server.oauth_context.register_validator`). Ships with
+    ``noop`` (accepts anything; for sanity-test and early
+    integration only — emit a warning at boot when paired with
+    ``enabled = true``) and ``jwt`` (Ed25519 / RSA JWT signature +
+    standard ``exp`` / ``nbf`` time bounds).
+
+    ``validator_config`` is passed verbatim to the validator's
+    constructor. The ``jwt`` validator needs at minimum a
+    ``public_key`` (PEM or base64url-of-raw-bytes Ed25519); optional
+    ``allowed_algs``, ``expected_issuer``, ``expected_audience``,
+    ``leeway_seconds``.
+
+    ``principal_id_claim`` names the JWT claim the dispatcher lifts
+    into ``request.acting_principal_id`` on successful validation.
+    Defaults to ``sub`` (the standard subject claim). The lifted
+    claim rides into the Attribution-Record's ``extra`` block as
+    ``acting_principal_id``; the token itself MUST NOT appear in
+    the record.
+    """
+
+    enabled: bool = False
+    required_on_methods: List[str] = field(default_factory=list)
+    validator: str = "noop"
+    validator_config: Dict[str, Any] = field(default_factory=dict)
+    principal_id_claim: str = "sub"
+
+    def __post_init__(self) -> None:
+        # Normalize method names to uppercase so the dispatcher's
+        # "is this method required?" check is case-insensitive.
+        self.required_on_methods = [
+            str(m).strip().upper() for m in self.required_on_methods
+        ]
+
+
+@dataclass
 class AgentsConfig:
     """How openly the server lists the agents it hosts."""
 
@@ -859,6 +919,7 @@ class ServerConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     synthesis: SynthesisConfig = field(default_factory=SynthesisConfig)
     rcns: RcnsConfig = field(default_factory=RcnsConfig)
+    oauth: OAuthConfig = field(default_factory=OAuthConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
     gateway: GatewayConfig = field(default_factory=GatewayConfig)
     signing: SigningConfig = field(default_factory=SigningConfig)
@@ -1021,6 +1082,21 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         ),
     )
 
+    # OAuth composition: [policies.oauth] block, defaults to off so
+    # existing deployments keep working unchanged.
+    oauth_block = policy_block.get("oauth") or {}
+    oauth = OAuthConfig(
+        enabled=bool(oauth_block.get("enabled", False)),
+        required_on_methods=list(
+            oauth_block.get("required_on_methods") or []
+        ),
+        validator=str(oauth_block.get("validator") or "noop"),
+        validator_config=dict(oauth_block.get("validator_config") or {}),
+        principal_id_claim=str(
+            oauth_block.get("principal_id_claim") or "sub"
+        ),
+    )
+
     audit_block = data.get("audit", {}) or {}
     audit = AuditConfig(
         path=str(audit_block.get("path") or "stderr"),
@@ -1089,6 +1165,7 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         policy=policy,
         synthesis=synthesis,
         rcns=rcns,
+        oauth=oauth,
         agents=agents,
         audit=audit,
         gateway=gateway,
@@ -1109,6 +1186,7 @@ __all__ = [
     "MtlsConfig",
     "ServerConfig",
     "ServerInfo",
+    "OAuthConfig",
     "RcnsConfig",
     "ServerPolicy",
     "SigningConfig",

@@ -99,6 +99,7 @@ FIELD_ORDER = [
     "manifest_issuer",
     "manifest_issuer_public_key",
     "manifest_signature",
+    "policies",
 ]
 
 
@@ -210,6 +211,18 @@ class AgentDocument:
     # dispatch path; ``merchant`` triggers mod_merchant's PURCHASE
     # gate when that module is loaded.
     role: str = DEFAULT_ROLE
+    # Per-agent policy overrides. Keyed by policy domain:
+    #   ``oauth``  — overrides for the server-wide
+    #                ``[policies.oauth]`` block (one agent on a
+    #                multi-tenant server may require Bearer tokens
+    #                while another doesn't).
+    #   ``rcns``   — reserved for future per-agent RCNS overrides.
+    #
+    # Free-form by design: the daemon reads the keys it knows
+    # about and ignores the rest, so application-specific
+    # policies can ride here without schema bumps. Empty by
+    # default — Pattern 1 deployments don't notice the field.
+    policies: Dict[str, Any] = field(default_factory=dict)
     # Tier 3.2 — optional registrar attestation of the AgentDocument
     # itself (separate from the Agent Genesis attestation). A signed
     # manifest lets verifiers confirm the document's mutable fields
@@ -365,6 +378,11 @@ class AgentDocument:
             # Elide default role to keep agent.json files clean —
             # only merchant role is interesting at the document level.
             if key == "role" and value == DEFAULT_ROLE:
+                continue
+            # Elide empty per-agent policies dict — most agents have
+            # no per-agent overrides and the field shouldn't bloat
+            # the on-disk shape.
+            if key == "policies" and not value:
                 continue
             out[key] = value
         return out
@@ -622,6 +640,7 @@ def from_dict(data: Dict[str, Any]) -> AgentDocument:
         ),
         owner_id=str(data.get("owner_id") or ""),
         role=str(data.get("role") or DEFAULT_ROLE),
+        policies=dict(data.get("policies") or {}),
         manifest_issuer=str(data.get("manifest_issuer") or ""),
         manifest_issuer_public_key=str(
             data.get("manifest_issuer_public_key") or ""

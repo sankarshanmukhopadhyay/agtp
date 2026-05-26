@@ -150,6 +150,12 @@
     "manifest_signature": {
       "type": "string",
       "description": "base64url-encoded Ed25519 signature over the canonical-JSON form of this document with manifest_signature set to empty string. Empty when the manifest is unsigned. Daemons MUST verify on load and refuse to host agents whose signature does not validate. (Added v1.3.0.)"
+    },
+    "policies": {
+      "type": "object",
+      "description": "Per-agent policy overrides that take precedence over the server's [policies.*] config block. Keyed by policy domain (e.g. 'oauth'). Omitted on the wire when empty; agents that don't customize policy emit no key here. Daemons that don't understand a policy domain MUST ignore it (forward-compat). (Added v1.4.0 alongside OAuth composition.)",
+      "additionalProperties": true,
+      "default": {}
     }
   }
 }

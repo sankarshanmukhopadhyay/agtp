@@ -1170,6 +1170,21 @@ def handle_connection(
             if attribution_extra is None:
                 attribution_extra = {}
             attribution_extra.setdefault("requested_method", aliased_from)
+        # OAuth composition: when the dispatcher validated a bearer
+        # token and lifted the configured principal_id_claim, surface
+        # the LIFTED VALUE on the Attribution-Record. The token
+        # itself MUST NOT appear — only the validated principal id.
+        # This is the audit trail's record of "the agent acted on
+        # behalf of this principal for this request."
+        acting_principal_id = getattr(
+            request, "acting_principal_id", "",
+        )
+        if acting_principal_id:
+            if attribution_extra is None:
+                attribution_extra = {}
+            attribution_extra.setdefault(
+                "acting_principal_id", acting_principal_id,
+            )
         _finalize_response(
             response,
             request,

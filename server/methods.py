@@ -3738,6 +3738,172 @@ def _stamp_endpoint_deprecation_header(
     return response
 
 
+# ---------------------------------------------------------------------------
+# OAuth composition helpers (Pattern 2 of the identity-composition story).
+# ---------------------------------------------------------------------------
+
+
+def _resolve_oauth_config(
+    server_state: ServerState,
+    agent_doc: Optional[AgentDocument],
+) -> Optional[Dict[str, Any]]:
+    """Merge the server-wide ``[policies.oauth]`` block with any
+    per-agent override on ``AgentDocument.policies.oauth``.
+
+    Returns a dict (or ``None`` when neither layer enables OAuth).
+    Per-agent policy takes precedence on every field — operators
+    can run a single server with one agent requiring tokens on
+    PURCHASE while another never requires them.
+
+    Returns ``None`` (rather than an "enabled=false" dict) when
+    OAuth is fully off so the caller can short-circuit the entire
+    block on the hot path.
+    """
+    cfg = getattr(server_state, "config", None)
+    server_oauth = getattr(cfg, "oauth", None) if cfg is not None else None
+
+    # Per-agent override.
+    per_agent: Dict[str, Any] = {}
+    if agent_doc is not None:
+        agent_policies = getattr(agent_doc, "policies", None) or {}
+        agent_oauth = agent_policies.get("oauth")
+        if isinstance(agent_oauth, dict):
+            per_agent = dict(agent_oauth)
+
+    if server_oauth is None and not per_agent:
+        return None
+
+    # Start with server-wide values; per-agent overrides win.
+    merged: Dict[str, Any] = {}
+    if server_oauth is not None:
+        merged["enabled"] = bool(server_oauth.enabled)
+        merged["required_on_methods"] = list(server_oauth.required_on_methods)
+        merged["validator"] = server_oauth.validator
+        merged["validator_config"] = dict(server_oauth.validator_config)
+        merged["principal_id_claim"] = server_oauth.principal_id_claim
+    else:
+        merged = {
+            "enabled": False,
+            "required_on_methods": [],
+            "validator": "noop",
+            "validator_config": {},
+            "principal_id_claim": "sub",
+        }
+
+    for key in (
+        "enabled",
+        "required_on_methods",
+        "validator",
+        "validator_config",
+        "principal_id_claim",
+    ):
+        if key in per_agent:
+            merged[key] = per_agent[key]
+    # Normalize methods to uppercase so the membership check is
+    # case-insensitive regardless of which layer supplied them.
+    merged["required_on_methods"] = [
+        str(m).strip().upper() for m in (merged["required_on_methods"] or [])
+    ]
+    if not merged.get("enabled"):
+        return None
+    return merged
+
+
+def _enforce_oauth(
+    request: wire.AGTPRequest,
+    method_name: str,
+    oauth_cfg: Dict[str, Any],
+) -> Optional[wire.AGTPResponse]:
+    """Run the OAuth gate on a request whose dispatcher resolved
+    OAuth as enabled.
+
+    Returns a 401 response on failure (missing-when-required,
+    invalid signature, expired, etc.) or ``None`` to let dispatch
+    proceed. On success, lifts the configured principal claim
+    onto ``request.acting_principal_id`` so downstream code can
+    read it; also stashes a structured ``_oauth_principal``
+    attribution-extra so the Attribution-Record carries the
+    lifted claim WITHOUT carrying the token itself.
+    """
+    from server.oauth_context import (
+        OAuthValidationError, extract_token, get_validator,
+    )
+
+    token = extract_token(request)
+    required = method_name.upper() in (oauth_cfg.get("required_on_methods") or [])
+    if not token:
+        if required:
+            return _oauth_401(
+                "oauth-required",
+                f"this server requires an Authorization: Bearer token "
+                f"on {method_name} requests",
+                method=method_name,
+            )
+        # Optional and absent — proceed without lifting a claim.
+        return None
+
+    # Token present — validate.
+    try:
+        validator = get_validator(
+            oauth_cfg["validator"],
+            oauth_cfg.get("validator_config") or {},
+        )
+    except (KeyError, ValueError) as exc:
+        # Configuration error; surface as 500 so operator fixes it.
+        return error_response(
+            500, "Internal Server Error",
+            "oauth-validator-misconfigured",
+            f"OAuth validator {oauth_cfg.get('validator')!r} could "
+            f"not be loaded: {exc}",
+        )
+
+    try:
+        claims = validator.validate(token)
+    except OAuthValidationError as exc:
+        return _oauth_401(exc.reason, str(exc), method=method_name)
+    except Exception as exc:  # noqa: BLE001
+        # Validator raised something other than OAuthValidationError —
+        # treat as a generic invalid-token rather than crashing the
+        # request. The operator's log gets the trace; the caller
+        # gets the standard structured 401.
+        import sys as _sys
+        print(
+            f"[server] oauth validator raised "
+            f"{type(exc).__name__}: {exc}",
+            file=_sys.stderr,
+        )
+        return _oauth_401(
+            "oauth-invalid",
+            f"token validation raised {type(exc).__name__}",
+            method=method_name,
+        )
+
+    # Successful validation — lift the configured claim onto the
+    # request context and stash for the Attribution-Record. The
+    # token itself MUST NOT appear in the audit record.
+    principal_claim = oauth_cfg.get("principal_id_claim") or "sub"
+    acting_principal_id = ""
+    if isinstance(claims, dict):
+        value = claims.get(principal_claim)
+        if value is not None:
+            acting_principal_id = str(value)
+    request._oauth_claims = claims  # type: ignore[attr-defined]
+    request.acting_principal_id = acting_principal_id  # type: ignore[attr-defined]
+    return None
+
+
+def _oauth_401(
+    reason: str, explanation: str, *, method: str,
+) -> wire.AGTPResponse:
+    """Structured 401 with the OAuth-specific reason vocabulary."""
+    return error_response(
+        401, "Unauthorized",
+        "oauth-failure",
+        explanation,
+        extra={"reason": reason, "method": method},
+    )
+
+
 def dispatch(
     request: wire.AGTPRequest,
     server_state: ServerState,
@@ -3938,6 +4104,24 @@ def _dispatch_inner(
                     "declared": sorted(declared),
                 },
             )
+
+    # OAuth composition (Pattern 2; see docs/oauth-composition.md).
+    # AGTP identifies the calling AGENT; an optional Authorization
+    # bearer token identifies the PRINCIPAL the agent acts for.
+    # Default posture is OFF — Pattern 1 deployments take the
+    # short-circuit at the first gate. Per-agent policies on
+    # AgentDocument.policies.oauth (when present) take precedence
+    # over the server-wide [policies.oauth] block, allowing
+    # different agents on one server to declare different OAuth
+    # postures (one agent may require tokens on PURCHASE while
+    # another never requires them at all).
+    oauth_cfg = _resolve_oauth_config(server_state, agent_doc)
+    if oauth_cfg is not None and oauth_cfg.get("enabled"):
+        oauth_err = _enforce_oauth(
+            request, method_name, oauth_cfg,
+        )
+        if oauth_err is not None:
+            return oauth_err
     # Embedded-method names always pass the verb gate even if the
     # name was somehow stripped from the catalog — protocol
     # primitives must be answerable. This also covers the Synthesis-Id
