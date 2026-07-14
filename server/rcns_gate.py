@@ -302,6 +302,42 @@ def try_rcns(
     if mode is None:
         return None
 
+    # Identity-binding guard (opt-in; not one of the four numbered
+    # locks in docs/rcns.md, evaluated here because it's cheaper
+    # than the scope/trust-tier checks below). When
+    # [policies.rcns].require_verified_identity is set, RCNS refuses
+    # to negotiate for a request whose Agent-ID isn't backed by a
+    # verified mTLS cert. Without this, the per-agent rate limit and
+    # idempotency cache below (both keyed on agent_doc.agent_id) are
+    # only as strong as the Agent-ID header, which is
+    # client-supplied and unauthenticated under [mtls].mode =
+    # "disabled" or "optional" when no cert was presented on this
+    # particular connection.
+    if getattr(rcns_cfg, "require_verified_identity", False):
+        if getattr(request, "verified_cert", None) is None:
+            attempt_id = _record_attempt(
+                agent_id=agent_doc.agent_id, method=method, path=path,
+                reason=_status.RCNS_REASON_IDENTITY_UNVERIFIED,
+                explanation=(
+                    "this server requires a verified mTLS client "
+                    "certificate to negotiate RCNS contracts; this "
+                    "connection presented none"
+                ),
+                details={},
+            )
+            resp = _status.rcns_no_contract(
+                reason=_status.RCNS_REASON_IDENTITY_UNVERIFIED,
+                explanation=(
+                    "RCNS negotiation requires a verified mTLS client "
+                    "certificate on this server "
+                    "([policies.rcns].require_verified_identity = true)"
+                ),
+                method=method, path=path,
+                details={"attempt_id": attempt_id},
+            )
+            resp.headers["RCNS-Attempt-Id"] = attempt_id
+            return resp
+
     # Lock 3 — agent capability. Missing scope is a structured 262
     # refusal so the caller learns what to add to its scope claim.
     declared_scopes = set(

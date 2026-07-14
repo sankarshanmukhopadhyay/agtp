@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agtp"
-version = "0.0.1"
+version = "0.1.0"
 description = "Agent Transfer Protocol"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -47,6 +47,7 @@ agtp-curl           = "client.cli.curl:main"
 agtp-migrate        = "client.cli.migrate:main"
 agtp-import-openapi = "tools.openapi_import:main"
 agtp-catalog-diff   = "tools.catalog_diff:main"
+agtp-chain-integrity-check = "tools.chain_integrity_check:main"
 agtp-mod-python     = "mod_python.__main__:main"
 agtp-keygen         = "tools.generate_signing_key:main"
 agtp-gen-agent-cert = "tools.generate_agent_cert:main"

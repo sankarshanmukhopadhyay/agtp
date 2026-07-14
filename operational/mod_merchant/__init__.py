@@ -1,58 +1,44 @@
-"""
-mod_merchant — PURCHASE counterparty verification for AGTP merchants.
-
-Loaded by ``agtpd`` via ``--load-module mod_merchant``. The module's
-``install(server_state)`` function registers a :class:`MerchantHook`
-that runs before every PURCHASE dispatch and verifies the inbound
-request is correctly addressed to *this* merchant. Per
-``draft-hood-agtp-merchant-identity-02 §4.2`` the hook enforces:
-
-  * The agent the request targets has ``role == "merchant"``.
-  * The inbound ``Merchant-ID`` header (if present) equals that
-    agent's Canonical Agent-ID.
-  * The inbound ``Merchant-Manifest-Fingerprint`` header (if
-    present) equals ``sha256`` of the merchant's canonical
-    AgentDocument JSON.
-  * The agent's lifecycle ``status == "active"``.
-
-Any mismatch returns **458 Counterparty Unverified** before the
-handler runs, so a mis-targeted PURCHASE never reaches the
-application layer.
-
-When the request targets an agent whose role is not "merchant", the
-hook is a no-op for PURCHASE — PURCHASE is only valid against
-merchants by design, so a non-merchant target falls through to the
-daemon's regular soft-deny gate (which refuses PURCHASE on agents
-that don't declare it).
-
-When the inbound request omits ``Merchant-ID`` entirely (legacy
-client, or pre-Phase-7 caller), the hook accepts the request but
-emits a structured warning via the daemon's log. Operators who want
-to refuse legacy traffic outright set
-``AGTP_MOD_MERCHANT_STRICT=1``.
-
-Pairs with the registrar's merchant-issuance flow: a merchant
-operator runs ``python -m tools.registrar issue --role merchant
-...``, drops the resulting ``.genesis.json`` + ``.agent.json`` into
-the daemon's ``agents/`` directory, and loads ``mod_merchant``. From
-that point every inbound PURCHASE is counterparty-verified at the
-wire layer.
-"""
-
+"""Merchant counterparty and Intent Assertion enforcement module."""
 from __future__ import annotations
-
 import os
+from pathlib import Path
 from typing import Any
-
 from mod_merchant.hook import MerchantHook
+from mod_merchant.replay_store import InMemorySeenJtiStore, SeenJtiStore
 
+__all__ = ["InMemorySeenJtiStore", "MerchantHook", "SeenJtiStore", "install"]
 
-__all__ = ["MerchantHook", "install"]
-
+def _load_public_key(path: str):
+    from cryptography.hazmat.primitives import serialization
+    key = serialization.load_pem_public_key(Path(path).read_bytes())
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    if not isinstance(key, Ed25519PublicKey):
+        raise ValueError("Intent Assertion verification key must be Ed25519")
+    return key
 
 def install(server_state: Any) -> None:
-    """Boot hook: register MerchantHook. Called by agtpd after
-    ``--load-module mod_merchant``."""
-    strict = os.environ.get("AGTP_MOD_MERCHANT_STRICT", "0") == "1"
-    hook = MerchantHook(strict=strict)
+    """Register a fail-closed merchant hook.
+
+    Production/default behavior requires an Ed25519 verification key via
+    ``AGTP_MOD_MERCHANT_INTENT_VERIFY_KEY``. Legacy deployments must
+    explicitly set ``AGTP_MOD_MERCHANT_ALLOW_UNVERIFIED_INTENT=1``.
+    """
+    strict = os.environ.get("AGTP_MOD_MERCHANT_STRICT", "1") == "1"
+    allow_unverified = os.environ.get(
+        "AGTP_MOD_MERCHANT_ALLOW_UNVERIFIED_INTENT", "0"
+    ) == "1"
+    key_path = os.environ.get("AGTP_MOD_MERCHANT_INTENT_VERIFY_KEY", "")
+    if not key_path and not allow_unverified:
+        raise ValueError(
+            "mod_merchant requires AGTP_MOD_MERCHANT_INTENT_VERIFY_KEY; "
+            "set AGTP_MOD_MERCHANT_ALLOW_UNVERIFIED_INTENT=1 only for "
+            "explicit legacy/development operation"
+        )
+    public_key = _load_public_key(key_path) if key_path else None
+    hook = MerchantHook(
+        strict=strict,
+        jti_store=InMemorySeenJtiStore(),
+        intent_public_key=public_key,
+        require_intent_assertion=not allow_unverified,
+    )
     server_state.hook_registry.register(hook)

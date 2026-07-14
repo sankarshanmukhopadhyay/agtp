@@ -28,12 +28,9 @@ Portability:
   override via ``[audit].chain_head_root`` in agtp-server.toml.
 
 Thread safety:
-  A module-level lock serializes writes so concurrent dispatches for
-  the same agent can't interleave on the head file. Reads are
-  lock-free; the worst case is reading the predecessor that lost a
-  race, which is acceptable for the chain semantics (the loser's
-  record simply chains to an earlier head and the winner's record
-  becomes the new head).
+  A re-entrant transaction lock serializes the complete head-read,
+  record-write, and head-update operation in the daemon. This prevents
+  concurrent responses from creating sibling records from one predecessor.
 """
 
 from __future__ import annotations
@@ -41,12 +38,26 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
+
+
+@contextmanager
+def audit_append_transaction():
+    """Serialize the complete audit append transaction.
+
+    Callers hold this lock across head read, record construction, record
+    persistence, and head update. This prevents concurrent responses for the
+    same process from creating sibling records from one predecessor and
+    silently orphaning the losing branch.
+    """
+    with _LOCK:
+        yield
 
 
 @dataclass(frozen=True)
@@ -141,6 +152,7 @@ def default_chain_head_root() -> Path:
 
 __all__ = [
     "AuditChainStore",
+    "audit_append_transaction",
     "ChainHead",
     "default_chain_head_root",
 ]

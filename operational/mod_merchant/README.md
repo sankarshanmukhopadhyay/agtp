@@ -125,3 +125,14 @@ O(len(AgentDocument JSON)) per PURCHASE for the sha256 — typically
 a few KB, microseconds. The fingerprint isn't cached today; if the
 overhead becomes measurable, the hook can memoize against
 AgentDocument identity.
+
+## v0.1.0 verified Intent Assertion posture
+
+The production/default module installation requires
+`AGTP_MOD_MERCHANT_INTENT_VERIFY_KEY` to point to an Ed25519 public key in
+PEM form. The hook verifies the assertion before dispatch and derives replay
+state exclusively from the signed `jti` and `exp` claims.
+
+Legacy operation without assertion verification must be explicitly enabled
+with `AGTP_MOD_MERCHANT_ALLOW_UNVERIFIED_INTENT=1`. This mode is intended only
+for migration and local development and is not an assurance boundary.

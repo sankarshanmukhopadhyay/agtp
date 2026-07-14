@@ -235,6 +235,7 @@ def test_rcns_refusal_reason_vocabulary() -> None:
         "synthesis-error",
         "contract-not-yours",
         "contract-revoked",
+        "identity-unverified",
     }
     assert status.ALL_RCNS_REFUSAL_REASONS == expected
 

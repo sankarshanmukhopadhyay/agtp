@@ -44,9 +44,14 @@ import hashlib
 import json
 import secrets
 import time
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from agtp.handlers import DaemonClient, DaemonError
+
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PublicKey,
+    )
 
 
 JWT_ALG_EDDSA = "EdDSA"
@@ -218,6 +223,117 @@ def parse_intent_assertion(jwt_compact: str) -> tuple[Dict[str, Any], Dict[str, 
     return header, payload, signature
 
 
+def verify_intent_assertion(
+    jwt_compact: str,
+    *,
+    issuer_public_key: "Ed25519PublicKey",
+    expected_audience: Optional[str] = None,
+    expected_merchant_id: Optional[str] = None,
+    leeway_seconds: int = 60,
+) -> Dict[str, Any]:
+    """Verify an Intent Assertion's signature and standard claims.
+
+    Added alongside the governance/security hardening pass: the
+    reference implementation shipped ``build_intent_assertion`` and
+    ``parse_intent_assertion`` but no verifier at all — a handler
+    (or downstream payment network) that wanted to confirm an
+    Intent Assertion was genuine, current, and addressed to it had
+    nothing to call. This closes that gap for the general case;
+    ``mod_merchant`` additionally offers header-only ``jti`` replay
+    detection (see ``mod_merchant.replay_store``) that doesn't need
+    the issuer's public key and runs at the wire edge before the
+    body is parsed.
+
+    Checks, in order:
+
+      1. Structural + signature: three dot-separated JWS segments,
+         ``alg`` must be ``EdDSA``, signature must verify against
+         ``issuer_public_key``.
+      2. ``exp`` must be in the future (modulo ``leeway_seconds``).
+      3. ``nbf``, when present, must be in the past (modulo
+         ``leeway_seconds``). Not required by
+         ``build_intent_assertion`` (which doesn't set it), but
+         honored when a caller supplies one.
+      4. ``aud``, when ``expected_audience`` is supplied, must match.
+      5. ``merchant_id``, when ``expected_merchant_id`` is supplied,
+         must match — redundant with ``aud`` in the common case but
+         checked independently since the two fields are independently
+         settable.
+
+    Returns the decoded payload on success. Raises
+    :class:`IntentAssertionError` on any failure; the exception's
+    ``reason`` attribute is a stable tag (mirrors
+    ``server.oauth_context.OAuthValidationError``'s vocabulary):
+    ``invalid-signature``, ``expired``, ``not-yet-valid``,
+    ``audience-mismatch``, ``merchant-mismatch``, ``malformed``.
+
+    This function does NOT check ``jti`` uniqueness — replay
+    detection needs a store of previously-seen values, which is a
+    deployment concern (see ``mod_merchant.replay_store
+    .SeenJtiStore``), not something a stateless verifier can do.
+    """
+    from cryptography.exceptions import InvalidSignature
+
+    try:
+        header, payload, signature = parse_intent_assertion(jwt_compact)
+    except IntentAssertionError as exc:
+        exc.reason = "malformed"  # type: ignore[attr-defined]
+        raise
+
+    alg = str(header.get("alg") or "")
+    if alg != JWT_ALG_EDDSA:
+        err = IntentAssertionError(
+            f"Intent Assertion alg must be {JWT_ALG_EDDSA!r}, got {alg!r}"
+        )
+        err.reason = "malformed"  # type: ignore[attr-defined]
+        raise err
+
+    parts = jwt_compact.split(".")
+    signing_input = f"{parts[0]}.{parts[1]}".encode("ascii")
+    try:
+        issuer_public_key.verify(signature, signing_input)
+    except InvalidSignature as exc:
+        err = IntentAssertionError("Intent Assertion signature did not verify")
+        err.reason = "invalid-signature"  # type: ignore[attr-defined]
+        raise err from exc
+
+    now = int(time.time())
+    exp = payload.get("exp")
+    if exp is None or int(exp) + leeway_seconds < now:
+        err = IntentAssertionError(
+            f"Intent Assertion exp is missing or in the past (exp={exp!r})"
+        )
+        err.reason = "expired"  # type: ignore[attr-defined]
+        raise err
+
+    nbf = payload.get("nbf")
+    if nbf is not None and int(nbf) - leeway_seconds > now:
+        err = IntentAssertionError("Intent Assertion nbf is in the future")
+        err.reason = "not-yet-valid"  # type: ignore[attr-defined]
+        raise err
+
+    if expected_audience is not None and payload.get("aud") != expected_audience:
+        err = IntentAssertionError(
+            f"aud {payload.get('aud')!r} does not match expected "
+            f"{expected_audience!r}"
+        )
+        err.reason = "audience-mismatch"  # type: ignore[attr-defined]
+        raise err
+
+    if (
+        expected_merchant_id is not None
+        and payload.get("merchant_id") != expected_merchant_id
+    ):
+        err = IntentAssertionError(
+            f"merchant_id {payload.get('merchant_id')!r} does not match "
+            f"expected {expected_merchant_id!r}"
+        )
+        err.reason = "merchant-mismatch"  # type: ignore[attr-defined]
+        raise err
+
+    return payload
+
+
 __all__ = [
     "DEFAULT_TTL_SECONDS",
     "IntentAssertionError",
@@ -225,4 +341,5 @@ __all__ = [
     "build_intent_assertion",
     "fresh_jti",
     "parse_intent_assertion",
+    "verify_intent_assertion",
 ]

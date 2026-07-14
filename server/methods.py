@@ -3979,6 +3979,25 @@ def _dispatch_inner(
     method_name = request.method.upper()
     request_path = getattr(request, "path", "/") or "/"
 
+    # Lifecycle enforcement closes the loop between signed lifecycle
+    # receipts and live authorization. Introspection remains available
+    # so a suspended or retired agent can learn its state and reason.
+    lifecycle_status = str(getattr(agent_doc, "status", "active") or "active").lower()
+    lifecycle_exempt = method_name in {"DISCOVER", "DESCRIBE"}
+    if not lifecycle_exempt and lifecycle_status in {"retired", "deprecated"}:
+        return error_response(
+            410, "Gone", "agent-revoked",
+            f"Agent-ID {agent_doc.agent_id} is permanently {lifecycle_status} "
+            "and may not invoke operational methods.",
+            extra={"agent_id": agent_doc.agent_id, "agent_status": lifecycle_status},
+        )
+    if not lifecycle_exempt and lifecycle_status == "suspended":
+        return error_response(
+            503, "Unavailable", "agent-suspended",
+            f"Agent-ID {agent_doc.agent_id} is temporarily suspended.",
+            extra={"agent_id": agent_doc.agent_id, "agent_status": lifecycle_status},
+        )
+
     # Synthesis-Id execution pathway. Runs ahead of every other
     # check so a synthesis_id whose plan executes a method that
     # wouldn't otherwise be admissible (e.g. soft-denied) still

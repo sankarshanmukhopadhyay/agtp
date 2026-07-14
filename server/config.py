@@ -615,6 +615,24 @@ class RcnsConfig:
     by passing ``mode`` in the REVOKE body. Default
     ``"grandfather"`` so a stale recipe edit doesn't unexpectedly
     evict callers.
+
+    ``require_verified_identity`` — default ``True``. When ``True``,
+    RCNS refuses to negotiate for a request whose Agent-ID arrived
+    without a verified mTLS client certificate
+    (``request.verified_cert is None``), returning **464** with
+    ``reason = "identity-unverified"`` rather than treating the
+    header-asserted Agent-ID as sufficient. This closes a specific
+    abuse path: under the default ``[mtls].mode = "disabled"``
+    posture, ``Agent-ID`` is a plain client-supplied header, so the
+    per-agent negotiation rate limit and idempotency cache (both
+    keyed on ``agent_id``) are trivially bypassed by rotating the
+    header on every request — the *documented* per-agent ceiling
+    doesn't actually bind under that posture. Setting this to
+    ``True`` is meaningful only when the server also runs with
+    ``[mtls].mode`` set to ``optional`` or ``required``; with mTLS
+    fully disabled server-wide, every RCNS request will be refused,
+    which is intentional (there is no verified identity to key
+    anything on) but worth knowing before flipping this on.
     """
 
     enabled: bool = False
@@ -622,6 +640,7 @@ class RcnsConfig:
     max_negotiations_per_minute: int = 10
     idempotency_window_seconds: int = 60
     on_policy_change: str = "grandfather"
+    require_verified_identity: bool = False
 
     def __post_init__(self) -> None:
         if self.min_trust_tier not in (1, 2, 3):
@@ -690,6 +709,18 @@ class OAuthConfig:
     claim rides into the Attribution-Record's ``extra`` block as
     ``acting_principal_id``; the token itself MUST NOT appear in
     the record.
+
+    ``allow_noop_validator`` — defaults ``False``. When ``enabled =
+    true`` and ``validator = "noop"``, the server refuses to boot
+    unless this is explicitly set ``true``. The ``noop`` validator
+    accepts any non-empty bearer token, so leaving OAuth "on" with
+    it in place is equivalent to no authentication at all; the
+    previous posture (a stderr warning at boot) was easy to miss in
+    a container/orchestrator log pipeline and did nothing at request
+    time. Set this to ``true`` for local development or CI fixtures
+    that intentionally use the no-op validator; production
+    deployments should configure ``validator = "jwt"`` (or a
+    registered custom validator) instead of setting this flag.
     """
 
     enabled: bool = False
@@ -697,6 +728,7 @@ class OAuthConfig:
     validator: str = "noop"
     validator_config: Dict[str, Any] = field(default_factory=dict)
     principal_id_claim: str = "sub"
+    allow_noop_validator: bool = False
 
     def __post_init__(self) -> None:
         # Normalize method names to uppercase so the dispatcher's
@@ -1080,21 +1112,39 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         on_policy_change=str(
             rcns_block.get("on_policy_change") or "grandfather"
         ),
+        require_verified_identity=bool(
+            rcns_block.get("require_verified_identity", True)
+        ),
     )
 
     # OAuth composition: [policies.oauth] block, defaults to off so
     # existing deployments keep working unchanged.
     oauth_block = policy_block.get("oauth") or {}
+    oauth_enabled = bool(oauth_block.get("enabled", False))
+    oauth_validator = str(oauth_block.get("validator") or "noop")
+    oauth_allow_noop = bool(oauth_block.get("allow_noop_validator", False))
+    if oauth_enabled and oauth_validator == "noop" and not oauth_allow_noop:
+        raise ValueError(
+            "[policies.oauth] enabled = true with validator = \"noop\" "
+            "refuses to boot without allow_noop_validator = true. The "
+            "noop validator accepts any non-empty bearer token, which "
+            "is equivalent to no authentication. Set "
+            "[policies.oauth].validator to \"jwt\" (or a registered "
+            "custom validator) for production use, or set "
+            "allow_noop_validator = true to explicitly opt into the "
+            "no-op validator for local development / CI."
+        )
     oauth = OAuthConfig(
-        enabled=bool(oauth_block.get("enabled", False)),
+        enabled=oauth_enabled,
         required_on_methods=list(
             oauth_block.get("required_on_methods") or []
         ),
-        validator=str(oauth_block.get("validator") or "noop"),
+        validator=oauth_validator,
         validator_config=dict(oauth_block.get("validator_config") or {}),
         principal_id_claim=str(
             oauth_block.get("principal_id_claim") or "sub"
         ),
+        allow_noop_validator=oauth_allow_noop,
     )
 
     audit_block = data.get("audit", {}) or {}

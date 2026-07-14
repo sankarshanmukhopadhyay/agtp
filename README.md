@@ -342,17 +342,20 @@ disallow can't take a server off-protocol.
 
 The dispatcher applies these gates in order:
 
-  1. **Synthesis-Id** — route to the synthesis runtime if the
+  1. **Agent lifecycle status** — retired/deprecated agents receive
+     `410 Gone`; suspended agents receive `503 Unavailable`. `DISCOVER`
+     and `DESCRIBE` remain available for status introspection.
+  2. **Synthesis-Id** — route to the synthesis runtime if the
      header names an active synthesis.
-  2. **459 Method Violation** — verb not in the catalog
+  3. **459 Method Violation** — verb not in the catalog
      (and not opted into via `policies.methods.legacy`).
-  3. **460 Endpoint Violation** — path malformed or
+  4. **460 Endpoint Violation** — path malformed or
      contains a verb token.
-  4. **405 Method Not Allowed** — `policies.methods` refuses this
+  5. **405 Method Not Allowed** — `policies.methods` refuses this
      verb on this server.
-  5. **Redirect** — `policies.methods.redirects` rewrites
+  6. **Redirect** — `policies.methods.redirects` rewrites
      `(method, path)`.
-  6. **Registry lookup** — handler resolves and runs.
+  7. **Registry lookup** — handler resolves and runs.
 
 The ``Method-Grammar`` header pathway the protocol previously
 shipped was retired in this revision; the catalog gate at the top
@@ -616,6 +619,8 @@ pip install -e .
 
 # Start the registry and an agent server. Loopback binds default to
 # plaintext, so no --insecure flag is needed for local development.
+# SECURITY: this mode uses a self-asserted Agent-ID header. Do not expose
+# it to real principals, credentials, commerce, or federated peers.
 python -m registry 8080 &
 python -m server   4480 --agents-dir server/agents &
 
@@ -809,7 +814,11 @@ stream at `~/.agtp/audit/lifecycle/{agent_id}.jsonl`. Read the
 stream with `INSPECT {target: lifecycle, agent_id: ...}` or via
 the chain inspector at `tools/chain_inspector/`.
 
-Two on-disk forms are supported, chosen by `[audit].mode`:
+Two on-disk forms are supported, chosen by `[audit].mode`. JWS mode
+provides local cryptographic integrity but remains dependent on the host
+filesystem for completeness. Deployments requiring evidence that survives
+a compromised host should use SCITT anchoring and periodically verify chain
+continuity:
 
 | Mode | Per-line format | Notes |
 |---|---|---|
@@ -880,3 +889,8 @@ the IETF. Issues and discussion welcome. Implementation reports —
 ## Contact
 
 Chris Hood — chris@nomotic.ai
+
+
+## v0.1.0 security baseline
+
+See [`RELEASE_NOTES_v0.1.0.md`](RELEASE_NOTES_v0.1.0.md) for the consolidated lifecycle, assurance, Intent Assertion, RCNS, OAuth, and audit-chain hardening changes.

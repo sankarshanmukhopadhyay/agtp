@@ -35,64 +35,119 @@
     "catalog_versions_supported": {
       "type": "array",
       "description": "Catalog versions the server can validate against. Today usually [catalog_version]; multi-version support is future.",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "server": {
       "type": "object",
       "description": "ServerInfoBlock: who runs this server.",
-      "required": ["server_id", "operator", "contact"],
+      "required": [
+        "server_id",
+        "operator",
+        "contact"
+      ],
       "additionalProperties": false,
       "properties": {
-        "server_id": { "type": "string", "description": "Stable server identifier (typically hostname or domain)." },
-        "operator": { "type": "string", "description": "Operator name (human or organization)." },
-        "contact": { "type": "string", "description": "Operator contact (email or URL)." },
+        "server_id": {
+          "type": "string",
+          "description": "Stable server identifier (typically hostname or domain)."
+        },
+        "operator": {
+          "type": "string",
+          "description": "Operator name (human or organization)."
+        },
+        "contact": {
+          "type": "string",
+          "description": "Operator contact (email or URL)."
+        },
         "supported_features": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Optional capability tags the server claims."
         },
-        "domain": { "type": ["string", "null"], "description": "Operator's domain when applicable." },
-        "issued": { "type": "string", "description": "ISO 8601 UTC when this manifest entry was first issued." },
-        "updated": { "type": "string", "description": "ISO 8601 UTC of the most recent update." }
+        "domain": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Operator's domain when applicable."
+        },
+        "issued": {
+          "type": "string",
+          "description": "ISO 8601 UTC when this manifest entry was first issued."
+        },
+        "updated": {
+          "type": "string",
+          "description": "ISO 8601 UTC of the most recent update."
+        }
       }
     },
     "embedded_methods": {
       "type": "array",
       "description": "The 12 protocol-primitive methods the server supports. Always present.",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object"
+      }
     },
     "custom_methods": {
       "type": "array",
       "description": "Operator-registered custom methods on this server. Omitted when empty.",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object"
+      }
     },
     "endpoints": {
       "type": "array",
       "description": "Endpoint inventory: per (method, path) declaration with input/output/errors/handler contract. Empty for servers without an endpoint registry.",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object"
+      }
     },
     "agent_disclosure": {
       "type": "string",
       "description": "How openly the server lists its hosted agents.",
-      "enum": ["public", "limited", "private"]
+      "enum": [
+        "public",
+        "limited",
+        "private"
+      ]
     },
     "hosted_agents": {
       "type": "array",
       "description": "Per-agent entries, subject to agent_disclosure. Each entry carries agent_id, name, a skills_summary, and methods_count.",
       "items": {
         "type": "object",
-        "required": ["agent_id", "name"],
+        "required": [
+          "agent_id",
+          "name"
+        ],
         "additionalProperties": true,
         "properties": {
-          "agent_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "name": { "type": "string" },
-          "skills_summary": { "type": "string" },
-          "methods_count": { "type": "integer", "minimum": 0 }
+          "agent_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "skills_summary": {
+            "type": "string"
+          },
+          "methods_count": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       }
     },
     "agent_disclosure_notice": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Optional human-readable notice when disclosure is 'limited' or 'private'."
     },
     "apis": {
@@ -100,12 +155,27 @@
       "description": "APIEndpoint entries: HTTP APIs this server bridges or exposes.",
       "items": {
         "type": "object",
-        "required": ["path", "methods"],
+        "required": [
+          "path",
+          "methods"
+        ],
         "additionalProperties": true,
         "properties": {
-          "path": { "type": "string" },
-          "methods": { "type": "array", "items": { "type": "string" } },
-          "description": { "type": ["string", "null"] }
+          "path": {
+            "type": "string"
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       }
     },
@@ -114,27 +184,111 @@
       "description": "Non-AGTP protocols this server bridges (e.g. MCP, A2A).",
       "items": {
         "type": "object",
-        "required": ["protocol", "version", "endpoint"],
+        "required": [
+          "protocol",
+          "version",
+          "endpoint"
+        ],
         "additionalProperties": true,
         "properties": {
-          "protocol": { "type": "string" },
-          "version": { "type": "string" },
-          "endpoint": { "type": "string" },
-          "catalog": { "type": ["string", "null"] }
+          "protocol": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "catalog": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       }
     },
     "policies": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "PolicyBlock: server policies the client may use to predict invocation outcomes.",
       "additionalProperties": true,
       "properties": {
-        "wildcards_accepted": { "type": "boolean" },
-        "anonymous_discovery": { "type": "boolean" },
-        "scope_required_for_invocation": { "type": "boolean" },
-        "synthesis_enabled": { "type": "boolean" },
-        "max_synthesis_depth": { "type": "integer", "minimum": 1 },
-        "methods": { "type": ["object", "null"] }
+        "wildcards_accepted": {
+          "type": "boolean"
+        },
+        "anonymous_discovery": {
+          "type": "boolean"
+        },
+        "scope_required_for_invocation": {
+          "type": "boolean"
+        },
+        "synthesis_enabled": {
+          "type": "boolean"
+        },
+        "max_synthesis_depth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "methods": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "security": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Transport identity-binding posture disclosed by the live server configuration.",
+      "additionalProperties": false,
+      "properties": {
+        "identity_binding": {
+          "type": "string",
+          "enum": [
+            "none",
+            "optional",
+            "required"
+          ]
+        }
+      }
+    },
+    "assurance": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Derived machine-readable assurance posture for relying parties.",
+      "additionalProperties": false,
+      "properties": {
+        "identity_binding": {
+          "type": "string",
+          "enum": [
+            "none",
+            "optional",
+            "required"
+          ]
+        },
+        "attribution_records": {
+          "type": "boolean"
+        },
+        "anonymous_discovery": {
+          "type": "boolean"
+        },
+        "posture": {
+          "type": "string",
+          "enum": [
+            "demo",
+            "mixed",
+            "hardened"
+          ]
+        }
       }
     }
   }

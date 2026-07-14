@@ -146,7 +146,9 @@ BAD_REQUEST        = (400, "Bad Request")
 FORBIDDEN          = (403, "Forbidden")
 NOT_FOUND          = (404, "Not Found")
 METHOD_NOT_ALLOWED = (405, "Method Not Allowed")
+GONE               = (410, "Gone")
 UNPROCESSABLE      = (422, "Unprocessable")
+UNAVAILABLE        = (503, "Unavailable")
 
 
 # -- §7 PROPOSE reason / issue / auth-type vocabularies ----------------
@@ -189,6 +191,11 @@ RCNS_REASON_COMPOSITION_IMPOSSIBLE   = "composition-impossible"
 RCNS_REASON_SYNTHESIS_ERROR          = "synthesis-error"
 RCNS_REASON_CONTRACT_NOT_YOURS       = "contract-not-yours"
 RCNS_REASON_CONTRACT_REVOKED         = "contract-revoked"
+#: [policies.rcns].require_verified_identity refused a request whose
+#: Agent-ID arrived without a verified mTLS client cert. Added
+#: alongside the governance/security hardening pass — see
+#: server.rcns_gate.try_rcns.
+RCNS_REASON_IDENTITY_UNVERIFIED      = "identity-unverified"
 
 ALL_RCNS_REFUSAL_REASONS = {
     RCNS_REASON_RCNS_DISABLED,
@@ -197,6 +204,7 @@ ALL_RCNS_REFUSAL_REASONS = {
     RCNS_REASON_SYNTHESIS_ERROR,
     RCNS_REASON_CONTRACT_NOT_YOURS,
     RCNS_REASON_CONTRACT_REVOKED,
+    RCNS_REASON_IDENTITY_UNVERIFIED,
 }
 
 #: Type codes carried on a 262 Authorization Required response.
@@ -1001,6 +1009,92 @@ def not_found(
     )
 
 
+# -- 410 Gone / 503 Unavailable (agent lifecycle enforcement) ---------
+#
+# Added alongside the dispatch-time lifecycle gate in
+# ``server.methods._agent_lifecycle_gate``. Previously ``retired`` /
+# ``suspended`` were recorded on ``AgentDocument.status`` and emitted
+# as signed lifecycle receipts, but nothing on the request path
+# consulted that field before dispatching — a revoked or suspended
+# Agent-ID continued to be served normally. See the governance
+# evaluation (docs/security/agent-lifecycle-enforcement.md) for the
+# full writeup; these two helpers are what closes that gap.
+
+
+def gone(
+    agent_id: str,
+    *,
+    status: str = "retired",
+    status_changed_at: Optional[str] = None,
+    explanation: Optional[str] = None,
+) -> wire.AGTPResponse:
+    """
+    Wire-level "this Agent-ID is permanently retired" response.
+    Wire status: **410 Gone**.
+
+    Returned for ``status in {"retired", "deprecated"}``. Per
+    AGTP-LOG §2 the Agent-ID is never reused, so unlike most 410
+    responses this one is durable — the caller should stop retrying
+    and should not expect the identifier to ever resolve again.
+
+    ``DISCOVER`` / ``DESCRIBE`` and the lifecycle methods themselves
+    (``ACTIVATE`` / ``DEACTIVATE`` / ``REVOKE`` / ``REINSTATE`` /
+    ``DEPRECATE``) are exempt from this gate at the call site so a
+    caller can still learn *why* it's being refused and an operator
+    can still transition status; this helper only builds the
+    response for the methods that aren't exempt.
+    """
+    if explanation is None:
+        explanation = (
+            f"Agent-ID {agent_id} is {status} and permanently retired "
+            f"per AGTP-LOG §2. The identifier will not be reused."
+        )
+    body: Dict[str, Any] = {
+        "error": {
+            "code": "agent-revoked",
+            "agent_id": agent_id,
+            "status": status,
+            "explanation": explanation,
+        }
+    }
+    if status_changed_at:
+        body["error"]["status_changed_at"] = status_changed_at
+    return _build(GONE, body=body)
+
+
+def unavailable(
+    agent_id: str,
+    *,
+    status: str = "suspended",
+    status_changed_at: Optional[str] = None,
+    explanation: Optional[str] = None,
+) -> wire.AGTPResponse:
+    """
+    Wire-level "this Agent-ID is temporarily suspended" response.
+    Wire status: **503 Unavailable**.
+
+    Unlike :func:`gone`, this is reversible: an ``ACTIVATE`` call
+    (exempt from this gate) returns the agent to ``active`` and
+    dispatch resumes normally.
+    """
+    if explanation is None:
+        explanation = (
+            f"Agent-ID {agent_id} is currently {status}. Retry after "
+            f"the operator or the agent itself calls ACTIVATE."
+        )
+    body = {
+        "error": {
+            "code": "agent-suspended",
+            "agent_id": agent_id,
+            "status": status,
+            "explanation": explanation,
+        }
+    }
+    if status_changed_at:
+        body["error"]["status_changed_at"] = status_changed_at
+    return _build(UNAVAILABLE, body=body)
+
+
 # -- 405 Method Not Allowed --------------------------------------------
 
 
@@ -1139,6 +1233,7 @@ __all__ = [
     "DELEGATION_FAILURE",
     "ENDPOINT_GRAMMAR_VIOLATION",
     "FORBIDDEN",
+    "GONE",
     "GRAMMAR_VIOLATION",
     "METHOD_GRAMMAR_VIOLATION",
     "METHOD_NOT_ALLOWED",
@@ -1149,6 +1244,7 @@ __all__ = [
     "RCNS_CONTRACT_AVAILABLE",
     "RCNS_NO_CONTRACT",
     "SCOPE_VIOLATION",
+    "UNAVAILABLE",
     "UNPROCESSABLE",
     "ZONE_VIOLATION",
     # §7 PROPOSE vocabularies.
@@ -1172,6 +1268,7 @@ __all__ = [
     "RCNS_REASON_COMPOSITION_IMPOSSIBLE",
     "RCNS_REASON_CONTRACT_NOT_YOURS",
     "RCNS_REASON_CONTRACT_REVOKED",
+    "RCNS_REASON_IDENTITY_UNVERIFIED",
     "RCNS_REASON_RCNS_DISABLED",
     "RCNS_REASON_SYNTHESIS_ERROR",
     "RCNS_REASON_TRUST_TIER_INSUFFICIENT",
@@ -1193,6 +1290,7 @@ __all__ = [
     "credentials_missing",
     "delegation_failure",
     "endpoint_grammar_violation",
+    "gone",
     "insufficient_scope",
     "method_grammar_violation",
     "method_not_allowed",
@@ -1207,6 +1305,7 @@ __all__ = [
     "rcns_contract_available",
     "rcns_no_contract",
     "scope_violation",
+    "unavailable",
     "wildcards_refused",
     "zone_violation",
 ]

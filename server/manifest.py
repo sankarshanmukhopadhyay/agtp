@@ -170,6 +170,20 @@ def generate(
         catalog_versions_supported as _catalog_versions_supported,
     )
 
+    mtls_mode = str(getattr(config.mtls, "mode", "disabled") or "disabled").lower()
+    identity_binding = {
+        "disabled": "none",
+        "optional": "optional",
+        "required": "required",
+    }.get(mtls_mode, "none")
+    attribution_enabled = bool(config.audit.attribution_records_enabled)
+    if identity_binding == "none" and not attribution_enabled:
+        posture = "demo"
+    elif identity_binding == "required" and attribution_enabled:
+        posture = "hardened"
+    else:
+        posture = "mixed"
+
     now = utc_now_iso()
     return ServerManifest(
         agtp_version="1.0",
@@ -192,6 +206,13 @@ def generate(
         agent_disclosure=disclosure,
         hosted_agents=agent_list,
         agent_disclosure_notice=_disclosure_notice(disclosure),
+        security={"identity_binding": identity_binding},
+        assurance={
+            "identity_binding": identity_binding,
+            "attribution_records": attribution_enabled,
+            "anonymous_discovery": bool(config.policy.anonymous_discovery),
+            "posture": posture,
+        },
         policies=PolicyBlock(
             wildcards_accepted=config.policy.wildcards_accepted,
             anonymous_discovery=config.policy.anonymous_discovery,

@@ -209,6 +209,10 @@ class ServerManifest:
     hosted_agents: List[Dict[str, Any]] = field(default_factory=list)
     custom_methods: List[Dict[str, Any]] = field(default_factory=list)
     policies: Optional[PolicyBlock] = None
+    # Machine-readable disclosure of the live deployment posture.
+    # Additive and safe for older clients to ignore.
+    assurance: Optional[Dict[str, Any]] = None
+    security: Optional[Dict[str, Any]] = None
     apis: List[APIEndpoint] = field(default_factory=list)
     hosted_protocols: List[HostedProtocol] = field(default_factory=list)
     #: Phase-2 endpoint inventory: each entry is the
@@ -264,6 +268,10 @@ class ServerManifest:
             out["hosted_protocols"] = [
                 p.to_dict() for p in self.hosted_protocols
             ]
+        if self.security is not None:
+            out["security"] = dict(self.security)
+        if self.assurance is not None:
+            out["assurance"] = dict(self.assurance)
         if self.policies is not None:
             policies_dict = asdict(self.policies)
             # ``methods`` is the §8 sub-block; emit it only when
