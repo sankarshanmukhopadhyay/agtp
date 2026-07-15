@@ -23,12 +23,7 @@ design constraint (see ``operational/mod_merchant/hook.py``
 docstring: verification "must happen at the merchant edge, before
 the merchant-side application layer parses the request body").
 
-The in-memory store is a single-process reference implementation,
-suitable for a single-daemon deployment or local development. A
-production merchant running multiple daemon instances (or wanting
-durability across restarts) needs a shared backend — implement
-:class:`SeenJtiStore` against Redis, a database, etc.; the interface
-is intentionally narrow (two methods) so that's a small adapter.
+The module provides both a single-process in-memory reference store and a durable SQLite store for multi-process deployments on one host. Horizontally distributed deployments can implement `SeenJtiStore` against a shared database while preserving atomic check-and-record semantics.
 """
 
 from __future__ import annotations
@@ -130,4 +125,42 @@ class InMemorySeenJtiStore(SeenJtiStore):
 __all__ = [
     "InMemorySeenJtiStore",
     "SeenJtiStore",
+    "SQLiteSeenJtiStore",
 ]
+
+class SQLiteSeenJtiStore(SeenJtiStore):
+    """Durable, cross-process replay store backed by SQLite."""
+    def __init__(self, path: str) -> None:
+        import sqlite3
+        from pathlib import Path
+        self.path = Path(path).expanduser()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.path) as db:
+            db.execute("CREATE TABLE IF NOT EXISTS seen_jti(jti TEXT PRIMARY KEY, expires_at REAL NOT NULL)")
+
+    def _connect(self):
+        import sqlite3
+        db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA busy_timeout=10000")
+        return db
+
+    def seen(self, jti: str) -> bool:
+        now = time.time()
+        with self._connect() as db:
+            db.execute("DELETE FROM seen_jti WHERE expires_at<=?", (now,))
+            return db.execute("SELECT 1 FROM seen_jti WHERE jti=?", (jti,)).fetchone() is not None
+
+    def record(self, jti: str, *, ttl_seconds: int) -> None:
+        with self._connect() as db:
+            db.execute("INSERT OR REPLACE INTO seen_jti(jti,expires_at) VALUES (?,?)", (jti, time.time()+max(ttl_seconds,0)))
+
+    def check_and_record(self, jti: str, *, ttl_seconds: int) -> bool:
+        now = time.time()
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM seen_jti WHERE expires_at<=?", (now,))
+            if db.execute("SELECT 1 FROM seen_jti WHERE jti=?", (jti,)).fetchone():
+                db.execute("COMMIT"); return True
+            db.execute("INSERT INTO seen_jti(jti,expires_at) VALUES (?,?)", (jti, now+max(ttl_seconds,0)))
+            db.execute("COMMIT"); return False

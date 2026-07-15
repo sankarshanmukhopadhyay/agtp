@@ -195,6 +195,59 @@ def walk_chain(
     return result
 
 
+
+def discover_recoverable_heads(records_root: Path) -> Dict[str, tuple[str, str]]:
+    """Infer one safe chain tip per agent from persisted JWS records.
+
+    An agent is returned only when it has exactly one unreferenced tip and the
+    complete chain from that tip reaches genesis without cycles or missing links.
+    """
+    records: Dict[str, tuple[Dict[str, Any], str]] = {}
+    referenced: Dict[str, set[str]] = {}
+    by_agent: Dict[str, set[str]] = {}
+    for path in records_root.glob("*/*.jws"):
+        audit_id = path.stem
+        try:
+            _h, payload, _s = parse_attribution_record(path.read_text(encoding="ascii"))
+        except Exception:
+            continue
+        agent_id = str(payload.get("agent_id") or "")
+        if not agent_id:
+            continue
+        records[audit_id] = (payload, str(payload.get("issued_at") or ""))
+        by_agent.setdefault(agent_id, set()).add(audit_id)
+        prev = str(payload.get("previous_audit_id") or GENESIS_SENTINEL)
+        if prev != GENESIS_SENTINEL:
+            referenced.setdefault(agent_id, set()).add(prev)
+    out: Dict[str, tuple[str, str]] = {}
+    for agent_id, ids in by_agent.items():
+        tips = ids - referenced.get(agent_id, set())
+        if len(tips) != 1:
+            continue
+        tip = next(iter(tips)); cur = tip; seen=set(); safe=False
+        while cur not in seen and cur in records:
+            seen.add(cur); payload, _at = records[cur]
+            if str(payload.get("agent_id") or "") != agent_id:
+                break
+            prev = str(payload.get("previous_audit_id") or GENESIS_SENTINEL)
+            if prev == GENESIS_SENTINEL:
+                safe=True; break
+            cur=prev
+        if safe and seen == ids:
+            out[agent_id] = (tip, records[tip][1])
+    return out
+
+def repair_heads(*, chain_head_root: Path, records_root: Path) -> Dict[str, str]:
+    """Write only unambiguous heads inferred by ``discover_recoverable_heads``."""
+    store = AuditChainStore(chain_head_root)
+    repaired: Dict[str, str] = {}
+    for agent_id, (audit_id, at_iso) in discover_recoverable_heads(records_root).items():
+        current = store.head(agent_id)
+        if current is None or current.audit_id != audit_id:
+            store.write(agent_id, audit_id, at_iso)
+            repaired[agent_id] = audit_id
+    return repaired
+
 def run(
     *,
     chain_head_root: Path,
@@ -254,6 +307,10 @@ def build_parser() -> argparse.ArgumentParser:
              "structure).",
     )
     parser.add_argument(
+        "--repair-heads", action="store_true",
+        help="Rebuild missing/stale head pointers only when records prove a single complete chain.",
+    )
+    parser.add_argument(
         "--json", action="store_true", dest="json_output",
         help="Emit machine-readable JSON instead of a text report.",
     )
@@ -294,7 +351,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         else default_records_root()
     )
 
+    repaired = {}
     try:
+        if args.repair_heads:
+            repaired = repair_heads(chain_head_root=chain_head_root, records_root=records_root)
         results = run(
             chain_head_root=chain_head_root,
             records_root=records_root,
@@ -315,6 +375,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"chain_head_root: {chain_head_root}")
         print(f"records_root:    {records_root}")
         print(render_text(results), end="")
+        if repaired:
+            print(f"repaired_heads: {len(repaired)}")
 
     summary = (
         f"chain_integrity_check.py: {agents_checked} agents, "
@@ -333,6 +395,8 @@ __all__ = [
     "discover_agent_ids",
     "main",
     "render_text",
+    "discover_recoverable_heads",
+    "repair_heads",
     "run",
     "walk_chain",
 ]

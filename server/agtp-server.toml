@@ -173,3 +173,8 @@ protocol = "openapi"
 version  = "3.1"
 endpoint = "https://api.agtp.io"
 catalog  = "https://api.agtp.io/openapi.json"
+
+# Durable RCNS coordination for multi-process deployments on one host:
+# [policies.rcns]
+# state_backend = "sqlite"
+# state_path = "~/.agtp/rcns-state.sqlite3"

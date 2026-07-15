@@ -17,6 +17,14 @@ gateway-protocol majors (see
 Minor bumps add features; patch bumps fix bugs or clarify
 documentation.
 
+## [0.2.0] — 2026-07-15
+
+### Security
+
+- Added durable SQLite RCNS rate-limit and idempotency state.
+- Added durable Intent Assertion replay consumption for `mod_merchant`.
+- Added fail-safe audit chain-head reconstruction tooling.
+
 ## [Unreleased]
 
 ### Added — Phase C: DaemonClient (sign_request + outbound_call)

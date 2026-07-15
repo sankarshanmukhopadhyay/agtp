@@ -641,6 +641,8 @@ class RcnsConfig:
     idempotency_window_seconds: int = 60
     on_policy_change: str = "grandfather"
     require_verified_identity: bool = False
+    state_backend: str = "memory"
+    state_path: str = ""
 
     def __post_init__(self) -> None:
         if self.min_trust_tier not in (1, 2, 3):
@@ -658,6 +660,8 @@ class RcnsConfig:
                 f"rcns.idempotency_window_seconds must be >= 0 (got "
                 f"{self.idempotency_window_seconds!r})"
             )
+        if self.state_backend not in ("memory", "sqlite"):
+            raise ValueError("rcns.state_backend must be memory or sqlite")
         if self.on_policy_change not in ("grandfather", "invalidate"):
             raise ValueError(
                 f"rcns.on_policy_change must be 'grandfather' or "
@@ -1115,6 +1119,8 @@ def load(path: Optional[Path], *, host: Optional[str] = None) -> ServerConfig:
         require_verified_identity=bool(
             rcns_block.get("require_verified_identity", True)
         ),
+        state_backend=str(rcns_block.get("state_backend") or "memory"),
+        state_path=str(rcns_block.get("state_path") or ""),
     )
 
     # OAuth composition: [policies.oauth] block, defaults to off so

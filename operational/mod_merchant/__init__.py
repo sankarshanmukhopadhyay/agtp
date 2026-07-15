@@ -4,9 +4,9 @@ import os
 from pathlib import Path
 from typing import Any
 from mod_merchant.hook import MerchantHook
-from mod_merchant.replay_store import InMemorySeenJtiStore, SeenJtiStore
+from mod_merchant.replay_store import InMemorySeenJtiStore, SQLiteSeenJtiStore, SeenJtiStore
 
-__all__ = ["InMemorySeenJtiStore", "MerchantHook", "SeenJtiStore", "install"]
+__all__ = ["InMemorySeenJtiStore", "SQLiteSeenJtiStore", "MerchantHook", "SeenJtiStore", "install"]
 
 def _load_public_key(path: str):
     from cryptography.hazmat.primitives import serialization
@@ -35,9 +35,13 @@ def install(server_state: Any) -> None:
             "explicit legacy/development operation"
         )
     public_key = _load_public_key(key_path) if key_path else None
+    replay_path = os.environ.get(
+        "AGTP_MOD_MERCHANT_REPLAY_DB",
+        str(Path.home() / ".agtp" / "merchant-replay.sqlite3"),
+    )
     hook = MerchantHook(
         strict=strict,
-        jti_store=InMemorySeenJtiStore(),
+        jti_store=SQLiteSeenJtiStore(replay_path),
         intent_public_key=public_key,
         require_intent_assertion=not allow_unverified,
     )

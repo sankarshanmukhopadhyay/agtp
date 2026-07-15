@@ -891,6 +891,6 @@ the IETF. Issues and discussion welcome. Implementation reports —
 Chris Hood — chris@nomotic.ai
 
 
-## v0.1.0 security baseline
+## v0.2.0 deferred security controls completion
 
-See [`RELEASE_NOTES_v0.1.0.md`](RELEASE_NOTES_v0.1.0.md) for the consolidated lifecycle, assurance, Intent Assertion, RCNS, OAuth, and audit-chain hardening changes.
+See [`RELEASE_NOTES_v0.2.0.md`](RELEASE_NOTES_v0.2.0.md) for durable Intent Assertion replay prevention, shared RCNS state, safe audit-chain recovery, strict OAuth posture, and wire-path enforcement evidence. The original baseline remains documented in [`RELEASE_NOTES_v0.1.0.md`](RELEASE_NOTES_v0.1.0.md).

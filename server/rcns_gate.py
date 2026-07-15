@@ -105,6 +105,20 @@ _IDEMPOTENCY_CACHE: Dict[Tuple[str, str], Tuple[str, float]] = {}
 _RCNS_ATTEMPT_BUFFER_LIMIT: int = 200
 _RCNS_ATTEMPTS: Dict[str, Dict[str, Any]] = {}
 _RCNS_ATTEMPT_ORDER: List[str] = []
+_SQLITE_STORES: Dict[str, Any] = {}
+
+def _durable_store(cfg):
+    if getattr(cfg, "state_backend", "memory") != "sqlite":
+        return None
+    from pathlib import Path
+    from server.rcns_state import SQLiteRcnsStateStore
+    path = getattr(cfg, "state_path", "") or str(Path.home() / ".agtp" / "rcns-state.sqlite3")
+    with _LOCK:
+        store = _SQLITE_STORES.get(path)
+        if store is None:
+            store = SQLiteRcnsStateStore(path)
+            _SQLITE_STORES[path] = store
+        return store
 
 
 def _now() -> float:
@@ -397,10 +411,10 @@ def try_rcns(
     # Rate limit — applies once all four locks are open. Returns
     # 429 with scope="rcns" so the caller can distinguish negotiation
     # throttling from ordinary request throttling.
-    if _rate_limited(
-        agent_doc.agent_id,
-        rcns_cfg.max_negotiations_per_minute,
-    ):
+    durable = _durable_store(rcns_cfg)
+    limited = (durable.consume(agent_doc.agent_id, limit=rcns_cfg.max_negotiations_per_minute, now=_now())
+               if durable is not None else _rate_limited(agent_doc.agent_id, rcns_cfg.max_negotiations_per_minute))
+    if limited:
         body = {
             "error": {
                 "code": "rate-limited",
@@ -429,10 +443,9 @@ def try_rcns(
     idem_key = wire.read_idempotency_key(request) or ""
     cached_sid: Optional[str] = None
     if idem_key:
-        cached_sid = _idempotent_lookup(
-            agent_doc.agent_id, idem_key,
-            window_seconds=rcns_cfg.idempotency_window_seconds,
-        )
+        cached_sid = (durable.get_idempotency(agent_doc.agent_id, idem_key, now=_now())
+                      if durable is not None else _idempotent_lookup(
+                          agent_doc.agent_id, idem_key, window_seconds=rcns_cfg.idempotency_window_seconds))
 
     runtime = getattr(server_state, "synthesis_runtime", None)
     if runtime is None:
@@ -500,7 +513,8 @@ def try_rcns(
             # Synthesis runtime crashed — surface a structured 464 so
             # the operator can find this in the audit record rather
             # than chasing a 500.
-            _record_negotiation(agent_doc.agent_id, now=_now())
+            if durable is None:
+                _record_negotiation(agent_doc.agent_id, now=_now())
             attempt_id = _record_attempt(
                 agent_id=agent_doc.agent_id, method=method, path=path,
                 reason=_status.RCNS_REASON_SYNTHESIS_ERROR,
@@ -530,7 +544,8 @@ def try_rcns(
         # Record the negotiation regardless of outcome — composition
         # cost was paid whether or not a plan was produced. This is
         # the rate-limit signal.
-        _record_negotiation(agent_doc.agent_id, now=_now())
+        if durable is None:
+            _record_negotiation(agent_doc.agent_id, now=_now())
 
         if plan is None:
             attempt_id = _record_attempt(
@@ -580,10 +595,10 @@ def try_rcns(
         )
 
         if idem_key:
-            _idempotent_record(
-                agent_doc.agent_id, idem_key, synthesis_id,
-                window_seconds=rcns_cfg.idempotency_window_seconds,
-            )
+            if durable is not None:
+                durable.put_idempotency(agent_doc.agent_id, idem_key, synthesis_id, expires_at=_now() + rcns_cfg.idempotency_window_seconds)
+            else:
+                _idempotent_record(agent_doc.agent_id, idem_key, synthesis_id, window_seconds=rcns_cfg.idempotency_window_seconds)
 
         # RCNS-4: write a durable ``rcns_propose_accepted`` event
         # onto the agent's lifecycle stream so the negotiation is
