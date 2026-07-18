@@ -99,7 +99,6 @@ agtp/
 │    and the MCP bridge live in their own external repos. See
 │    "External repos" in NAMING.md.)
 │
-├── ietf/                 IETF Internet-Draft sources
 ├── docs/                 deployment + cross-platform notes
 ├── tests/                cross-product test suite
 ├── samples/              reference handler programs for each runtime
@@ -877,8 +876,7 @@ Deliberate scope cuts, listed for future revisions:
 
 ## License and IPR
 
-The core protocol specification is open and royalty-free. See
-[`ietf/`](ietf/) for the Internet-Drafts and their IPR sections.
+The core protocol specification is open and royalty-free. The Internet-Drafts and their IPR sections are maintained through the IETF Datatracker; this repository contains the reference implementation and supporting technical documentation.
 
 ## Contributing
 
@@ -894,3 +892,16 @@ Chris Hood — chris@nomotic.ai
 ## v0.2.0 deferred security controls completion
 
 See [`RELEASE_NOTES_v0.2.0.md`](RELEASE_NOTES_v0.2.0.md) for durable Intent Assertion replay prevention, shared RCNS state, safe audit-chain recovery, strict OAuth posture, and wire-path enforcement evidence. The original baseline remains documented in [`RELEASE_NOTES_v0.1.0.md`](RELEASE_NOTES_v0.1.0.md).
+
+## Documentation website
+
+All repository Markdown, including component documentation, architecture notes, changelogs, and release evidence, is publishable through GitHub Pages. The publication pipeline validates local links, stages Markdown deterministically, and runs MkDocs in strict mode before deployment.
+
+```bash
+python -m pip install -r requirements-docs.txt
+python scripts/check_markdown_links.py
+python scripts/stage_docs.py
+mkdocs build --strict
+```
+
+See [Documentation status and publication model](docs/documentation-status.md) and the [deferred-work register](docs/deferred-work-register.md) for coverage, authority, completion boundaries, and evidence requirements.

@@ -236,7 +236,7 @@ synthesized a contract for an unregistered `(method, path)` and is
 offering a preview before execution. The body carries the proposed
 contract plus a `proposed_synthesis_id` the agent presents via
 `Synthesis-Id` to actually invoke. See
-[Endpoint tiers — Tier C](endpoint-tiers.md#tier-c--rcns-negotiated-layer-future).
+[Endpoint tiers — Tier C](endpoint-tiers.md#tier-c-rcns-negotiated-layer-future).
 
 ### 464 RCNS No Contract
 

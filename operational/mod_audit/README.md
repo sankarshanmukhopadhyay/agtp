@@ -16,8 +16,7 @@ loads a private key; setting `AGTP_AUDIT_SIGN_RECEIPTS=1` tells
 flatten the payload to the top level (the v1 shape, retained for
 operators who haven't enabled signing yet).
 
-The full **AGTP-LOG** specification ([draft-hood-agtp-log-00](../../ietf/draft-hood-agtp-log-00.md))
-calls for COSE_Sign1 receipts written to a SCITT-style transparency
+The full **AGTP-LOG** Internet-Draft calls for COSE_Sign1 receipts written to a SCITT-style transparency
 log. The current Ed25519-over-canonical-JSON shape is the bridge —
 same key material, same signing service — until the COSE/SCITT
 wrapper lands. Existing signed entries replay-verify trivially

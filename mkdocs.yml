@@ -1,0 +1,99 @@
+site_name: Agent Transfer Protocol (AGTP)
+site_description: Reference implementation, architecture, operations, and assurance documentation for AGTP
+repo_url: https://github.com/nomoticai/agtp
+repo_name: nomoticai/agtp
+edit_uri: edit/main/
+docs_dir: .pages-src
+site_dir: site
+strict: true
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+nav:
+  - Home: index.md
+  - Project governance:
+      - Naming and terminology: NAMING.md
+      - Documentation status: docs/documentation-status.md
+      - Deferred-work register: docs/deferred-work-register.md
+  - Protocol documentation:
+      - Method validation: docs/methods.md
+      - Path grammar: docs/path-grammar.md
+      - URI forms: docs/uri-forms.md
+      - Wire format: docs/wire-format.md
+      - Endpoint tiers: docs/endpoint-tiers.md
+      - Endpoint TOML: docs/endpoint-toml.md
+      - Catalog evolution: docs/catalog-evolution.md
+      - PROPOSE and synthesis: docs/propose.md
+      - RCNS: docs/rcns.md
+      - OAuth and OIDC composition: docs/oauth-composition.md
+      - AGTP dimensions mapping: docs/agtp-dimensions-mapping.md
+  - Implementation:
+      - Handler API: docs/handler-api.md
+      - Composition handlers: docs/composition-handlers.md
+      - External-service handlers: docs/external-service-handlers.md
+      - OpenAPI import: docs/openapi-import.md
+      - Deployment: docs/DEPLOY.md
+      - Cross-platform smoke tests: docs/cross-platform-smoke.md
+      - Security hardening: docs/security-hardening.md
+  - Architecture:
+      - Server and modules: docs/architecture/server-modules.md
+      - Gateway protocol: docs/architecture/gateway-protocol.md
+      - Built-in endpoints: server/builtins.md
+      - Synthesis runtime: server/synthesis/README.md
+  - Clients and runtimes:
+      - CLI client: client/cli/README.md
+      - Elemen client: client/elemen/README.md
+  - Operational modules:
+      - Agent certificate: operational/mod_agent_cert/README.md
+      - Audit: operational/mod_audit/README.md
+      - Cache: operational/mod_cache/README.md
+      - HTTP gateway: operational/mod_http_gateway/README.md
+      - Merchant: operational/mod_merchant/README.md
+      - Proxy: operational/mod_proxy/README.md
+  - Tools:
+      - Chain inspector: tools/chain_inspector/README.md
+      - Registrar: tools/registrar/README.md
+  - Changelogs and releases:
+      - AGTP changelog: agtp/CHANGELOG.md
+      - Schema changelog: core/schemas/CHANGELOG.md
+      - Schema package: core/schemas/README.md
+      - Agent certificate changelog: operational/mod_agent_cert/CHANGELOG.md
+      - Audit changelog: operational/mod_audit/CHANGELOG.md
+      - Cache changelog: operational/mod_cache/CHANGELOG.md
+      - Merchant changelog: operational/mod_merchant/CHANGELOG.md
+      - Proxy changelog: operational/mod_proxy/CHANGELOG.md
+      - v0.2.0 release notes: RELEASE_NOTES_v0.2.0.md
+      - Security hardening notes: RELEASE_NOTES_SECURITY_HARDENING.md
+      - v0.1.0 release notes: RELEASE_NOTES_v0.1.0.md

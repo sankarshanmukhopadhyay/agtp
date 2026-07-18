@@ -50,7 +50,7 @@ The following table maps each AGTP family document to the substrate facets ident
 | Audit | draft-hood-agtp-identifiers (ten-identifier tamper-evident model with per-agent hash chain); draft-hood-agtp-log (append-only transparency log aligned with RFC 9162 and RFC 9943) | Specified, In work |
 | Security channel | draft-hood-agtp-bindings (TLS 1.3 with mTLS); draft-hood-agtp-agent-cert (mutual TLS binding to Canonical Agent-ID; O(1) scope enforcement at Scope Enforcement Points) | Specified, Implemented |
 | Trust and verification | draft-hood-agtp-trust (three trust tiers, four verification paths, trust_score field with normative range and freshness) | Specified, In work |
-| Authorization derivation | draft-hood-independent-agtp (Delegation-Chain header, Authority-Scope narrowing); draft-hood-agtp-agent-cert (attenuated authority in certificate lifecycle) | Specified, Implemented (Delegation-Chain pre-authorization semantics targeted for v10) |
+| Authorization derivation | draft-hood-independent-agtp (Delegation-Chain header, Authority-Scope narrowing); draft-hood-agtp-agent-cert (attenuated authority in certificate lifecycle) | Specified, Implemented (Delegation-Chain pre-authorization semantics targeted for the v10 draft revision) |
 | Session semantics | draft-hood-agtp-session (bounded and persistent sessions inheriting identity, authority, and attribution) | Specified |
 | Real-time communication | draft-hood-agtp-communication (multi-modal voice, video, and structured streams on the agent-native substrate) | Specified |
 | Content addressability | draft-hood-independent-agtp (Attribution-Record referenceable via Audit-ID); draft-hood-agtp-identifiers (extended identifier chain including Response-ID, Action-ID) | Specified, In work |
@@ -106,7 +106,7 @@ The referenced draft asks whether a mediator receiving an inbound request and is
 
 AGTP position: preserve. The Delegation-Chain header in draft-hood-independent-agtp carries each hop as an appended cryptographically signed record with progressive Authority-Scope narrowing and cryptographic parent reference. A receiving agent evaluates lineage independently of trusting any intermediate. A mediator that terminates the chain and presents its own credentials is a supported deployment choice but is discouraged in AGTP where the mediator's own identity would then appear as the originating party in the receiver's attribution record. The two behaviours are distinguishable at the receiver via the Delegation-Chain header.
 
-Related work in the community: draft-rampalli-pedigree defines similar chain semantics with a pre-authorization model. AGTP v10, in progress, formalizes pre-authorization semantics for Delegation-Chain and cross-references PEDIGREE where the mechanics align.
+Related work in the community: draft-rampalli-pedigree defines similar chain semantics with a pre-authorization model. the AGTP v10 draft revision, in progress, formalizes pre-authorization semantics for Delegation-Chain and cross-references PEDIGREE where the mechanics align.
 
 ### 6.2 Realization of long-running interactions on D3
 
@@ -138,7 +138,7 @@ The referenced draft records several candidate dimensions set aside pending evid
 
 AGTP observations:
 
-- Delegation transitivity is addressed by draft-hood-agtp-agent-cert and Delegation-Chain semantics. AGTP's Delegation-Chain records lineage continuity across hops; the pre-authorization work in AGTP v10 addresses cumulative behavior across the chain. If future revisions of the dimensional model add a chain-scoped dimension, AGTP has specified mechanisms available for characterization.
+- Delegation transitivity is addressed by draft-hood-agtp-agent-cert and Delegation-Chain semantics. AGTP's Delegation-Chain records lineage continuity across hops; the pre-authorization work in the AGTP v10 draft revision addresses cumulative behavior across the chain. If future revisions of the dimensional model add a chain-scoped dimension, AGTP has specified mechanisms available for characterization.
 - Mediation role is addressed at the substrate through Attribution-Record chain semantics: forwarding, translating, and validating mediators leave distinct traces in the attribution record without requiring a dimension.
 - Modality profile is addressed by draft-hood-agtp-communication at the extension level (EXT-MODNEG).
 
@@ -148,7 +148,7 @@ The referenced draft records that concerns whose scope is a delegation lineage, 
 
 AGTP position: several of these are addressed at the AGTP substrate and are candidate content for a companion document.
 
-- **Cumulative behavioral bounds across a delegation chain**: draft-hood-agtp-agent-cert Authority-Scope carries per-hop scope that narrows monotonically; the receiver evaluates cumulative scope by intersecting scopes across the Delegation-Chain. AGTP v10 formalizes pre-authorization semantics for the cumulative bound.
+- **Cumulative behavioral bounds across a delegation chain**: draft-hood-agtp-agent-cert Authority-Scope carries per-hop scope that narrows monotonically; the receiver evaluates cumulative scope by intersecting scopes across the Delegation-Chain. the AGTP v10 draft revision formalizes pre-authorization semantics for the cumulative bound.
 - **Source-asserted constraints carried with data across subsequent crossings**: draft-hood-agtp-identifiers Attribution-Records carry source-asserted claims cryptographically bound to the originating Agent-ID. Constraints propagate with the data across crossings via the record chain.
 - **Revocation freshness with lineage**: draft-hood-agtp-trust defines freshness on trust_score; draft-hood-agtp-log provides transparency-log receipts with defined freshness bounds. Revocation propagation across a lineage is the seam between these two, and is a candidate area for coordination with SCITT.
 

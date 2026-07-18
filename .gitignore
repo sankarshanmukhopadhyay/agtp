@@ -207,3 +207,7 @@ TODO.md
 SCRATCH.md
 *.scratch
 *.local
+
+# Documentation build products
+.pages-src/
+site/

@@ -689,8 +689,7 @@ conformance by:
 8. Refusing a `register` frame whose handler reference does not
    resolve, with a structured `register_ack` failure.
 
-Reference frame samples for each step are in
-[`tests/gateway/vectors/`](../../tests/gateway/vectors/).
+Executable coverage for these steps is maintained in the gateway protocol, server, resume, phase-C, and cross-runtime tests under `tests/`.
 
 ## 14. Optional capabilities
 
