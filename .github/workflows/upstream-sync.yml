@@ -44,7 +44,9 @@ jobs:
           git fetch --no-tags upstream-readonly "$BRANCH"
           target="${REQUESTED_REF:-upstream-readonly/$BRANCH}"
           if [ -n "$REQUESTED_REF" ]; then git fetch --no-tags upstream-readonly "$REQUESTED_REF"; fi
-          sha="$(git rev-parse "$target")"; sync_branch="automation/upstream-sync-${sha:0:12}"; git switch -c "$sync_branch"
+          sha="$(git rev-parse "$target")"
+          sync_branch="automation/upstream-sync-${sha:0:12}"
+          git switch -c "$sync_branch"
           set +e; git merge --no-ff --no-commit "$sha"; status=$?; set -e
           if [ $status -ne 0 ]; then
             git merge --abort
@@ -53,8 +55,19 @@ jobs:
           git commit -m "chore(upstream): merge ${UPSTREAM}@${sha:0:12}"
           python3 -c "import json,datetime;p='.upstream/checkpoint.json';d=json.load(open(p));d['lastReviewedCommit']='$sha';d['reviewedAt']=datetime.datetime.now(datetime.timezone.utc).isoformat();json.dump(d,open(p,'w'),indent=2);open(p,'a').write('\\n')"
           git add .upstream/checkpoint.json; git commit --amend --no-edit
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${sync_branch}"
-          echo "conflict=false" >> "$GITHUB_OUTPUT"; echo "branch=$sync_branch" >> "$GITHUB_OUTPUT"; echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          remote_ref="refs/heads/${sync_branch}"
+          existing_tip="$(git ls-remote --heads "$remote_url" "$remote_ref" | awk '{print $1}')"
+          if [ -n "$existing_tip" ]; then
+            # The branch is workflow-owned. Update it only if its remote tip still
+            # matches the value observed above, protecting concurrent or manual edits.
+            git push --force-with-lease="${remote_ref}:${existing_tip}" "$remote_url" "HEAD:${remote_ref}"
+          else
+            git push "$remote_url" "HEAD:${remote_ref}"
+          fi
+          echo "conflict=false" >> "$GITHUB_OUTPUT"
+          echo "branch=$sync_branch" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - if: steps.merge.outputs.conflict == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,6 +76,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          head_branch="${{ steps.merge.outputs.branch }}"
+          title="chore(upstream): sync ${{ steps.policy.outputs.upstream }}@${{ steps.merge.outputs.sha }}"
           cat > /tmp/body.md <<EOF
           ## Governed upstream synchronisation
           - Upstream: `${{ steps.policy.outputs.upstream }}`
@@ -76,4 +92,11 @@ jobs:
           - [ ] Pages/build checks pass
           - [ ] No action writes to upstream
           EOF
-          gh pr create --repo "$GITHUB_REPOSITORY" --base "${GITHUB_REF_NAME:-main}" --head "${{ steps.merge.outputs.branch }}" --title "chore(upstream): sync ${{ steps.policy.outputs.upstream }}@${{ steps.merge.outputs.sha }}" --body-file /tmp/body.md --draft
+
+          existing_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --head "$head_branch" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing_pr" ]; then
+            gh pr edit "$existing_pr" --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/body.md
+            echo "Updated existing draft PR #${existing_pr}."
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base "${GITHUB_REF_NAME:-main}" --head "$head_branch" --title "$title" --body-file /tmp/body.md --draft
+          fi
