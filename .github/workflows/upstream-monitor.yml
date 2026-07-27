@@ -1,0 +1,42 @@
+name: Upstream drift monitor
+on:
+  schedule:
+    - cron: "17 6 */10 * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: upstream-drift-monitor
+  cancel-in-progress: false
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: drift
+        run: python3 scripts/check_upstream_drift.py
+      - run: python3 scripts/validate_upstream_policy.py
+      - if: steps.drift.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-drift-evidence
+          path: |
+            .upstream/checkpoint.json
+            .upstream/drift-report.md
+      - name: Create or update drift issue in this fork
+        if: steps.drift.outputs.drift == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "Upstream drift: ${{ steps.drift.outputs.upstream }}"
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          existing="$(gh issue list --repo "$repo" --state open --label upstream-drift --json number --jq '.[0].number // empty')"
+          printf '\n## Required action\n\nRun **Upstream synchronisation** manually. Review protected paths and merge only after all repository checks pass.\n' >> .upstream/drift-report.md
+          gh label create upstream-drift --repo "$repo" --description "Automated upstream divergence" --color B60205 --force
+          gh label create governance-review --repo "$repo" --description "Requires governance review" --color D4C5F9 --force
+          if [ -n "$existing" ]; then gh issue edit "$existing" --repo "$repo" --title "$TITLE" --body-file .upstream/drift-report.md
+          else gh issue create --repo "$repo" --title "$TITLE" --body-file .upstream/drift-report.md --label upstream-drift,governance-review; fi

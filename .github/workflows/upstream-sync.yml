@@ -1,0 +1,79 @@
+name: Upstream synchronisation
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: Optional upstream commit or ref
+        required: false
+        type: string
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+concurrency:
+  group: upstream-synchronisation
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/validate_upstream_policy.py
+          enabled="$(sed -nE 's/^enabled:[[:space:]]*(true|false).*/\1/p' .github/upstream-tracking.yml | head -1)"
+          upstream="$(sed -nE 's/^[[:space:]]*repository:[[:space:]]*([^#[:space:]]+).*/\1/p' .github/upstream-tracking.yml | head -1)"
+          branch="$(sed -nE 's/^[[:space:]]*branch:[[:space:]]*([^#[:space:]]+).*/\1/p' .github/upstream-tracking.yml | head -1)"
+          test "$enabled" = true; test -n "$upstream"; test -n "$branch"; test "${upstream,,}" != "${GITHUB_REPOSITORY,,}"
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"; echo "branch=$branch" >> "$GITHUB_OUTPUT"
+      - id: merge
+        env:
+          UPSTREAM: ${{ steps.policy.outputs.upstream }}
+          BRANCH: ${{ steps.policy.outputs.branch }}
+          REQUESTED_REF: ${{ inputs.upstream_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git remote add upstream-readonly "https://github.com/${UPSTREAM}.git"
+          git fetch --no-tags upstream-readonly "$BRANCH"
+          target="${REQUESTED_REF:-upstream-readonly/$BRANCH}"
+          if [ -n "$REQUESTED_REF" ]; then git fetch --no-tags upstream-readonly "$REQUESTED_REF"; fi
+          sha="$(git rev-parse "$target")"; sync_branch="automation/upstream-sync-${sha:0:12}"; git switch -c "$sync_branch"
+          set +e; git merge --no-ff --no-commit "$sha"; status=$?; set -e
+          if [ $status -ne 0 ]; then
+            git merge --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"; echo "sha=$sha" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          git commit -m "chore(upstream): merge ${UPSTREAM}@${sha:0:12}"
+          python3 -c "import json,datetime;p='.upstream/checkpoint.json';d=json.load(open(p));d['lastReviewedCommit']='$sha';d['reviewedAt']=datetime.datetime.now(datetime.timezone.utc).isoformat();json.dump(d,open(p,'w'),indent=2);open(p,'a').write('\\n')"
+          git add .upstream/checkpoint.json; git commit --amend --no-edit
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${sync_branch}"
+          echo "conflict=false" >> "$GITHUB_OUTPUT"; echo "branch=$sync_branch" >> "$GITHUB_OUTPUT"; echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue create --repo "$GITHUB_REPOSITORY" --title "Upstream sync conflict" --body "The governed upstream merge could not be prepared automatically. Resolve conflicts locally and preserve protected fork overlays." --label upstream-drift,governance-review
+      - if: steps.merge.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > /tmp/body.md <<EOF
+          ## Governed upstream synchronisation
+          - Upstream: `${{ steps.policy.outputs.upstream }}`
+          - Candidate: `${{ steps.merge.outputs.sha }}`
+          - Direction: upstream to this fork only
+          - Auto-merge: disabled
+
+          ## Review gates
+          - [ ] Protected local paths reviewed
+          - [ ] Existing repository checks pass
+          - [ ] Pages/build checks pass
+          - [ ] No action writes to upstream
+          EOF
+          gh pr create --repo "$GITHUB_REPOSITORY" --base "${GITHUB_REF_NAME:-main}" --head "${{ steps.merge.outputs.branch }}" --title "chore(upstream): sync ${{ steps.policy.outputs.upstream }}@${{ steps.merge.outputs.sha }}" --body-file /tmp/body.md --draft

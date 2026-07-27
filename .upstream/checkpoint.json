@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "upstreamRepository": "nomoticai/agtp",
+  "upstreamBranch": "main",
+  "lastObservedCommit": null,
+  "lastReviewedCommit": null,
+  "lastIntegratedCommit": null,
+  "integrationMethod": "merge",
+  "reviewedAt": null,
+  "reviewEvidence": {
+    "pullRequest": null,
+    "workflowRun": null
+  }
+}

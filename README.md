@@ -905,3 +905,8 @@ mkdocs build --strict
 ```
 
 See [Documentation status and publication model](docs/documentation-status.md) and the [deferred-work register](docs/deferred-work-register.md) for coverage, authority, completion boundaries, and evidence requirements.
+
+
+## Upstream synchronisation
+
+This maintained fork tracks [`nomoticai/agtp`](https://github.com/nomoticai/agtp) through a governed, one-way process. Scheduled monitoring raises drift issues here, while maintainers can prepare a draft merge-based synchronisation pull request against this fork. The automation cannot contribute, push, open issues or open pull requests against upstream. See [upstream synchronisation governance](docs/governance/upstream-synchronisation.md).

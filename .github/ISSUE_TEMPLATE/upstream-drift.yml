@@ -1,0 +1,20 @@
+name: Upstream drift review
+description: Record upstream divergence requiring governed review
+title: "Upstream drift: "
+labels: [upstream-drift, governance-review]
+body:
+  - type: markdown
+    attributes:
+      value: This form is for upstream-to-fork review only and does not authorise contribution upstream.
+  - type: input
+    id: upstream
+    attributes:
+      label: Upstream repository and commit
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Drift and fork impact
+    validations:
+      required: true
