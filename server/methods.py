@@ -1885,6 +1885,21 @@ def _lifecycle_transition(
                 file=_sys.stderr,
             )
 
+    # Post-transition hooks (M3): ANS registration/deregistration and any
+    # other side effects keyed on lifecycle. Best-effort — a hook failure
+    # (e.g. an ANS endpoint being unreachable) is logged but never fails
+    # the transition, whose in-memory mutation is already authoritative.
+    for hook in getattr(server_state, "lifecycle_hooks", None) or []:
+        try:
+            hook(agent_doc, event_type, new_status)
+        except Exception as exc:  # noqa: BLE001
+            import sys as _sys
+            print(
+                f"[server] lifecycle hook failed for "
+                f"{agent_doc.agent_id[:12]}... ({event_type}): {exc}",
+                file=_sys.stderr,
+            )
+
     # Emit lifecycle event when signing is configured. Failures here
     # are logged but don't fail the response — the state transition
     # is the source of truth; the audit stream is best-effort.
