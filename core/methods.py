@@ -87,6 +87,14 @@ LEGACY_VERBS: Set[str] = set(_METHODS_DOC["legacy"].keys())
 #: stable.
 ALL_PROTOCOL_VERBS: Set[str] = APPROVED_VERBS | EMBEDDED_VERBS
 
+#: AGTP-Presence lifecycle verbs (PDD §6.1). Already members of the
+#: curated catalog (``APPROVED_VERBS``); this named subset is what the
+#: coordinator's presence dispatch hook keys off to route ANNOUNCE /
+#: WITHDRAW / PROBE to :mod:`presence.methods` instead of the ordinary
+#: agent-targeted handler. Not part of ``EMBEDDED_VERBS`` — a plain
+#: agent server neither hosts a coordinator nor answers these.
+PRESENCE_VERBS: Set[str] = {"ANNOUNCE", "WITHDRAW", "PROBE"}
+
 
 def is_approved_verb(name: str) -> bool:
     """True when ``name`` is in the canonical AGTP verb list."""

@@ -3,10 +3,10 @@
   "upstreamRepository": "nomoticai/agtp",
   "upstreamBranch": "main",
   "lastObservedCommit": null,
-  "lastReviewedCommit": null,
+  "lastReviewedCommit": "90786c426782a986999eb55baccef33866cfc669",
   "lastIntegratedCommit": null,
   "integrationMethod": "merge",
-  "reviewedAt": null,
+  "reviewedAt": "2026-07-27T05:27:42.009606+00:00",
   "reviewEvidence": {
     "pullRequest": null,
     "workflowRun": null

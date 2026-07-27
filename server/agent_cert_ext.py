@@ -93,6 +93,7 @@ OID_TRUST_TIER                  = _provisional_oid("trust-tier")
 OID_ARCHETYPE                   = _provisional_oid("archetype")
 OID_ACTIVATION_CERTIFICATE_ID   = _provisional_oid("activation-certificate-id")
 OID_AGTP_CTL_SCT                = _provisional_oid("agtp-ctl-sct")
+OID_PRESENCE_VISIBILITY         = _provisional_oid("presence-visibility")
 
 
 CRITICAL_OIDS = frozenset({
@@ -167,6 +168,13 @@ class AgentCertExtensions:
     """Raw Signed Certificate Timestamp bytes (RFC 6962 §3.2). Parser
     surfaces the raw octet string; verification against an AGTP-CTL is
     deferred to a future phase."""
+
+    presence_visibility: Optional[str] = None
+    """The AGTP-Presence maximum visibility envelope, encoded as
+    ``presence_mode|disclosure_mode|audience_scope`` (PDD §6.1). This is
+    the *ceiling*: a runtime ANNOUNCE / ``Presence-Mode`` header may only
+    reduce visibility within it. ``None`` when the extension is absent
+    (no cert-declared ceiling; runtime posture stands on its own)."""
 
 
 class CertExtensionError(ValueError):
@@ -316,6 +324,47 @@ def add_agtp_ctl_sct(builder: x509.CertificateBuilder, sct_bytes: bytes) -> x509
     )
 
 
+VALID_PRESENCE_MODES = frozenset(
+    {"public", "tier-scoped", "owner-domain", "explicit-only", "invisible"}
+)
+VALID_DISCLOSURE_MODES = frozenset(
+    {"full", "capabilities", "identity-only", "existence-only"}
+)
+
+
+def add_presence_visibility(
+    builder: x509.CertificateBuilder,
+    *,
+    presence_mode: str,
+    disclosure_mode: str,
+    audience_scope: str = "",
+) -> x509.CertificateBuilder:
+    """
+    Declare the maximum AGTP-Presence visibility envelope on the cert.
+    Encoded ``presence_mode|disclosure_mode|audience_scope``; the audience
+    field may be empty but must not contain the ``|`` delimiter.
+    """
+    if presence_mode not in VALID_PRESENCE_MODES:
+        raise CertExtensionError(
+            f"presence_mode must be one of {sorted(VALID_PRESENCE_MODES)}; "
+            f"got {presence_mode!r}"
+        )
+    if disclosure_mode not in VALID_DISCLOSURE_MODES:
+        raise CertExtensionError(
+            f"disclosure_mode must be one of {sorted(VALID_DISCLOSURE_MODES)}; "
+            f"got {disclosure_mode!r}"
+        )
+    if "|" in (audience_scope or ""):
+        raise CertExtensionError("audience_scope must not contain '|'")
+    payload = f"{presence_mode}|{disclosure_mode}|{audience_scope or ''}"
+    return builder.add_extension(
+        x509.UnrecognizedExtension(
+            OID_PRESENCE_VISIBILITY, payload.encode("utf-8")
+        ),
+        critical=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Decoder — used by server.mtls.CertVerifier on every verified cert.
 # ---------------------------------------------------------------------------
@@ -352,6 +401,46 @@ def parse_extensions(cert: x509.Certificate) -> AgentCertExtensions:
             name="activation-certificate-id",
         ),
         agtp_ctl_sct=_parse_octets(by_oid.get(OID_AGTP_CTL_SCT)),
+        presence_visibility=_parse_utf8(
+            by_oid.get(OID_PRESENCE_VISIBILITY), name="presence-visibility",
+        ),
+    )
+
+
+def visibility_envelope_from_cert(source) -> Optional["object"]:
+    """
+    Extract the AGTP-Presence visibility envelope from a certificate as a
+    :class:`presence.records.Visibility`, or None when the extension is
+    absent.
+
+    ``source`` may be a :class:`server.mtls.VerifiedCert` (has
+    ``.extensions``), an :class:`AgentCertExtensions`, or a raw
+    :class:`x509.Certificate` (parsed on the fly). Kept here rather than
+    in ``presence`` so the cert-format knowledge stays in one module.
+    """
+    from presence.records import Visibility
+
+    exts: Optional[AgentCertExtensions] = None
+    if isinstance(source, AgentCertExtensions):
+        exts = source
+    elif hasattr(source, "extensions") and isinstance(
+        getattr(source, "extensions"), AgentCertExtensions
+    ):
+        exts = source.extensions
+    elif isinstance(source, x509.Certificate):
+        exts = parse_extensions(source)
+
+    if exts is None or not exts.presence_visibility:
+        return None
+
+    parts = exts.presence_visibility.split("|", 2)
+    presence_mode = parts[0] if len(parts) > 0 and parts[0] else "public"
+    disclosure_mode = parts[1] if len(parts) > 1 and parts[1] else "capabilities"
+    audience_scope = parts[2] if len(parts) > 2 else ""
+    return Visibility(
+        presence_mode=presence_mode,
+        disclosure_mode=disclosure_mode,
+        audience_scope=audience_scope,
     )
 
 
@@ -481,18 +570,23 @@ __all__ = [
     "OID_ARCHETYPE",
     "OID_AUTHORITY_SCOPE_COMMITMENT",
     "OID_GOVERNANCE_ZONE",
+    "OID_PRESENCE_VISIBILITY",
     "OID_PRINCIPAL_ID",
     "OID_SUBJECT_AGENT_ID",
     "OID_TRUST_TIER",
     "VALID_ARCHETYPES",
+    "VALID_DISCLOSURE_MODES",
+    "VALID_PRESENCE_MODES",
     "VALID_TRUST_TIERS",
     "add_activation_certificate_id",
     "add_agtp_ctl_sct",
     "add_archetype",
     "add_authority_scope_commitment",
     "add_governance_zone",
+    "add_presence_visibility",
     "add_principal_id",
     "add_subject_agent_id",
     "add_trust_tier",
     "parse_extensions",
+    "visibility_envelope_from_cert",
 ]

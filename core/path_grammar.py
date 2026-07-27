@@ -48,6 +48,14 @@ DISCOVER_RESERVED_ROOTS = frozenset({
     # RCNS-4 observability surfaces:
     "patterns",   # what the server WILL negotiate on
     "contracts",  # what the server currently has bound
+    # Presence (PDD §14 Q1): the visible-population query answered by a
+    # coordinator/ANS, distinct from ``/agents`` (a single server's
+    # hosted inventory). Handled at the coordinator by the presence
+    # dispatch hook, not by the agent-targeted DISCOVER handler.
+    "population",
+    # Cross-scope rendezvous: the provider coordinators a rendezvous node
+    # knows for a scope (PDD §6.1 cross-scope resolution).
+    "providers",
 })
 
 

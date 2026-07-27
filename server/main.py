@@ -24,6 +24,7 @@ import socket
 import ssl
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -274,6 +275,48 @@ class AgentRegistry:
         # ``serve_manifest`` can reach it through the ServerState.
         from server.endpoint_registry import EndpointRegistry as _ER
         self.endpoint_registry = _ER()
+        # Presence coordinator state (M1). ``None`` on a plain agent
+        # server; set to a :class:`presence.store.PresenceStore` when the
+        # daemon boots with ``--presence`` (coordinator mode). The
+        # connection handler routes ANNOUNCE / WITHDRAW / PROBE and
+        # ``DISCOVER /population`` to the presence dispatch only when this
+        # is populated, so a non-coordinator server is byte-unaffected.
+        self.presence_store: Optional[Any] = None
+        # The coordinator's own reachable endpoint ("host:port"), recorded
+        # as the relay in each hosted agent's presence record. Never
+        # surfaced to discovery payloads.
+        self.presence_relay_endpoint: Optional[str] = None
+        # Peer full-node coordinators ("host:port") this coordinator
+        # gossips presence state with (M2). Empty = standalone.
+        self.presence_peers: List[str] = []
+        # When true, DISCOVER /population requires the discovery:query
+        # scope in Authority-Scope (M3, PDD §6.3). Off by default so
+        # anonymous discovery keeps working unless the operator opts in.
+        self.presence_require_discovery_scope: bool = False
+        # When true, gossiped records with an invalid/absent signature are
+        # dropped (M3). Off by default so mixed signed/unsigned
+        # deployments keep converging.
+        self.presence_verify_signatures: bool = False
+        # ANS mode (M3). ``ans_store`` holds a NameStore when this server
+        # is an Agent Name Service; ``ans_endpoints`` are the ANS servers
+        # this (agent-hosting) daemon submits REGISTER/DEREGISTER to on
+        # lifecycle transitions.
+        self.ans_store: Optional[Any] = None
+        self.ans_endpoints: List[str] = []
+        # Cross-ANS federation trust (M4). A FederationTrust of peer ANS
+        # servers this ANS may forward misses to.
+        self.federation_trust: Optional[Any] = None
+        self.federation_use_tls: bool = True
+        # Callbacks invoked after every lifecycle transition, as
+        # ``hook(agent_doc, event_type, new_status)``. The ANS
+        # registration wiring installs one here.
+        self.lifecycle_hooks: List[Any] = []
+        # DHT node (M4). A KademliaNode when this coordinator participates
+        # in the by-ID routing overlay; answers LOCATE / PING.
+        self.dht_node: Optional[Any] = None
+        # Rendezvous index (M4) for cross-scope resolution; a RendezvousIndex
+        # in coordinator mode.
+        self.rendezvous_index: Optional[Any] = None
         self._load()
 
     def configure_methods_policy(self, policy: "MethodsPolicy") -> None:
@@ -1104,6 +1147,42 @@ def handle_connection(
             request.headers["Agent-ID"] = resolved.agent_id
             request.path = "/"
 
+        # Presence coordinator hook (M1). When this server runs in
+        # coordinator mode (``registry.presence_store`` is set), route
+        # ANNOUNCE / WITHDRAW / PROBE and ``DISCOVER /population`` to the
+        # presence dispatch. ``maybe_handle_presence`` returns ``None``
+        # for anything it doesn't own, so a coordinator still hosts
+        # agents and answers DESCRIBE for them through the normal path
+        # below. On a plain agent server the store is ``None`` and this
+        # is a single cheap attribute check.
+        if getattr(registry, "presence_store", None) is not None:
+            from presence.methods import maybe_handle_presence
+            presence_resp = maybe_handle_presence(request, registry, config)
+            if presence_resp is not None:
+                _finalize_response(presence_resp, request, config)
+                conn.sendall(presence_resp.serialize())
+                return
+
+        # ANS hook (M3). When this server is an Agent Name Service, route
+        # RESOLVE / REGISTER / DEREGISTER to the name service. Like the
+        # presence hook it returns None for anything it doesn't own.
+        if getattr(registry, "ans_store", None) is not None:
+            from ans.methods import maybe_handle_ans
+            ans_resp = maybe_handle_ans(request, registry)
+            if ans_resp is not None:
+                _finalize_response(ans_resp, request, config)
+                conn.sendall(ans_resp.serialize())
+                return
+
+        # DHT hook (M4). LOCATE / PING for the by-ID routing overlay.
+        if getattr(registry, "dht_node", None) is not None:
+            from dht.methods import maybe_handle_dht
+            dht_resp = maybe_handle_dht(request, registry)
+            if dht_resp is not None:
+                _finalize_response(dht_resp, request, config)
+                conn.sendall(dht_resp.serialize())
+                return
+
         # Server-level DISCOVER: no Agent-ID header, method is
         # DISCOVER. Returns the Server Manifest. Does not require any
         # agent to advertise DISCOVER in its requires.methods.
@@ -1241,6 +1320,12 @@ def run(
     endpoints_dir: Optional[Path] = None,
     gateway_socket: Optional[str] = None,
     load_modules: Optional[List[str]] = None,
+    presence: bool = False,
+    presence_peers: Optional[List[str]] = None,
+    presence_require_scope: bool = False,
+    presence_verify_signatures: bool = False,
+    ans_mode: bool = False,
+    ans_endpoints: Optional[List[str]] = None,
 ) -> None:
     registry = AgentRegistry(agents_dir)
 
@@ -1455,6 +1540,160 @@ def run(
         )
         gateway_server.start()
 
+    # Presence coordinator mode (M1). Attach a PresenceStore and
+    # self-announce every hosted agent: "showing up is the registration"
+    # (PDD §1.4). Each record's relay is this coordinator's endpoint, so
+    # the hosted agents hold no routable address of their own. The
+    # ANNOUNCE / WITHDRAW / PROBE wire methods and DISCOVER /population
+    # then operate against this store via the dispatch hook.
+    # An ANS server is also a presence coordinator (it brokers DISCOVER
+    # through the presence pipeline), so --ans implies coordinator mode.
+    coordinator = presence or ans_mode
+    if coordinator:
+        from presence.store import PresenceStore
+        registry.presence_store = PresenceStore()
+        registry.presence_relay_endpoint = f"{host}:{port}"
+        registry.presence_require_discovery_scope = presence_require_scope
+        registry.presence_verify_signatures = presence_verify_signatures
+
+        # DHT node for by-ID routing. Node id is derived from the
+        # coordinator's endpoint (content-addressed, so it cannot be
+        # cheaply chosen to cluster around a victim key).
+        import hashlib as _hashlib
+        from dht.kademlia import KademliaNode
+        _node_id = _hashlib.sha256(f"{host}:{port}".encode()).hexdigest()
+        registry.dht_node = KademliaNode(_node_id, host, port)
+
+        # Rendezvous index for cross-scope resolution. Any coordinator can
+        # be the DHT-closest node to some scope key and thus hold its
+        # provider set.
+        from presence.rendezvous import RendezvousIndex
+        registry.rendezvous_index = RendezvousIndex()
+        announced = 0
+        for _aid, _doc in registry.agents.items():
+            _record = registry.presence_store.build_record(
+                _doc, relay_endpoint=registry.presence_relay_endpoint,
+            )
+            if registry.signing_service is not None:
+                from presence.recordsig import sign_record
+                sign_record(_record, registry.signing_service)
+            registry.presence_store.announce(_record)
+            announced += 1
+        print(
+            f"[server] presence coordinator enabled; self-announced "
+            f"{announced} hosted agent(s) (relay={registry.presence_relay_endpoint})",
+            file=sys.stderr,
+        )
+
+        # Background TTL sweep. Reads already expire records lazily, so
+        # correctness does not depend on this; the sweep just bounds
+        # memory when a scope goes quiet. Daemon thread — dies with the
+        # process, no explicit shutdown needed.
+        def _presence_sweep_loop(store):
+            while True:
+                time.sleep(30)
+                try:
+                    store.sweep_expired()
+                except Exception:  # noqa: BLE001 - never let the sweep kill the daemon
+                    pass
+
+        threading.Thread(
+            target=_presence_sweep_loop,
+            args=(registry.presence_store,),
+            daemon=True,
+        ).start()
+
+        # Gossip anti-entropy with peer full nodes (M2). Every interval,
+        # reconcile presence state with a fanout of peers so an agent
+        # announced here becomes discoverable there and vice versa. TLS
+        # follows this server's transport (loopback plaintext in dev).
+        registry.presence_peers = list(presence_peers or [])
+        if registry.presence_peers:
+            from presence.gossip import gossip_round
+            use_tls_peer = bool(certfile and keyfile)
+            _verify = (
+                __import__("presence.recordsig", fromlist=["verify_record"]).verify_record
+                if presence_verify_signatures else None
+            )
+
+            def _presence_gossip_loop(store, peers):
+                while True:
+                    time.sleep(5)  # PDD default gossip interval
+                    try:
+                        gossip_round(
+                            store, peers, fanout=3,
+                            use_tls=use_tls_peer, insecure_skip_verify=True,
+                            verify=_verify,
+                        )
+                    except Exception:  # noqa: BLE001 - keep the daemon alive
+                        pass
+
+            threading.Thread(
+                target=_presence_gossip_loop,
+                args=(registry.presence_store, registry.presence_peers),
+                daemon=True,
+            ).start()
+            print(
+                f"[server] presence gossip enabled with "
+                f"{len(registry.presence_peers)} peer(s): "
+                f"{', '.join(registry.presence_peers)}",
+                file=sys.stderr,
+            )
+
+            # Join the DHT via the same peers (they double as DHT seeds).
+            def _dht_bootstrap(dht_node, seeds, tls):
+                time.sleep(1)  # let seeds come up
+                try:
+                    from dht.client import bootstrap_over_wire
+                    size = bootstrap_over_wire(
+                        dht_node, seeds, use_tls=tls, insecure_skip_verify=True,
+                    )
+                    print(
+                        f"[server] DHT joined via {len(seeds)} seed(s); "
+                        f"routing table has {size} peer(s)",
+                        file=sys.stderr,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+            threading.Thread(
+                target=_dht_bootstrap,
+                args=(registry.dht_node, registry.presence_peers, use_tls_peer),
+                daemon=True,
+            ).start()
+
+    # ANS mode: attach a NameStore so RESOLVE / REGISTER / DEREGISTER are
+    # answered. The presence store was already created above (coordinator
+    # implies ANS's brokered-DISCOVER substrate).
+    if ans_mode:
+        from ans.store import NameStore
+        from ans.federation import FederationTrust
+        registry.ans_store = NameStore()
+        registry.federation_trust = FederationTrust()
+        print(
+            "[server] ANS mode enabled (name service + presence coordinator)",
+            file=sys.stderr,
+        )
+
+    # This (agent-hosting) daemon submits REGISTER/DEREGISTER to external
+    # ANS servers as its agents transition lifecycle state.
+    if ans_endpoints:
+        from ans.registration import make_lifecycle_hook
+        registry.ans_endpoints = list(ans_endpoints)
+        registry.lifecycle_hooks.append(
+            make_lifecycle_hook(
+                registry.ans_endpoints,
+                use_tls=bool(certfile and keyfile),
+                insecure_skip_verify=True,
+            )
+        )
+        print(
+            f"[server] lifecycle registration to "
+            f"{len(registry.ans_endpoints)} ANS endpoint(s): "
+            f"{', '.join(registry.ans_endpoints)}",
+            file=sys.stderr,
+        )
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((host, port))
@@ -1625,6 +1864,65 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--presence",
+        action="store_true",
+        help=(
+            "Run as an AGTP-Presence coordinator (M1). Attaches a "
+            "presence store, self-announces every hosted agent at boot, "
+            "and answers ANNOUNCE / WITHDRAW / PROBE and "
+            "DISCOVER /population. A plain agent server (without this "
+            "flag) is unaffected."
+        ),
+    )
+    parser.add_argument(
+        "--presence-peer",
+        action="append",
+        default=[],
+        metavar="HOST:PORT",
+        help=(
+            "A peer full-node coordinator to gossip presence state with "
+            "(repeatable). Requires --presence. An agent announced on any "
+            "peer becomes discoverable here after a gossip round."
+        ),
+    )
+    parser.add_argument(
+        "--presence-require-scope",
+        action="store_true",
+        help=(
+            "Require the discovery:query scope in Authority-Scope for "
+            "DISCOVER /population (M3). Off by default so anonymous "
+            "discovery keeps working."
+        ),
+    )
+    parser.add_argument(
+        "--presence-verify-signatures",
+        action="store_true",
+        help=(
+            "Drop gossiped presence records with an invalid or absent "
+            "signature (M3). Off by default so mixed signed/unsigned "
+            "deployments keep converging."
+        ),
+    )
+    parser.add_argument(
+        "--ans",
+        action="store_true",
+        help=(
+            "Run as an Agent Name Service (M3): a presence coordinator "
+            "plus a name store answering RESOLVE / REGISTER / DEREGISTER. "
+            "Implies --presence."
+        ),
+    )
+    parser.add_argument(
+        "--ans-endpoint",
+        action="append",
+        default=[],
+        metavar="HOST:PORT",
+        help=(
+            "An ANS server this daemon submits REGISTER/DEREGISTER to as "
+            "its hosted agents transition lifecycle state (repeatable)."
+        ),
+    )
+    parser.add_argument(
         "--gateway-socket",
         metavar="PATH",
         help=(
@@ -1711,6 +2009,12 @@ def main() -> int:
         endpoints_dir=endpoints_path,
         gateway_socket=gateway_socket,
         load_modules=args.load_module,
+        presence=args.presence,
+        presence_peers=args.presence_peer,
+        presence_require_scope=args.presence_require_scope,
+        presence_verify_signatures=args.presence_verify_signatures,
+        ans_mode=args.ans,
+        ans_endpoints=args.ans_endpoint,
     )
     return 0
 
